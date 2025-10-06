@@ -215,7 +215,15 @@ class GRPOTrainer(BaseTrainer):
             )
 
         # Extract input_ids and original raw data from the processed batch
-        prompts_list_of_arrays = [sample["input_ids"] for sample in batch_prompts_data]
+        prompts_list_of_arrays = []
+        for idx, sample in enumerate(batch_prompts_data):
+            if not isinstance(sample, dict):
+                logging.critical(f"Expected sample to be a dict, but got {type(sample)} at index {idx}. Content: {sample}")
+                raise TypeError("Expected sample to be a dict")
+            prompts_list_of_arrays.append(sample["input_ids"])
+        logging.debug(f"Type of batch_prompts_data: {type(batch_prompts_data)}")
+        logging.debug(f"Content of batch_prompts_data (first item): {batch_prompts_data[0] if batch_prompts_data else 'empty'}")
+        logging.debug(f"Type of sample (first item): {type(batch_prompts_data[0]) if batch_prompts_data else 'empty'}")
         original_raw_prompts_data = [sample["original_raw_data"] for sample in batch_prompts_data]
 
         if not prompts_list_of_arrays:
