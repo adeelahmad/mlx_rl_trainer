@@ -116,8 +116,8 @@ model:
     ]
 
 data:
-  train_path: "./mlx_rl_trainer/data/dummy_train.jsonl"
-  val_path: "./mlx_rl_trainer/data/dummy_val.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/ooutted_reversald.jsonl"
+  val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 512
   max_gen_len: 384
   loader_type: "jsonl"

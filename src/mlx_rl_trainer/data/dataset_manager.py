@@ -237,74 +237,61 @@ class DatasetManager:
 
             yield self._process_batch(raw_batch_data)
 
-    def _process_batch(self, raw_batch: Dict[str, List[Any]]) -> Dict[str, Any]:
+    def _process_batch(self, raw_batch: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
         """
         Processes a raw batch of data, tokenizing prompts and preparing other fields.
+        Returns a list of dictionaries, one for each processed sample.
         """
         if self.tokenizer is None:
             raise DataLoadError("Tokenizer not set in DatasetManager.")
 
-        prompts = raw_batch.get(self.config.dataset_prompt_key, [])
-        completions = raw_batch.get(self.config.dataset_answer_key, [])
-        test_cases_raw = raw_batch.get(
-            "test_cases", [[] for _ in range(len(prompts))]
-        )  # Default empty list of lists
+        processed_samples = []
+        num_samples_in_batch = len(raw_batch.get(self.config.dataset_prompt_key, []))
 
-        tokenized_input_ids = [
-            self.tokenizer.encode(
-                p,
+        for i in range(num_samples_in_batch):
+            prompt = raw_batch.get(self.config.dataset_prompt_key, [])[i]
+            completion = raw_batch.get(self.config.dataset_answer_key, [])[i]
+            test_cases_raw = raw_batch.get(
+                "test_cases", [[] for _ in range(num_samples_in_batch)]
+            )[i]
+
+            tokenized_input_ids = self.tokenizer.encode(
+                prompt,
                 add_special_tokens=True,
             )
-            for p in prompts
-        ]
 
-        # Determine max length in current micro-batch for padding
-        max_len_in_batch = (
-            max(len(ids) for ids in tokenized_input_ids) if tokenized_input_ids else 0
-        )
-
-        # Pad tokenized inputs
-        padded_input_ids = [
-            mx.array(
-                ids + [self.tokenizer.pad_token_id] * (max_len_in_batch - len(ids)),
-                dtype=mx.int32,
-            )
-            for ids in tokenized_input_ids
-        ]
-
-        # Process test cases from JSON strings back to dicts
-        processed_test_cases = []
-        for tc_list_json in test_cases_raw:
-            current_tc = []
-            for tc_json_str in tc_list_json:
+            # Process test cases from JSON strings back to dicts
+            current_processed_test_cases = []
+            for tc_json_str in test_cases_raw:
                 try:
-                    current_tc.append(json.loads(tc_json_str))
+                    current_processed_test_cases.append(json.loads(tc_json_str))
                 except json.JSONDecodeError:
                     logging.warning(
                         f"Skipping malformed test case: {tc_json_str[:50]}..."
                     )
-            processed_test_cases.append(current_tc)
 
-        return {
-            "input_ids": padded_input_ids,  # List of mx.arrays for trainer's concat
-            "raw_prompts": prompts,
-            "raw_completions": completions,
-            "raw_test_cases": processed_test_cases,
-            # Pass through other metadata directly if present in raw_batch
-            "is_mcq": raw_batch.get("is_mcq", [False] * len(prompts)),
-            "mcq_options": raw_batch.get(
-                "mcq_options", [[] for _ in range(len(prompts))]
-            ),
-            "mcq_correct_letters": raw_batch.get(
-                "mcq_correct_letters", [""] * len(prompts)
-            ),
-            "mcq_multi_select": raw_batch.get(
-                "mcq_multi_select", [False] * len(prompts)
-            ),
-            "is_invalid_sample": raw_batch.get(
-                "is_invalid_sample", [False] * len(prompts)
-            ),
-            "original_indices": raw_batch.get(
-                "original_index", list(range(len(prompts)))
-            ),
-        }
+            processed_samples.append({
+                "input_ids": mx.array(tokenized_input_ids, dtype=mx.int32),
+                "raw_prompt": prompt,  # Store the raw prompt string
+                "raw_completion": completion,  # Store the raw completion string
+                "raw_test_cases": current_processed_test_cases,
+                "is_mcq": raw_batch.get("is_mcq", [False] * num_samples_in_batch)[i],
+                "mcq_options": raw_batch.get(
+                    "mcq_options", [[] for _ in range(num_samples_in_batch)]
+                )[i],
+                "mcq_correct_letters": raw_batch.get(
+                    "mcq_correct_letters", [""] * num_samples_in_batch
+                )[i],
+                "mcq_multi_select": raw_batch.get(
+                    "mcq_multi_select", [False] * num_samples_in_batch
+                )[i],
+                "is_invalid_sample": raw_batch.get(
+                    "is_invalid_sample", [False] * num_samples_in_batch
+                )[i],
+                "original_index": raw_batch.get(
+                    "original_index", list(range(num_samples_in_batch))
+                )[i],
+                # Store the entire original raw_batch entry for this sample if needed for metadata
+                "original_raw_data": {k: v[i] for k, v in raw_batch.items() if isinstance(v, list) and len(v) == num_samples_in_batch}
+            })
+        return processed_samples

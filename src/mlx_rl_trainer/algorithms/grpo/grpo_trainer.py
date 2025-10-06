@@ -161,7 +161,7 @@ class GRPOTrainer(BaseTrainer):
             )
 
         lr = self.lr_scheduler(update_step)
-        self.optimizer.set_learning_rate(lr)
+        self.optimizer.learning_rate = lr
 
         rollout_data, avg_raw_reward, raw_reward_components = self.generate_rollouts(
             batch, update_step
@@ -206,7 +206,7 @@ class GRPOTrainer(BaseTrainer):
         return TrainingMetrics(**final_metrics)
 
     def generate_rollouts(
-        self, batch_prompts_data: Dict[str, Any], update_step: int
+        self, batch_prompts_data: List[Dict[str, Any]], update_step: int
     ) -> Tuple[Dict[str, mx.array], float, Dict[str, float]]:
         """Generates rollouts using the actor model and computes rewards."""
         if self.actor_model is None or self.tokenizer is None or self.ref_model is None:
@@ -214,7 +214,10 @@ class GRPOTrainer(BaseTrainer):
                 "Models or tokenizer not initialized for rollout generation."
             )
 
-        prompts_list_of_arrays = batch_prompts_data["input_ids"]
+        # Extract input_ids and original raw data from the processed batch
+        prompts_list_of_arrays = [sample["input_ids"] for sample in batch_prompts_data]
+        original_raw_prompts_data = [sample["original_raw_data"] for sample in batch_prompts_data]
+
         if not prompts_list_of_arrays:
             return {}, 0.0, {"raw_format": 0.0, "raw_content_combined": 0.0}
 
@@ -261,18 +264,17 @@ class GRPOTrainer(BaseTrainer):
         )
 
         rewards_total = []
-        raw_prompts_data = batch_prompts_data["raw_prompts"]
-
+        # Use original_raw_prompts_data here
         for i in range(total_samples):
             prompt_idx = i // num_samples_per_prompt
-            prompt_data = raw_prompts_data[prompt_idx]
-            logging.debug(prompt_data)
+            prompt_data_original = original_raw_prompts_data[prompt_idx] # This is the original dict
+            logging.debug(prompt_data_original)
             context = RewardContext(
                 generated_text=decoded_responses[i],
-                prompt_text=prompt_data["prompt"],
-                reference_completion=prompt_data.get("completion", ""),
-                test_cases=prompt_data.get("test_cases", ""),
-                metadata=prompt_data.get("meta", {}),
+                prompt_text=prompt_data_original.get(self.config.data.dataset_prompt_key, ""),
+                reference_completion=prompt_data_original.get(self.config.data.dataset_answer_key, ""),
+                test_cases=prompt_data_original.get("raw_test_cases", []),
+                metadata=prompt_data_original.get("meta", {}),
             )
             rewards_dict = self.reward_composer.compute(context)
             rewards_total.append(rewards_dict.get("total", 0.0))

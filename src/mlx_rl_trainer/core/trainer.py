@@ -215,7 +215,7 @@ class BaseTrainer(ABC):
                         avg_reward_from_rollouts,
                         raw_rewards_breakdown,
                     ) = self.generate_rollouts(prompts_batch, self.global_step)
-                    metrics = self.train_step(rollout_data, self.global_step)
+                    metrics = self.train_step(rollout_data, self.global_step, self.current_epoch)
                     accumulated_metrics.append(metrics)
 
                 # Aggregate and log metrics from accumulation steps
