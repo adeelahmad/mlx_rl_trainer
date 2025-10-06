@@ -19,31 +19,16 @@ from .trainer import ModelLoadError
 
 # --- MLX-LM Imports (Conditional for Mock) ---
 try:
-    print("Attempting to import mlx_lm")
     import mlx_lm
-    print("mlx_lm imported")
-    print("Attempting to import cache")
     from mlx_lm.models import cache
-    print("cache imported")
-    print("Attempting to import TokenizerWrapper")
     from mlx_lm.tokenizer_utils import TokenizerWrapper
-    print("TokenizerWrapper imported")
-    print("Attempting to import LoRALinear")
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
-    print("LoRALinear imported")
-    print("Attempting to import tuner utils")
     from mlx_lm.tuner.utils import (
         apply_lora_layers,
         apply_lora_layers_force_qkv_mlp,
         print_trainable_parameters,
     )
-    print("tuner utils imported")
-    print("Attempting to import mlx_lm_load")
-    from mlx_lm.utils import load as mlx_lm_load
-    print("mlx_lm_load imported")
-    print("Attempting to import mlx_lm_save_config")
-    from mlx_lm.utils import save_config as mlx_lm_save_config
-    print("mlx_lm_save_config imported")
+    import mlx_lm.utils
 
     MLX_LM_AVAILABLE = True
 except ImportError:
@@ -147,12 +132,6 @@ class MockModel(nn.Module):
     def eval(self):
         self.train(False)
 
-    def parameters(self):  # Mock parameters for saving
-        return {f"layer.{i}.weight": mx.zeros((1, 1)) for i in range(self.n_layers)}
-
-    def trainable_parameters(self):
-        return self.parameters()
-
     def load_weights(self, weights: List[Tuple[str, mx.array]], strict: bool = False):
         pass
 
@@ -185,7 +164,7 @@ class ModelManager:
 
         if MLX_LM_AVAILABLE:
             try:
-                model_instance, tokenizer_instance = mlx_lm_load(model_path.as_posix())
+                model_instance, tokenizer_instance = mlx_lm.utils.load(model_path.as_posix())
                 rprint(
                     f"Successfully loaded '{type_name}' model and tokenizer using [green]mlx-lm[/green]."
                 )
@@ -266,13 +245,15 @@ class ModelManager:
         training_args_config: Any,
         save_full_model: bool = False,
     ) -> None:
-        """Saves the model weights and configuration."""
+        """
+        Saves the model weights and configuration.
+        """
         try:
             save_path.mkdir(parents=True, exist_ok=True)
             tokenizer_instance.save_pretrained(save_path)
 
             if MLX_LM_AVAILABLE:
-                mlx_lm_save_config(model_config_dict, save_path / "config.json")
+                mlx_lm.utils.save_config(model_config_dict, save_path / "config.json")
             else:
                 with open(save_path / "config.json", "w") as f:
                     json.dump(model_config_dict, f, indent=2)
@@ -348,7 +329,7 @@ class ModelManager:
 
         if MLX_LM_AVAILABLE:
             try:
-                model_instance, tokenizer_instance = mlx_lm_load(model_path.as_posix())
+                model_instance, tokenizer_instance = mlx_lm.utils.load(model_path.as_posix())
                 rprint(
                     f"Successfully loaded '{type_name}' model and tokenizer using [green]mlx-lm[/green]."
                 )

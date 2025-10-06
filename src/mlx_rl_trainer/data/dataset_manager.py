@@ -235,7 +235,8 @@ class DatasetManager:
             if not raw_batch_data.get(self.config.dataset_prompt_key):
                 continue
 
-            yield self._process_batch(raw_batch_data)
+            for sample in self._process_batch(raw_batch_data):
+                yield sample
 
     def _process_batch(self, raw_batch: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
         """

@@ -144,7 +144,7 @@ class GRPOTrainer(BaseTrainer):
         return self.global_step, self.current_epoch
 
     def train_step(
-        self, batch: Dict[str, Any], update_step: int, epoch: int
+        self, batch: List[Dict[str, Any]], update_step: int, epoch: int
     ) -> TrainingMetrics:
         """
         Performs a single GRPO training step: rollout, loss calculation, and gradient update.
@@ -179,7 +179,7 @@ class GRPOTrainer(BaseTrainer):
                 tokens_per_sec=0.0,
             )
 
-        loss, grads, metrics = self._calculate_grpo_loss_and_grads(rollout_data)
+        loss, grads, metrics = self._calculate_grpo_loss_and_grads(rollout_data, self.tokenizer.pad_token_id)
 
         metal_safe_apply_gradients(self.optimizer, self.actor_model, grads)
 
@@ -188,14 +188,16 @@ class GRPOTrainer(BaseTrainer):
         end_time = time.time()
         step_time = end_time - start_time
 
-        prompt_tokens = sum(arr.shape[0] for arr in batch["input_ids"])
+        # Calculate prompt_tokens from the original batch (prompts_batch)
+        prompt_tokens = sum(sample["input_ids"].shape[0] for sample in batch)
         generated_tokens = int(mx.sum(rollout_data["response_mask"]).item())
         total_tokens = prompt_tokens + generated_tokens
         tokens_per_sec = total_tokens / step_time if step_time > 0 else 0.0
 
         final_metrics = {
             "loss": loss.item(),
-            "mean_reward": avg_raw_reward,
+            "reward_mean": avg_raw_reward,
+            "grad_norm": avg_grad_norm,
             "learning_rate": lr,
             "step_time_s": step_time,
             "tokens_per_sec": tokens_per_sec,
@@ -213,7 +215,7 @@ class GRPOTrainer(BaseTrainer):
             raise TrainingRuntimeError(
                 "Models or tokenizer not initialized for rollout generation."
             )
-
+        logging.debug(f"generate_rollouts received batch_prompts_data: {batch_prompts_data}")
         # Extract input_ids and original raw data from the processed batch
         prompts_list_of_arrays = []
         for idx, sample in enumerate(batch_prompts_data):
@@ -311,12 +313,12 @@ class GRPOTrainer(BaseTrainer):
         return rollout_data_for_loss, avg_reward, {}
 
     def _calculate_grpo_loss_and_grads(
-        self, rollout_batch: Dict[str, mx.array]
+        self, rollout_batch: Dict[str, mx.array], pad_token_id: int
     ) -> Tuple[mx.array, Dict[str, Any], Dict[str, float]]:
         """Calculates the GRPO loss and gradients using the GRPOAlgorithm."""
         if self.grpo_algorithm is None:
             raise TrainingRuntimeError("GRPOAlgorithm not initialized.")
-        return self.grpo_algorithm.calculate_loss_and_grads(rollout_batch, self.config)
+        return self.grpo_algorithm.calculate_loss_and_grads(rollout_batch, self.config, pad_token_id)
 
     def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
         """Runs registered evaluators against the validation dataset."""

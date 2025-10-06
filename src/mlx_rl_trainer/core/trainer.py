@@ -45,6 +45,8 @@ class TrainingMetrics:
     grad_norm: float
     learning_rate: float
     step_time_s: float
+    tokens_per_sec: float
+    kl_divergence: float
     custom_metrics: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -193,6 +195,7 @@ class BaseTrainer(ABC):
                 accumulated_metrics: List[TrainingMetrics] = []
                 for _ in range(self.config.trainer.grad_accum_steps):
                     prompts_batch = next(train_data_iterator, None)
+                    logging.debug(f"Prompts batch from dataloader: {prompts_batch}")
 
                     # If an epoch finishes, reset iterator and increment epoch count
                     if prompts_batch is None:
@@ -214,8 +217,8 @@ class BaseTrainer(ABC):
                         rollout_data,
                         avg_reward_from_rollouts,
                         raw_rewards_breakdown,
-                    ) = self.generate_rollouts(prompts_batch, self.global_step)
-                    metrics = self.train_step(rollout_data, self.global_step, self.current_epoch)
+                    ) = self.generate_rollouts([prompts_batch], self.global_step)
+                    metrics = self.train_step([prompts_batch], self.global_step, self.current_epoch)
                     accumulated_metrics.append(metrics)
 
                 # Aggregate and log metrics from accumulation steps

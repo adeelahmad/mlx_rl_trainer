@@ -7,7 +7,7 @@ GRPO (Group Relative Policy Optimization) core loss implementation.
 """
 from typing import Dict, Any, Tuple
 import mlx.core as mx
-from mlx.nn import log_softmax
+from mlx.nn import log_softmax, value_and_grad
 import logging
 from ..base_algorithm import BaseAlgorithm
 from mlx_rl_trainer.core.config import ExperimentConfig  # For type hinting
@@ -22,7 +22,7 @@ class GRPOAlgorithm(BaseAlgorithm):
     """
 
     def calculate_loss_and_grads(
-        self, rollout_batch: Dict[str, mx.array], full_config: ExperimentConfig
+        self, rollout_batch: Dict[str, mx.array], full_config: ExperimentConfig, pad_token_id: int
     ) -> Tuple[mx.array, Dict[str, Any], Dict[str, float]]:
         """
         Calculates the GRPO loss and its gradients.
@@ -30,14 +30,13 @@ class GRPOAlgorithm(BaseAlgorithm):
         Args:
             rollout_batch: Contains 'tokens', 'response_mask', 'advantages', 'ref_log_probs'.
             full_config: The complete ExperimentConfig, from which `grpo_beta` is extracted.
+            pad_token_id: The pad token ID from the tokenizer.
 
         Returns:
             A tuple: (scalar_loss_tensor, gradients_dict, additional_metrics_dict).
         """
         beta = full_config.trainer.grpo_beta  # FIX: Get beta from full_config
-        pad_token_id = (
-            self.config.tokenizer.pad_token_id
-        )  # Assuming tokenizer is part of config or directly accessible
+        # pad_token_id is now passed as an argument
 
         def loss_fn(model):
             tokens, mask, advantages, ref_log_probs = (
@@ -98,9 +97,11 @@ class GRPOAlgorithm(BaseAlgorithm):
             return loss, kl_mean
 
         # Compute value and gradients
-        (loss, kl_mean), grads = mx.nn.value_and_grad(
-            self.actor, loss_fn, has_aux=True
+        (loss, kl_mean), grads = value_and_grad(
+            self.actor, loss_fn
         )(self.actor)
+        # Since loss_fn returns (loss, kl_mean), value_and_grad returns gradients for the first value (loss)
+        # grads is already the dictionary of gradients for the loss
 
         return loss, grads, {"kl_divergence": float(kl_mean.item())}
 
