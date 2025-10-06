@@ -19,17 +19,31 @@ from .trainer import ModelLoadError
 
 # --- MLX-LM Imports (Conditional for Mock) ---
 try:
+    print("Attempting to import mlx_lm")
     import mlx_lm
+    print("mlx_lm imported")
+    print("Attempting to import cache")
     from mlx_lm.models import cache
+    print("cache imported")
+    print("Attempting to import TokenizerWrapper")
     from mlx_lm.tokenizer_utils import TokenizerWrapper
+    print("TokenizerWrapper imported")
+    print("Attempting to import LoRALinear")
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
+    print("LoRALinear imported")
+    print("Attempting to import tuner utils")
     from mlx_lm.tuner.utils import (
         apply_lora_layers,
         apply_lora_layers_force_qkv_mlp,
         print_trainable_parameters,
     )
+    print("tuner utils imported")
+    print("Attempting to import mlx_lm_load")
     from mlx_lm.utils import load as mlx_lm_load
+    print("mlx_lm_load imported")
+    print("Attempting to import mlx_lm_save_config")
     from mlx_lm.utils import save_config as mlx_lm_save_config
+    print("mlx_lm_save_config imported")
 
     MLX_LM_AVAILABLE = True
 except ImportError:
