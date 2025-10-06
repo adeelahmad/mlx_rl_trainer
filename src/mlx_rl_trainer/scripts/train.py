@@ -11,7 +11,7 @@ import uuid  # For unique run IDs
 import random  # For random seeds
 import mlx.core as mx  # For default device setting
 import signal  # For signal handling
-import asyncio # Import asyncio for async operations
+import asyncio  # Import asyncio for async operations
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -80,6 +80,10 @@ shutdown_requested = False
 
 
 def main():
+    asyncio.run(_main_async())
+
+
+async def _main_async():
     """Main training entry point"""
     parser = argparse.ArgumentParser(description="MLX RL Trainer")
     parser.add_argument(
@@ -95,12 +99,6 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Set the logging verbosity level.",
     )
-    # Add an argument for --run-server here if that functionality is desired from the main script
-    # parser.add_argument(
-    #     "--run-server",
-    #     action="store_true",
-    #     help="Run in async inference server mode instead of training.",
-    # )
 
     args = parser.parse_args()
 
@@ -244,7 +242,7 @@ def main():
 
     # 7. Run training loop (delegated to BaseTrainer.run)
     try:
-        trainer.run()
+        await trainer.run()
         logger.info("Training completed successfully")
     except CustomBaseException as e:
         logger.critical(f"A predictable error halted training: {e}", exc_info=True)
@@ -262,4 +260,4 @@ if __name__ == "__main__":
     mx.set_default_device(
         mx.gpu if mx.gpu_available() else mx.cpu
     )  # Set default device
-    main()
+    asyncio.run(main())

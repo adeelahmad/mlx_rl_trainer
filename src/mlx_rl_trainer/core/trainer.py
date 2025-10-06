@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple, Callable
 import logging
 import mlx.core as mx
+import mlx.nn as nn
 from .config import ExperimentConfig  # Use new ExperimentConfig
 
 

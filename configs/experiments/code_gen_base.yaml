@@ -97,8 +97,8 @@ trainer:
   reward_smoothing_window: 20
 
 model:
-  model_path: "./models/mock_model"
-  ref_model_path: "./models/mock_model"
+  model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
+  ref_model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
   use_lora: false
   lora_rank: 16
   lora_alpha: 16.0
@@ -116,8 +116,8 @@ model:
     ]
 
 data:
-  train_path: "./data/dummy_train.jsonl"
-  val_path: "./data/dummy_val.jsonl"
+  train_path: "./mlx_rl_trainer/data/dummy_train.jsonl"
+  val_path: "./mlx_rl_trainer/data/dummy_val.jsonl"
   max_prompt_len: 512
   max_gen_len: 384
   loader_type: "jsonl"

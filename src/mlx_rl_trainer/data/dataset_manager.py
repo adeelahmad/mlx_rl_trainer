@@ -254,8 +254,6 @@ class DatasetManager:
             self.tokenizer.encode(
                 p,
                 add_special_tokens=True,
-                max_length=self.config.max_prompt_len,
-                truncation=True,
             )
             for p in prompts
         ]
