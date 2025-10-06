@@ -420,7 +420,7 @@ class ModelManager:
             tokenizer_instance.save_pretrained(save_path)
 
             if MLX_LM_AVAILABLE:
-                mlx_lm_save_config(model_config_dict, save_path / "config.json")
+                mlx_lm.utils.save_config(model_config_dict, save_path / "config.json")
             else:
                 with open(save_path / "config.json", "w") as f:
                     json.dump(model_config_dict, f, indent=2)

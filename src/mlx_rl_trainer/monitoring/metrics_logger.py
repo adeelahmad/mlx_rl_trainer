@@ -46,6 +46,26 @@ from mlx_rl_trainer.utils.text_utils import (
 
 logger = logging.getLogger(__name__)
 
+def _calculate_mcq_accuracy(
+    ref_letters_list: Optional[List[str]],
+    gen_letters_list: Optional[List[str]],
+    is_mcq_list: Optional[List[bool]],
+    k_actual: int,
+) -> float:
+    """Calculates MCQ accuracy."""
+    if not ref_letters_list or not gen_letters_list or not is_mcq_list or k_actual == 0:
+        return 0.0
+
+    correct_count = 0
+    total_mcq = 0
+    for i in range(k_actual):
+        if is_mcq_list[i]:
+            total_mcq += 1
+            if ref_letters_list[i] == gen_letters_list[i]:
+                correct_count += 1
+
+    return correct_count / total_mcq if total_mcq > 0 else 0.0
+
 # --- Global W&B Run (Managed externally, but referenced here) ---
 wandb_run: Any = None  # Set by main script
 
