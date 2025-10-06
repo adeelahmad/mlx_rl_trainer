@@ -422,6 +422,14 @@ class GenerationConfig(BaseModel):
     # These are internal dynamic fields for Metal safety, not directly exposed in YAML
     orig_max_gen_len: Optional[int] = Field(None, exclude=True)
 
+    repetition_penalty: float = Field(
+        1.15, ge=1.0, description="Repetition penalty factor."
+    )
+    repetition_context_size: PositiveInt = Field(
+        20, description="Number of previous tokens to consider for repetition penalty."
+    )
+
+
 
 class DataConfig(BaseModel):
     """Configuration for data loading and preprocessing."""
@@ -735,15 +743,261 @@ class TrainerParams(BaseModel):
         20, description="Number of previous tokens to consider for repetition penalty."
     )
 
+
+    # Dynamic Bias Controls (from TrainingArgs)
+    min_think_tokens: int = Field(32)
+    think_end_early_bias: float = Field(-12.0)
+    bias_answer_start_after_min_think: bool = Field(True)
+    bias_close_think: float = Field(9.0)
+    bias_answer_start: float = Field(6.0)
+    punish_extra_think_end: float = Field(-12.0)
+    punish_reopen_think: float = Field(-10.0)
+    punish_reopen_answer: float = Field(-9.0)
+    bias_eos_after_answer: float = Field(3.0)
+
+    # Verbosity Biasing for Rollouts (from TrainingArgs)
+    ban_phrases_for_bias: List[str] = Field(default_factory=list)
+    encourage_phrases_for_bias: List[str] = Field(default_factory=list)
+    encourage_think_bias: float = Field(4.5)
+    ban_think_bias: float = Field(-3.0)
+
+    # @model_validator(mode="after")
+    # def populate_derived_fields(self) -> "TrainerParams":
+    #     """
+    #     Calculates derived fields and ensures consistency after initial parsing.
+    #     """
+    #     self.effective_batch_size = (
+    #         self.ppo_batch_size * self.num_rollout_samples * self.grad_accum_steps
+    #     )
+
+    #     if isinstance(self.invalid_sample_layers, str):
+    #         try:
+    #             self.invalid_sample_layers_set = {
+    #                 int(i.strip())
+    #                 for i in self.invalid_sample_layers.split(",")
+    #                 if i.strip()
+    #             }
+    #         except ValueError:
+    #             logger.warning(
+    #                 f"Invalid format for `invalid_sample_layers`: '{self.invalid_sample_layers}'. Using an empty set."
+    #             )
+    #             self.invalid_sample_layers_set = set()
+    #     else:
+    #         self.invalid_sample_layers_set = set()
+
+    #     cfg = self.lr_schedule_config
+    #     init_lr = float(self.learning_rate)
+    #     total_steps = int(self.num_training_steps)
+    #     warmup_steps = int(cfg.get("warmup", 500))
+    #     decay_steps = max(total_steps - warmup_steps, 1)
+    #     end_lr = max(init_lr * 0.1, 1e-07)
+
+    #     cfg.setdefault("name", "cosine_decay")
+    #     cfg["arguments"] = [init_lr, decay_steps, end_lr]
+    #     cfg.setdefault("warmup", warmup_steps)
+    #     cfg.setdefault("warmup_init", min(init_lr, max(init_lr * 0.1, 1e-08)))
+
+    #     return self
+
+     # Dynamic Bias Controls for Generation
+    min_think_tokens: PositiveInt = Field(
+        32,
+        description="Minimum desired tokens in thinking region before allowing early end.",
+    )
+    think_end_early_bias: float = Field(
+        -12.0, description="Negative bias for ending think region too early."
+    )
+    bias_answer_start_after_min_think: bool = Field(
+        True, description="Only bias for <answer> start after min_think_tokens."
+    )
+    bias_close_think: float = Field(
+        9.0, description="Positive bias for closing <think> tag."
+    )
+    bias_answer_start: float = Field(
+        6.0, description="Positive bias for starting <answer> tag."
+    )
+    punish_extra_think_end: float = Field(
+        -12.0, description="Penalty for extra </think> tags."
+    )
+    punish_reopen_think: float = Field(
+        -10.0, description="Penalty for re-opening <think> tag."
+    )
+    punish_reopen_answer: float = Field(
+        -9.0, description="Penalty for re-opening <answer> tag."
+    )
+    bias_eos_after_answer: float = Field(
+        3.0, description="Positive bias for EOS after <answer>."
+    )
+
+    # MCQ Specific Biases
+    hard_mask_mcq_first_token: bool = Field(
+        True,
+        description="Hard mask logits to only allow valid MCQ letters as first token.",
+    )
+    mcq_letter_lift: NonNegativeFloat = Field(
+        8.0, description="Positive bias for valid MCQ letter tokens."
+    )
+    mcq_ban_first_bias: float = Field(
+        -14.0, description="Negative bias for banned phrases as first token in MCQ."
+    )
+    nonmcq_ban_first_bias: float = Field(
+        -12.0, description="Negative bias for banned phrases as first token in non-MCQ."
+    )
+    mcq_close_after_k: PositiveInt = Field(
+        1, description="Allow MCQ answer to close after K tokens."
+    )
+    min_answer_tokens: PositiveInt = Field(
+        8, description="Minimum tokens for non-MCQ answer before allowing end."
+    )
+    min_answer_tokens_mcq: PositiveInt = Field(
+        1, description="Minimum tokens for MCQ answer before allowing end."
+    )
+    mcq_answer_end_bias: float = Field(
+        9.0, description="Positive bias for closing MCQ answer tag."
+    )
+
+    # Penalties
+    non_ascii_penalty: NonNegativeFloat = Field(
+        1.0, description="Penalty multiplier for non-ASCII characters."
+    )
+    off_topic_jaccard_threshold: NonNegativeFloat = Field(
+        0.05, description="Jaccard threshold below which off-topic penalty applies."
+    )
+    off_topic_penalty: NonNegativeFloat = Field(
+        1.0, description="Penalty multiplier for off-topic responses."
+    )
+    ban_penalty: NonNegativeFloat = Field(
+        3.0, description="Penalty multiplier for banned keywords."
+    )
+
+    # Verbosity Biasing for Rollouts
+    ban_phrases_for_bias: List[str] = Field(
+        default_factory=list,
+        description="Phrases whose first token triggers negative logit bias.",
+    )
+    encourage_phrases_for_bias: List[str] = Field(
+        default_factory=list,
+        description="Phrases whose first token triggers positive logit bias.",
+    )
+    encourage_think_bias: NonNegativeFloat = Field(
+        4.5, description="Positive bias for encouraged compact notation in <think>."
+    )
+    ban_think_bias: float = Field(
+        -3.0, description="Negative bias for verbose phrases in <think>."
+    )
+
+    # Tool Use Configuration
+    allow_tool_calls: bool = Field(
+        True, description="Whether to allow tool call generation."
+    )
+    tool_call_penalty: NonNegativeFloat = Field(
+        0.0, description="Penalty multiplier for generating tool call tokens."
+    )
+
+    # Think Length Penalty/Reward
+    think_length_target_min: PositiveInt = Field(
+        32, description="Minimum desired think tokens (soft floor)."
+    )
+    think_length_target_max: PositiveInt = Field(
+        128, description="Maximum desired think tokens (soft ceiling)."
+    )
+    think_length_penalty_strength: NonNegativeFloat = Field(
+        0.15, description="Strength of length penalty."
+    )
+    think_length_penalty_type: str = Field(
+        "quadratic",
+        description="Penalty curve type: 'linear', 'quadratic', 'exponential'.",
+    )
+    enable_think_length_penalty: bool = Field(
+        True, description="Enable think length penalty in reward calculation."
+    )
+
+    # Custom Invalid Sample Handling
+    use_custom_batch_builder: bool = Field(
+        False, description="Enable custom batching for invalid samples."
+    )
+    invalid_sample_layers: str = Field(
+        "33,34,35",
+        description="Comma-separated layer indices for invalid sample updates.",
+    )
+    invalid_sample_frequency: PositiveInt = Field(
+        2, description="Frequency (in updates) for processing invalid samples."
+    )
+    invalid_sample_layers_set: Set[int] = Field(
+        default_factory=set, exclude=True
+    )  # Exclude from config dump, populated in post_init
+
+    # W&B Configuration
+    use_wandb: bool = Field(True, description="Enable Weights & Biases logging.")
+    wandb_project: Optional[str] = Field(
+        "mlx-rl-trainer", description="W&B project name."
+    )
+    wandb_entity: Optional[str] = Field(None, description="W&B entity name.")
+    wandb_run_name: Optional[str] = Field(None, description="W&B run name.")
+    log_samples_every: PositiveInt = Field(
+        10, description="Log generated samples to W&B/file every N updates."
+    )
+    max_logged_samples: PositiveInt = Field(
+        5, description="Maximum number of samples to log to W&B/file."
+    )
+    log_prompts: bool = Field(True, description="Log full prompts in sample logs.")
+
+    # Schedule
+    lr_schedule_config: Dict[str, Any] = Field(
+        default_factory=dict, description="Configuration for learning rate scheduler."
+    )
+
+    # Monitoring
+    reward_smoothing_window: PositiveInt = Field(
+        20, description="Window size for rolling average reward display."
+    )
+    enable_dynamic_beta: bool = Field(
+        False, description="Enable dynamic adjustment of GRPO beta."
+    )  # NEW default
+    high_reward_threshold: NonNegativeFloat = Field(
+        0.85, description="Reward threshold to trigger beta increase."
+    )
+    beta_increase_high_reward: NonNegativeFloat = Field(
+        0.08, description="Amount to increase beta on high reward."
+    )
+    cooldown_duration: PositiveInt = Field(
+        2, description="Cooldown steps after dynamic beta adjustment."
+    )
+
+    # Derived fields, initialized in post_init (exclude from direct YAML parsing)
+    effective_batch_size: PositiveInt = Field(
+        1, init=False, exclude=True
+    )  # Total samples processed per optimization step
+    current_update: int = Field(
+        0, init=False, exclude=True
+    )  # Internal tracker for current update step
+
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
-        """
-        Calculates derived fields and ensures consistency after initial parsing.
-        """
+        # Ensure positive values
+        for f_name in [
+            "min_answer_tokens",
+            "min_answer_tokens_mcq",
+            "think_length_target_min",
+            "think_length_target_max",
+        ]:
+            current_val = getattr(self, f_name)
+            if current_val < 0:
+                logging.warning(f"{f_name} cannot be negative. Setting to 0.")
+                setattr(self, f_name, 0)
+
+        # Ensure think_length_target_max is always greater than or equal to think_length_target_min
+        if self.think_length_target_max < self.think_length_target_min:
+            logging.warning(
+                f"think_length_target_max ({self.think_length_target_max}) cannot be less than think_length_target_min ({self.think_length_target_min}). Setting think_length_target_max = think_length_target_min + 1."
+            )
+            setattr(self, "think_length_target_max", self.think_length_target_min + 1)
+
         self.effective_batch_size = (
             self.ppo_batch_size * self.num_rollout_samples * self.grad_accum_steps
         )
 
+        # Populate invalid_sample_layers_set
         if isinstance(self.invalid_sample_layers, str):
             try:
                 self.invalid_sample_layers_set = {
@@ -752,13 +1006,14 @@ class TrainerParams(BaseModel):
                     if i.strip()
                 }
             except ValueError:
-                logger.warning(
-                    f"Invalid format for `invalid_sample_layers`: '{self.invalid_sample_layers}'. Using an empty set."
+                logging.warning(
+                    f"Invalid format for invalid_sample_layers: {self.invalid_sample_layers}. Using empty set."
                 )
                 self.invalid_sample_layers_set = set()
-        else:
+        else:  # Ensure it's always a set, even if config didn't provide a string
             self.invalid_sample_layers_set = set()
 
+        # Initialize lr_schedule_config defaults (if not already set in YAML)
         cfg = self.lr_schedule_config
         init_lr = float(self.learning_rate)
         total_steps = int(self.num_training_steps)
@@ -767,11 +1022,26 @@ class TrainerParams(BaseModel):
         end_lr = max(init_lr * 0.1, 1e-07)
 
         cfg.setdefault("name", "cosine_decay")
-        cfg["arguments"] = [init_lr, decay_steps, end_lr]
+        cfg.setdefault("arguments", [init_lr, decay_steps, end_lr])
         cfg.setdefault("warmup", warmup_steps)
         cfg.setdefault("warmup_init", min(init_lr, max(init_lr * 0.1, 1e-08)))
 
+        # Dynamically set encourage_phrases_for_bias if default is empty (from TrainingArgs)
+        if not self.encourage_phrases_for_bias:
+            # Use the new constants
+            setattr(
+                self,
+                "encourage_phrases_for_bias",
+                list(DEFAULT_SYMBOLIC_CHARS) + list(DEFAULT_ABBREVIATIONS),
+            )
+
+        # Also ensure ban_keywords are consistent
+        if not self.ban_phrases_for_bias:
+            # Use the new constant
+            setattr(self, "ban_phrases_for_bias", DEFAULT_BAN_KEYWORDS)
+
         return self
+
 
 
 class ExperimentConfig(BaseModel):

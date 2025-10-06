@@ -28,7 +28,10 @@ try:
         apply_lora_layers_force_qkv_mlp,
         print_trainable_parameters,
     )
+    print("apply_lora_layers_force_qkv_mlp imported")
+    print("Attempting to import mlx_lm.utils")
     import mlx_lm.utils
+    print("mlx_lm.utils imported")
 
     MLX_LM_AVAILABLE = True
 except ImportError:
@@ -115,7 +118,7 @@ class MockModel(nn.Module):
         self.n_layers = num_layers
         self.model_config = kwargs  # Store for mock loading
 
-    def __call__(self, x: mx.array, cache: Any = None) -> mx.array:
+    def __call__(self, x: mx.array, cache: Any = None, mask: Any = None) -> mx.array:
         # Mock forward pass
         B, L = x.shape
         x = self.embedding(x)

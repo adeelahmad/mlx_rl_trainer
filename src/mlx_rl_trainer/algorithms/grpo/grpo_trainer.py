@@ -141,7 +141,23 @@ class GRPOTrainer(BaseTrainer):
             return {}, 0.0, {}
 
         max_prompt_len_mb = max(arr.shape[0] for arr in prompts_list_of_arrays)
-        padded_prompts_mx = mx.array([mx.pad(arr, [(0, max_prompt_len_mb - arr.shape[0])], constant_value=self.tokenizer.pad_token_id) for arr in prompts_list_of_arrays], dtype=mx.int32)
+        padded_prompts_mx = mx.array(
+            [
+                mx.concatenate(
+                    [
+                        arr,
+                        mx.full(
+                            (max_prompt_len_mb - arr.shape[0],),
+                            self.tokenizer.pad_token_id,
+                            dtype=mx.int32,
+                        ),
+                    ],
+                    axis=0,
+                )
+                for arr in prompts_list_of_arrays
+            ],
+            dtype=mx.int32,
+        )
         
         num_samples_per_prompt = self.config.trainer.num_rollout_samples
         total_samples = len(prompts_list_of_arrays) * num_samples_per_prompt
