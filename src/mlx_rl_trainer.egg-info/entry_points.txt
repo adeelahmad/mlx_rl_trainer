@@ -1,0 +1,2 @@
+[console_scripts]
+mlx-train = mlx_rl_trainer.scripts.train:main

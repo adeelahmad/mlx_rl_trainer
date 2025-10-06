@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: mlx_rl_trainer
+Version: 0.1.0
+Requires-Python: >=3.9
+Requires-Dist: mlx>=0.5.0
+Requires-Dist: mlx-lm>=0.8.0
+Requires-Dist: pydantic>=2.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: datasets>=2.14.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: tqdm>=4.60.0
+Requires-Dist: aiofiles>=22.0.0
+Requires-Dist: scikit-learn>=1.3.0
+Provides-Extra: dev
+Requires-Dist: pandas; extra == "dev"
+Requires-Dist: matplotlib; extra == "dev"
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python

@@ -1,0 +1,308 @@
+"""Text processing utility functions."""
+
+import re
+import string
+import logging
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+from mlx_rl_trainer.core.config import RewardConfig
+from mlx_lm.tokenizer_utils import TokenizerWrapper
+
+logger = logging.getLogger(__name__)
+
+# --- Global Text Constants ---
+LETTER_ALPH = string.ascii_uppercase
+
+def _preview(s: str, n: int = 600) -> str:
+    """Shortens text for logs and escapes newlines."""
+    if s is None: return ''
+    s = s.replace('\r\n', '\n')
+    s = s[:n] + ('...' if len(s) > n else '')
+    return s.replace('\n', '\\n')
+
+# Regex patterns for markup stripping
+_MD_HEADER = re.compile(r"^\s{0,3}#{1,6}\s+.*$", re.M)
+_CODE_FENCE = re.compile(r"```.*?```", re.S)
+_INLINE_CODE = re.compile(r"`[^`]+`")
+_HTML_TAGS = re.compile(r"<[^>]+>")
+
+
+def _strip_markup(s: str) -> str:
+    """Remove markdown and HTML formatting"""
+    if not s:
+        return ""
+    s = _CODE_FENCE.sub(" ", s)
+    s = _INLINE_CODE.sub(" ", s)
+    s = _MD_HEADER.sub(" ", s)
+    s = _HTML_TAGS.sub(" ", s)
+    s = re.sub(r"(^|\n)\s*[-*•]\s+", r"\1", s)
+    s = re.sub(r"(^|\n)\s*\d+\.\s+", r"\1", s)
+    s = s.replace("\u2026", " ")
+    s = re.sub(r"[^\w\s/:%\-.]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+def _count_words(txt: str) -> int:
+    """Counts non-whitespace tokens (approximates word count)."""
+    return len(re.findall(r'\w+', txt or ''))
+
+def _tokenize_set(s: str) -> Set[str]:
+    """Convert string to set of lowercase tokens without punctuation"""
+    s = (s or "").lower()
+    s = s.translate(str.maketrans("", "", string.punctuation))
+    return set(w for w in s.split() if w)
+
+def _normalize_ans_for_match(s: str) -> str:
+    """Normalizes an answer string for case-insensitive, whitespace-insensitive comparison."""
+    s = (s or '').lower()
+    s = re.sub(r"\s+", ' ', s)
+    s = s.strip(" .;:")
+    return s
+
+def _contains_keywords(s: str, keywords: Sequence[str]) -> bool:
+    """Return True if any keyword occurs in s (case-insensitive)"""
+    if not s or not keywords:
+        return False
+    s_low = s.lower()
+    return any(k.lower() in s_low for k in keywords)
+
+def _extract_action_phrases(s: str) -> List[str]:
+    """Extract bullet points or action phrases from text"""
+    if not s:
+        return []
+    bullets = re.findall(r"(^|\n)\s*(?:[-*•]|\d+\.)\s+(.*?)(?:(?=\n\s*(?:[-*•]|\d+\.))|\n|$)", s)
+    items = [b[1].strip() for b in bullets if b[1].strip()]
+    if not items:
+        items = re.split(r"[;\n.]+?", s)
+    out = []
+    for it in items:
+        itn = _strip_markup(it)
+        if itn and len(itn) >= 3:
+            out.append(itn)
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+def _extract_python_code(text: str) -> str:
+    """Extracts Python code from a markdown code block or assumes plain code."""
+    # Look for markdown code blocks
+    matches = re.findall(r"```(?:python)?\n(.*?)\n```", text, re.DOTALL)
+    if matches:
+        return matches[0]
+
+    # If no markdown block, try to parse the entire text as Python code
+    try:
+        import ast # Dynamically import ast to avoid circular deps if this is in base_reward
+        ast.parse(text) # Check for valid Python syntax
+        return text.strip()
+    except (SyntaxError, ImportError): # Catch ImportError if ast fails for some reason
+        return "" # Not valid Python code or ast unavailable
+    except Exception as e:
+        logger.debug(f"Unexpected error during AST parsing: {e}")
+        return ""
+
+def _get_static_reward_config() -> RewardConfig:
+    """Provides a static RewardConfig instance for accessing default tags."""
+    return RewardConfig()
+
+def extract_think_region(text: str, cfg: RewardConfig) -> str:
+    """Extract content between <think> and </think> tags"""
+    m = re.search(
+        re.escape(cfg.think_start_tag) + r"\s*(.*?)\s*" + re.escape(cfg.think_end_tag),
+        text or "",
+        flags=re.I | re.S,
+    )
+    return (m.group(1).strip() if m else "")[:8000]
+
+def extract_answer_region(text: str, cfg: RewardConfig) -> str:
+    """
+    Extract answer region: everything AFTER the last </think> tag.
+    If no </think> tag exists, return the entire text.
+    """
+    tl = text or ""
+    tend = cfg.think_end_tag
+
+    if tend and tend.lower() in tl.lower():
+        # Find LAST occurrence of </think>
+        idx = tl.lower().rfind(tend.lower())
+        # Everything after </think> is the answer
+        answer = tl[idx + len(tend) :].strip()
+        return answer[:2000]
+
+    # No </think> tag found - return whole text as answer
+    return tl.strip()[:2000]
+
+def _indices_to_letters(indices: List[int]) -> str:
+    """Converts a list of 0-based indices to comma-separated letters (e.g., [0, 2] -> 'A,C')."""
+    letters = []
+    for idx in indices:
+        if 0 <= idx < len(LETTER_ALPH):
+            letters.append(LETTER_ALPH[idx])
+
+    seen, out = set(), []
+    for L in letters:
+        if L not in seen:
+            seen.add(L)
+            out.append(L)
+    return ','.join(out)
+
+def _letters_to_canonical(letter_str: str) -> str:
+    """Converts a string of letters (e.g., 'a, B ,d') to canonical uppercase form ('A,B,D')."""
+    parts = []
+    for p in (letter_str or '').split(','):
+        p = p.strip().upper()
+        if len(p) == 1 and p in LETTER_ALPH:
+            parts.append(p)
+
+    seen, out = set(), []
+    for L in parts:
+        if L not in seen:
+            seen.add(L)
+            out.append(L)
+    return ','.join(out)
+
+def _match_ref_to_option_index(ref_text: str, options: List[str]) -> Optional[int]:
+    """Tries to match a reference answer string to one of the provided options."""
+    if not (ref_text and options): return None
+    ref_n = _normalize_ans_for_match(ref_text) # Use _normalize_ans_for_match
+
+    for idx, opt in enumerate(options):
+        if _normalize_ans_for_match(opt) == ref_n:
+            return idx
+
+    # Substring or overlap match (less strict)
+    for idx, opt in enumerate(options):
+        on = _normalize_ans_for_match(opt)
+        if ref_n and (ref_n in on or on in ref_n):
+            return idx
+
+    return None
+
+def _extract_mcq_options(prompt_text: str) -> List[str]:
+    """Tries to extract numbered or bulleted MCQ options from a prompt."""
+    if not isinstance(prompt_text, str): return []
+
+    m = re.search(r"choices\s*:?(.*)$", prompt_text, flags=re.I | re.S)
+    block = m.group(1) if m else prompt_text
+    lines = [ln.strip() for ln in block.splitlines()]
+    opts = []
+
+    for ln in lines:
+        if re.match(r"^\s*[-•]\s+", ln):
+            opts.append(re.sub(r"^\s*[-•]\s+", "", ln).strip())
+            continue
+
+        m2 = re.match(r"^\s*([A-Za-z])\s*[).\-:]\s*(.+)$", ln)
+        if m2:
+            opts.append(m2.group(2).strip())
+            continue
+
+        m3 = re.match(r"^\s*\d+\s*[).\-:]\s*(.+)$", ln)
+        if m3:
+            opts.append(m3.group(1).strip())
+            continue
+
+    if len(opts) < 2:
+        raw = [ln for ln in lines if ln and not re.search(r"choices\s*:", ln, re.I)]
+        if len(raw) >= 2: opts = raw
+
+    return [o for o in opts if o.strip()][:len(LETTER_ALPH)]
+
+def _infer_gold_letters_from_meta(meta: Dict[str, Any], options: List[str], fallback_ref_text: str = '') -> str:
+    """Generates canonical gold letters (e.g., "A,C") from various metadata fields."""
+
+    for key in ('correct_answer_letters', 'correct_letters', 'correct_letter'):
+        v = meta.get(key)
+        if isinstance(v, str) and v.strip(): return _letters_to_canonical(v)
+
+    correct_indices = []
+    if isinstance(meta.get('correct_indices'), list) and meta['correct_indices']:
+        try: correct_indices = [int(i) for i in meta['correct_indices'] if isinstance(i, (int, float))]
+        except Exception: pass
+    elif isinstance(meta.get('correct_index'), (int, float)):
+        correct_indices = [int(meta['correct_index'])]
+
+    if correct_indices: return _indices_to_letters([i for i in correct_indices if 0 <= i < len(options)])
+
+    correct_texts = meta.get('correct_texts')
+    if isinstance(correct_texts, list) and correct_texts:
+        for t in correct_texts:
+            idx = _match_ref_to_option_index(str(t), options)
+            if idx is not None: correct_indices.append(idx)
+
+    if correct_indices: return _indices_to_letters([i for i in correct_indices if 0 <= i < len(options)])
+
+    if fallback_ref_text:
+        idx = _match_ref_to_option_index(fallback_ref_text, options)
+        if idx is not None: return _indices_to_letters([idx])
+
+    return ''
+
+def _mcq_meta_from_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """Generates comprehensive metadata for a sample based on inferred options/answers."""
+    meta = sample.get('meta', {}) if isinstance(sample.get('meta'), dict) else {}
+    options = meta.get('options') if isinstance(meta.get('options'), list) else []
+    ref_ans = sample.get('ref_answer_str') or sample.get('completion') or ''
+
+    is_mcq = False
+    if isinstance(meta.get('type'), str) and meta['type'].strip().lower() == 'mcq': is_mcq = True
+
+    if not options: options = _extract_mcq_options(sample.get('prompt') or sample.get('text') or '')
+
+    options = [str(o).strip() for o in options if str(o).strip()]
+    if len(options) < 2: return {'is_mcq': False, 'options': [], 'multi_select': False, 'correct_indices': [], 'correct_letters': ''}
+
+    if not is_mcq: is_mcq = True
+
+    correct_indices = []
+    multi_select = bool(meta.get('multi_select', False))
+
+    correct_letters = _infer_gold_letters_from_meta(meta, options, fallback_ref_text=ref_ans)
+
+    if correct_letters:
+        correct_indices = [LETTER_ALPH.index(L) for L in correct_letters.split(',') if L in LETTER_ALPH]
+
+    if len(correct_indices) > 1: multi_select = True
+
+    return {
+        'is_mcq': is_mcq,
+        'options': options,
+        'multi_select': multi_select,
+        'correct_indices': correct_indices,
+        'correct_letters': correct_letters
+    }
+
+def apply_chat_template_wrapper(tokenizer: TokenizerWrapper, prompt: str, system_prompt: Optional[str]) -> str:
+    """Applies a chat template to a prompt, handling potential errors gracefully."""
+    messages = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt.strip()})
+    messages.append({"role": "user", "content": prompt.strip()})
+
+    try:
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    except Exception as e:
+        logger.warning(f"apply_chat_template failed: {e}. Falling back to manual formatting.")
+        prefix = f"System: {system_prompt.strip()}\n\n" if system_prompt else ""
+        return f"{prefix}User: {prompt.strip()}\n\nAssistant:"
+
+def _tfidf_cosine(a: str, b: str) -> float:
+    """Compute TF-IDF cosine similarity, fallback to Jaccard"""
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        vec = TfidfVectorizer(min_df=1, max_df=0.9, ngram_range=(1, 2))
+        X = vec.fit_transform([a, b])
+        sim = float(cosine_similarity(X[0:1], X[1:2])[0, 0])
+        return max(0.0, min(1.0, sim))
+    except Exception:
+        A, B = _tokenize_set(a), _tokenize_set(b)
+        if not A and not B:
+            return 1.0
+        if not A or not B:
+            return 0.0
+        return len(A & B) / len(A | B)

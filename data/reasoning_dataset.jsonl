@@ -1,0 +1,2 @@
+{"prompt": "I have 5 apples and I buy 3 more. Then I eat 2 apples. How many apples do I have left?", "completion": "<think>Start with 5 apples. Add 3 more, so 5 + 3 = 8. Then subtract 2, so 8 - 2 = 6.</think>I have 6 apples left."}
+{"prompt": "A train travels at 60 km/h for 2 hours. How far does it travel?", "completion": "<think>The formula is distance = speed * time. Speed is 60 km/h and time is 2 hours. So distance is 60 * 2 = 120 km.</think>The train travels 120 km."}
