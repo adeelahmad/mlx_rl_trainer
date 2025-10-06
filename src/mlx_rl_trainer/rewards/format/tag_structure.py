@@ -10,6 +10,7 @@ from mlx_rl_trainer.utils.text_utils import extract_think_region, extract_answer
 
 logger = logging.getLogger(__name__)
 
+
 @RewardRegistry.register("format_structure")
 class TagStructureReward(BaseReward):
     """
@@ -27,8 +28,16 @@ class TagStructureReward(BaseReward):
         generated = context.generated_text
         reward_config = RewardConfig(**self.config)
 
-        th_s = len(re.findall(re.escape(reward_config.think_start_tag), generated or "", flags=re.I))
-        th_e = len(re.findall(re.escape(reward_config.think_end_tag), generated or "", flags=re.I))
+        th_s = len(
+            re.findall(
+                re.escape(reward_config.think_start_tag), generated or "", flags=re.I
+            )
+        )
+        th_e = len(
+            re.findall(
+                re.escape(reward_config.think_end_tag), generated or "", flags=re.I
+            )
+        )
 
         think = extract_think_region(generated, reward_config)
         ans = extract_answer_region(generated, reward_config)

@@ -10,8 +10,8 @@ trainer:
   output_dir: "./outputs/code_gen_run_001"
   num_training_steps: 1000
   learning_rate: 2.0e-6
-  ppo_batch_size: 2       # Number of unique prompts per micro-batch
-  num_rollout_samples: 2  # Number of responses to generate per prompt
+  ppo_batch_size: 2 # Number of unique prompts per micro-batch
+  num_rollout_samples: 2 # Number of responses to generate per prompt
   grad_accum_steps: 4
   save_every: 250
   eval_every: 100
@@ -78,7 +78,6 @@ trainer:
   use_custom_batch_builder: false
   invalid_sample_layers: "33,34,35" # Example layers
   invalid_sample_frequency: 2
-
   # W&B Configuration defaults
   use_wandb: false # Set to true to enable wandb
   wandb_project: "mlx-rl-trainer"
@@ -97,7 +96,6 @@ trainer:
   # Monitoring defaults
   reward_smoothing_window: 20
 
-
 model:
   model_path: "./models/mock_model"
   ref_model_path: "./models/mock_model"
@@ -106,8 +104,16 @@ model:
   lora_alpha: 16.0
   lora_dropout: 0.0
   lora_scale_by_rank: true
-  lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-
+  lora_target_modules:
+    [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj",
+    ]
 
 data:
   train_path: "./data/dummy_train.jsonl"
@@ -120,13 +126,12 @@ data:
   dataset_answer_key: "completion"
   dataset_filter_keywords: ["http", "qwen"]
 
-
 rewards:
   - name: "code_execution"
     weight: 0.80
     config:
       timeout: 3 # seconds
-  - name: "semantic_similarity"
+  - name: "content_similarity"
     weight: 0.20
     config:
       method: "tfidf"
@@ -134,7 +139,7 @@ rewards:
 evaluation:
   - name: "human_eval"
     config:
-      k_values: [1, 2]   # Calculate pass@1 and pass@2
+      k_values: [1, 2] # Calculate pass@1 and pass@2
       num_samples: 1 # Reduce for mock speed
       max_gen_len: 128 # Max tokens for eval generation
       temperature: 0.0 # Greedy for eval
@@ -158,4 +163,4 @@ max_kv_size: 1536
 use_paged_kv_cache: false # Set to true to enable paged cache
 kv_cache_block_size: 16
 kv_cache_num_blocks: 2048
-system_prompt: "THINKING RULES - Use maximally compressed notation: ═══ SYMBOLS & NOTATION ═══ Math: ∴(therefore) ∵(because) ⇒(implies) ≈(approx) ∈(in) ∀(forall) ∃(exists) ≠ ≤ ≥ Logic: ✓(yes) ✗(no) ?(unknown) !(important) ⚠(warning) ∧(and) ∨(or) ¬(not) ⊕(xor) Flow: →(then) ←(from) ↔(bidirect) ⇄(exchange) ▸(next) ◂(prev) ⊃(implies) ⊂(subset) Status: ✓(done) ○(pending) ●(active) ◐(partial) ⊗(blocked) ⊘(invalid) ═══ UNIVERSAL ABBREVIATIONS ═══ w/(with) w/o(without) b/c(because) re:(regarding) vs(versus) via per thru @(at/location) #(number) &(and) +(plus/also) -(minus/without) /(per/or) |(or/pipe) i.e.(that is) e.g.(example) etc.(and so on) cf.(compare) viz.(namely) NB(note well) ═══ ACTION SHORTHAND ═══ chk(check) calc(calculate) eval(evaluate) cmp(compare) est(estimate) approx(approximate) find get set test run init proc(process) upd(update) del(delete) add sub mul div verify confirm validate analyze extract parse transform merge split filter sort ═══ DOMAIN-SPECIFIC SHORTHAND ═══ - CODE/TECH: func var obj arr str int bool dict list async await req res API DB impl(implement) refactor debug deploy config exec cmd arg param ret val idx len - BUSINESS: rev(revenue) exp(expense) proj(projection) KPI ROI Q1/Q2/Q3/Q4 YoY MoM stakeholder cust(customer) mkt(market) comp(competitor) strat(strategy) ops(operations) - SCIENCE: exp(experiment) obs(observation) hyp(hypothesis) ctrl(control) var(variable) sig(significant) corr(correlation) data pt(point) meas(measure) temp pres vol mass - LOGIC/REASONING: IF/THEN/ELSE WHEN/WHILE FOR/EACH CASE/SWITCH TRY/CATCH premise→conclusion assumption→inference cause→effect condition→result ═══ TIME & QUANTITY ═══ mins hrs days wks mos yrs NOW ASAP prev next cur(current) hist(historical) approx ~100 <10 >50 ≤5 ≥20 between±5 range[1-10] max min avg sum total count ═══ COMPARISON & RELATIONSHIPS ═══ better/worse higher/lower more/less same≠diff equal>unequal similar≈different vs opt1/opt2/opt3 pros/cons trade-off cost/benefit risk/reward ═══ STRICTLY FORBIDDEN PHRASES ═══ ✗ "I think" "I believe" "I feel" "In my opinion" "It seems" "It appears" ✗ "Let me" "I should" "I need to" "I want to" "I'm going to" ✗ "This is interesting" "Looking at" "Considering" "Taking into account" ✗ "First of all" "On the other hand" "In this case" "As we can see" ✗ "It's worth noting" "It's important to" "We should consider" ✗ "Taking into account" "With that in mind" "Given this information" "Based on this" ✗ "Confused" "stuck" "frustrated" "Uncertain" "Unclear" "I'm guessing" ✗ "maybe the answer is" "I'm not sure" "Probably" "Perhaps" "Possibly" ✗ "Circular reasoning" "In some way" "Magically" "For some reason" "Too complicated" "It just works" ✗ "Something is off" "Wait, but" "Wait, maybe" "Wait, actually" "Hold on" "another thought:" ✗ "Alternatively" "Actually" "Or maybe" "Flowery language, hedging, or conversational filler" ✗ "Furthermore", "Moreover", "Nevertheless", "Nonetheless", "Subsequently", "Therefore, it can be concluded", "In conclusion", "To summarize", "As mentioned previously" ✗ Any emoji unless user explicitly requests them ═══ REQUIRED FORMAT ═══ - Write as compact telegraphic notes, NOT full sentences - Use vertical lists w/ bullets or dashes for multi-items - Group related info with indentation or symbols - One idea per line when possible - Omit articles (a/an/the), auxiliary verbs (is/are/was), obvious subjects EXAMPLES: ❌ BAD: "I think we should first check if the value is greater than 10, and if it is, then we need to calculate..." ✓ GOOD: "chk val>10 → calc x²+3 → ∴ result≈42" ❌ BAD: "Looking at the data, it seems that the customer retention rate is lower than expected" ✓ GOOD: "data: cust retention<expected (est 65% vs target 80%) → need improve" ❌ BAD: "Let me break this down. We have three options here. Option A would cost more but..." ✓ GOOD: "3 opts: A(↑cost ✓quality) B(balanced) C(↓cost ✗quality) → rec: B" ❌ BAD: "First, I need to understand the problem. The user is asking about performance issues..." ✓ GOOD: "problem: perf issues → causes: DB query O(n²), mem leak @ loop → fix: index+cache ═══ WHEN UNCERTAIN ═══ DO NOT guess or assume. Instead: ? = flag uncertainty w/ question mark ASK: "need clarification on X" or "X not specified - options: A/B/C?" CONSTRAINT: "cannot solve b/c: missing info Y" If problem unsolvable → state why concisely, don't elaborate Think like: debugger output, medical chart notes, trading floor shorthand, or military briefing. COMPRESS EVERYTHING. Every word must earn its place."
+system_prompt: ""

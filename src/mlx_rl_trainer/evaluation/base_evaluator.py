@@ -9,10 +9,13 @@ from typing import Dict, Any, Optional
 import logging
 import json
 from pathlib import Path
-from datasets import Dataset # HuggingFace Dataset
-from mlx_lm.tokenizer_utils import TokenizerWrapper # For tokenizer type hinting
+from datasets import Dataset  # HuggingFace Dataset
+from mlx_lm.tokenizer_utils import TokenizerWrapper  # For tokenizer type hinting
 
-from mlx_rl_trainer.core.trainer import EvaluationMetrics, DataLoadError # Import structured metrics
+from mlx_rl_trainer.core.trainer import (
+    EvaluationMetrics,
+    DataLoadError,
+)  # Import structured metrics
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +37,18 @@ class BaseEvaluator(ABC):
         """
         self.config = config
         self.name = self.__class__.__name__
-        self.dataset: Optional[Dataset] = None # Dataset can be loaded by evaluator or passed
+        self.dataset: Optional[
+            Dataset
+        ] = None  # Dataset can be loaded by evaluator or passed
 
         logger.debug(f"Initialized {self.name} evaluator with config: {config}")
 
-    def load_dataset(self, dataset_path: str, dataset_subset: Optional[str] = None, split: str = "test") -> Dataset:
+    def load_dataset(
+        self,
+        dataset_path: str,
+        dataset_subset: Optional[str] = None,
+        split: str = "test",
+    ) -> Dataset:
         """
         Loads an evaluation dataset from HuggingFace Hub or a local JSONL file.
 
@@ -56,20 +66,25 @@ class BaseEvaluator(ABC):
         try:
             path = Path(dataset_path)
             if path.exists() and path.suffix == ".jsonl":
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(path, "r", encoding="utf-8") as f:
                     data = [json.loads(line) for line in f if line.strip()]
                 self.dataset = Dataset.from_list(data)
             else:
                 self.dataset = load_dataset(dataset_path, dataset_subset, split=split)
 
-            logger.info(f"Loaded dataset for {self.name}: {dataset_path} (split: {split}) with {len(self.dataset)} samples.")
+            logger.info(
+                f"Loaded dataset for {self.name}: {dataset_path} (split: {split}) with {len(self.dataset)} samples."
+            )
             return self.dataset
         except Exception as e:
-            raise DataLoadError(f"Failed to load dataset for {self.name} from {dataset_path}: {e}") from e
-
+            raise DataLoadError(
+                f"Failed to load dataset for {self.name} from {dataset_path}: {e}"
+            ) from e
 
     @abstractmethod
-    def evaluate(self, model: Any, tokenizer: TokenizerWrapper, dataset: Dataset) -> EvaluationMetrics:
+    def evaluate(
+        self, model: Any, tokenizer: TokenizerWrapper, dataset: Dataset
+    ) -> EvaluationMetrics:
         """
         Abstract method to run evaluation on the model.
 

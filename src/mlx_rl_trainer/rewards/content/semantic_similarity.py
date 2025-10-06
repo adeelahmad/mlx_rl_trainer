@@ -13,7 +13,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.context import RewardContext
-from mlx_rl_trainer.utils.text_utils import _tokenize_set, _tfidf_cosine # Import utilities
+from mlx_rl_trainer.utils.text_utils import (
+    _tokenize_set,
+    _tfidf_cosine,
+)  # Import utilities
 
 logger = logging.getLogger(__name__)
 
@@ -40,19 +43,18 @@ class SemanticSimilarityReward(BaseReward):
 
         if self.method == "tfidf":
             self.vectorizer = TfidfVectorizer(
-                max_features=self.max_features,
-                stop_words='english',
-                lowercase=True
+                max_features=self.max_features, stop_words="english", lowercase=True
             )
         elif self.method == "embedding":
-            logger.warning("Embedding similarity method not yet fully implemented, falling back to TF-IDF.")
-            self.method = "tfidf" # Fallback
-            self.vectorizer = TfidfVectorizer(max_features=self.max_features, stop_words='english', lowercase=True)
+            logger.warning(
+                "Embedding similarity method not yet fully implemented, falling back to TF-IDF."
+            )
+            self.method = "tfidf"  # Fallback
+            self.vectorizer = TfidfVectorizer(
+                max_features=self.max_features, stop_words="english", lowercase=True
+            )
 
-    def compute(
-        self,
-        context: RewardContext
-    ) -> float:
+    def compute(self, context: RewardContext) -> float:
         """
         Computes semantic similarity reward for a single `RewardContext`.
 
@@ -68,17 +70,26 @@ class SemanticSimilarityReward(BaseReward):
         try:
             self.validate_inputs(context)
 
-            if not generated or not reference or len(generated) < self.min_length or len(reference) < self.min_length:
-                logger.debug("Content: Generated or reference text too short or empty. Returning 0.0.")
+            if (
+                not generated
+                or not reference
+                or len(generated) < self.min_length
+                or len(reference) < self.min_length
+            ):
+                logger.debug(
+                    "Content: Generated or reference text too short or empty. Returning 0.0."
+                )
                 return 0.0
 
             if self.method == "tfidf":
                 return self._compute_tfidf_similarity(generated, reference)
             else:
-                return 0.0 # Should not be reached if fallback is working
+                return 0.0  # Should not be reached if fallback is working
 
         except Exception as e:
-            logger.error(f"SemanticSimilarityReward computation failed: {e}", exc_info=True)
+            logger.error(
+                f"SemanticSimilarityReward computation failed: {e}", exc_info=True
+            )
             return 0.0
 
     def _compute_tfidf_similarity(self, text1: str, text2: str) -> float:
@@ -87,7 +98,9 @@ class SemanticSimilarityReward(BaseReward):
             # Fit and transform the two texts
             # Temporarily create a new vectorizer to fit only these two texts
             # (or use the class-wide one after a fit_transform on a larger corpus if batching)
-            local_vectorizer = TfidfVectorizer(max_features=self.max_features, stop_words='english', lowercase=True)
+            local_vectorizer = TfidfVectorizer(
+                max_features=self.max_features, stop_words="english", lowercase=True
+            )
             vectors = local_vectorizer.fit_transform([text1, text2])
 
             similarity = cosine_similarity(vectors[0:1], vectors[1:2])[0][0]
@@ -95,17 +108,19 @@ class SemanticSimilarityReward(BaseReward):
             return float(np.clip(similarity, 0.0, 1.0))
 
         except Exception as e:
-            logger.warning(f"TF-IDF computation failed for pair: {e}. Falling back to Jaccard.", exc_info=True)
+            logger.warning(
+                f"TF-IDF computation failed for pair: {e}. Falling back to Jaccard.",
+                exc_info=True,
+            )
             # Fallback to Jaccard if TF-IDF fails for some reason
             A, B = _tokenize_set(text1), _tokenize_set(text2)
-            if not A and not B: return 1.0
-            if not A or not B: return 0.0
+            if not A and not B:
+                return 1.0
+            if not A or not B:
+                return 0.0
             return float(len(A & B) / len(A | B))
 
-    def batch_compute(
-        self,
-        contexts: List[RewardContext]
-    ) -> List[float]:
+    def batch_compute(self, contexts: List[RewardContext]) -> List[float]:
         """
         Optimized batch computation for TF-IDF based similarity.
 
@@ -116,7 +131,9 @@ class SemanticSimilarityReward(BaseReward):
             A list of float similarity scores for the batch.
         """
         if self.method != "tfidf":
-            return super().batch_compute(contexts) # Fallback to default sequential if method is not TF-IDF
+            return super().batch_compute(
+                contexts
+            )  # Fallback to default sequential if method is not TF-IDF
 
         try:
             generated_texts = [c.generated_text for c in contexts]
@@ -138,11 +155,16 @@ class SemanticSimilarityReward(BaseReward):
             if generated_vectors.shape[0] == 0 or reference_vectors.shape[0] == 0:
                 return [0.0] * len(contexts)
 
-            similarities = cosine_similarity(generated_vectors, reference_vectors).diagonal()
+            similarities = cosine_similarity(
+                generated_vectors, reference_vectors
+            ).diagonal()
 
             return [float(np.clip(s, 0.0, 1.0)) for s in similarities]
 
         except Exception as e:
-            logger.error(f"Batch semantic similarity (TF-IDF) computation failed: {e}", exc_info=True)
+            logger.error(
+                f"Batch semantic similarity (TF-IDF) computation failed: {e}",
+                exc_info=True,
+            )
             # Fallback to sequential compute if batch fails
             return [self.compute(c) for c in contexts]

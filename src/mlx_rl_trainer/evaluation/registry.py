@@ -31,12 +31,18 @@ class EvaluatorRegistry:
         Args:
             name: A unique string identifier for this evaluator.
         """
+
         def decorator(evaluator_class: Type[BaseEvaluator]):
             if name in cls._evaluators:
-                logger.warning(f"Overwriting existing evaluator: '{name}' with {evaluator_class.__name__}.")
+                logger.warning(
+                    f"Overwriting existing evaluator: '{name}' with {evaluator_class.__name__}."
+                )
             cls._evaluators[name] = evaluator_class
-            logger.info(f"Registered evaluator: '{name}' -> {evaluator_class.__name__}.")
+            logger.info(
+                f"Registered evaluator: '{name}' -> {evaluator_class.__name__}."
+            )
             return evaluator_class
+
         return decorator
 
     @classmethod
@@ -54,7 +60,7 @@ class EvaluatorRegistry:
             KeyError: If no evaluator is registered with the given name.
         """
         if name not in cls._evaluators:
-            available = ', '.join(cls._evaluators.keys())
+            available = ", ".join(cls._evaluators.keys())
             raise KeyError(
                 f"Evaluator '{name}' not found. Available evaluators: [{available}]."
             )
@@ -99,5 +105,6 @@ class EvaluatorRegistry:
         """
         cls._evaluators.clear()
         logger.info("Cleared evaluator registry.")
+
 
 register_evaluator = EvaluatorRegistry.register

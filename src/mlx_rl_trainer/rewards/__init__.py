@@ -17,5 +17,9 @@ import mlx_rl_trainer.rewards.content.steps_coverage
 
 
 __all__ = [
-    "BaseReward", "RewardComposer", "RewardRegistry", "register_reward", "RewardContext"
+    "BaseReward",
+    "RewardComposer",
+    "RewardRegistry",
+    "register_reward",
+    "RewardContext",
 ]

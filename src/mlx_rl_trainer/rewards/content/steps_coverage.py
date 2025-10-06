@@ -4,6 +4,7 @@ from mlx_rl_trainer.rewards.registry import register_reward
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.utils.text_utils import _extract_action_phrases
 
+
 @register_reward("steps_coverage")
 class StepsCoverageReward(BaseReward):
     """

@@ -11,16 +11,22 @@ import mlx.core as mx
 import mlx.nn as nn
 import logging
 
-from mlx_rl_trainer.core.config import ExperimentConfig # Use ExperimentConfig for config
+from mlx_rl_trainer.core.config import (
+    ExperimentConfig,
+)  # Use ExperimentConfig for config
 
 logger = logging.getLogger(__name__)
+
 
 class BaseAlgorithm(ABC):
     """
     Abstract base class for Reinforcement Learning algorithms like GRPO, PPO.
     Defines the core interface for loss calculation and advantage estimation.
     """
-    def __init__(self, config: ExperimentConfig, actor_model: nn.Module, ref_model: nn.Module):
+
+    def __init__(
+        self, config: ExperimentConfig, actor_model: nn.Module, ref_model: nn.Module
+    ):
         """
         Initializes the base algorithm.
 
@@ -35,7 +41,9 @@ class BaseAlgorithm(ABC):
         logger.debug(f"BaseAlgorithm initialized for {self.__class__.__name__}.")
 
     @abstractmethod
-    def calculate_loss_and_grads(self, rollout_batch: Dict[str, mx.array], full_config: ExperimentConfig) -> Tuple[mx.array, Dict[str, Any], Dict[str, float]]:
+    def calculate_loss_and_grads(
+        self, rollout_batch: Dict[str, mx.array], full_config: ExperimentConfig
+    ) -> Tuple[mx.array, Dict[str, Any], Dict[str, float]]:
         """
         Calculates the algorithm-specific loss and gradients for the actor model.
 
@@ -49,7 +57,9 @@ class BaseAlgorithm(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def compute_advantages(self, rewards_flat: mx.array, samples_per_prompt: int) -> mx.array:
+    def compute_advantages(
+        self, rewards_flat: mx.array, samples_per_prompt: int
+    ) -> mx.array:
         """
         Computes advantage estimates from a flat array of rewards.
 

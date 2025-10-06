@@ -8,6 +8,7 @@ Data context required for reward computations.
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, Any, List, Optional
 
+
 class RewardContext(BaseModel):
     """
     A predictable and immutable data structure passed to all reward functions.
@@ -21,12 +22,23 @@ class RewardContext(BaseModel):
         metadata: A dictionary for any additional, arbitrary context relevant to
                   reward computation (e.g., MCQ options, task type flags).
     """
+
     model_config = ConfigDict(frozen=True)
 
-    generated_text: str = Field(..., description="The full generated text sequence from the model.")
-    prompt_text: str = Field(..., description="The original input prompt that generated the text.")
-    reference_completion: str = Field(..., description="The ground truth reference completion for comparison.")
+    generated_text: str = Field(
+        ..., description="The full generated text sequence from the model."
+    )
+    prompt_text: str = Field(
+        ..., description="The original input prompt that generated the text."
+    )
+    reference_completion: str = Field(
+        ..., description="The ground truth reference completion for comparison."
+    )
 
-    test_cases: List[Dict[str, Any]] = Field(default_factory=list, description="A list of test case dictionaries for code evaluation rewards.")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional arbitrary metadata for context.")
-
+    test_cases: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="A list of test case dictionaries for code evaluation rewards.",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Additional arbitrary metadata for context."
+    )

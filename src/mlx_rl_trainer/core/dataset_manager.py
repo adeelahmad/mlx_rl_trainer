@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # UTILITY FUNCTIONS (from user's provided code)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _ascii_ratio(s: str) -> float:
     if not s:
         return 1.0
@@ -78,7 +79,9 @@ def _normalize_record(
     if completion and "<think>" not in completion:
         completion = f"<think>\n\n</think>\n{completion}"
 
-    system = obj.get("system", THINK_STYLE_PROMPT_LITERAL) # Use THINK_STYLE_PROMPT_LITERAL from config
+    system = obj.get(
+        "system", THINK_STYLE_PROMPT_LITERAL
+    )  # Use THINK_STYLE_PROMPT_LITERAL from config
 
     rec = {
         "prompt": _s(prompt),
@@ -86,7 +89,7 @@ def _normalize_record(
         "system": _s(system),
         "is_invalid_sample": obj.get("is_invalid_sample"),
         "test_cases": obj.get("test_cases", []),
-        "meta": obj.get("meta", {})
+        "meta": obj.get("meta", {}),
     }
 
     # Return None if all fields are empty after normalization
@@ -119,8 +122,8 @@ def _load_jsonl_normalized(
             "completion": Value("string"),
             "system": Value("string"),
             "is_invalid_sample": Value("bool"),
-            "test_cases": Value("string"), # Assuming test_cases are stringified JSON
-            "meta": Value("string") # Assuming meta is stringified JSON
+            "test_cases": Value("string"),  # Assuming test_cases are stringified JSON
+            "meta": Value("string"),  # Assuming meta is stringified JSON
         }
     )
     return Dataset.from_list(rows, features=features)
@@ -240,9 +243,13 @@ def get_dataset(
     if config.dataset_name:
         try:
             hf_split = (
-                config.dataset_train_split if split == "train" else config.dataset_val_split
+                config.dataset_train_split
+                if split == "train"
+                else config.dataset_val_split
             )
-            ds = load_dataset(config.dataset_name, config.dataset_config, split=hf_split)
+            ds = load_dataset(
+                config.dataset_name, config.dataset_config, split=hf_split
+            )
             # Normalize columns
             rows = []
             for ex in ds:

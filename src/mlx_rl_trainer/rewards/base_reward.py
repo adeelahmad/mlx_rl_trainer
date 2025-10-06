@@ -12,6 +12,7 @@ from .context import RewardContext
 
 logger = logging.getLogger(__name__)
 
+
 class BaseReward(ABC):
     """
     Abstract base class for all reward functions.
@@ -19,6 +20,7 @@ class BaseReward(ABC):
     All reward functions should inherit from this class and implement
     the `compute()` method.
     """
+
     def __init__(self, config: Dict[str, Any]):
         """
         Initializes the BaseReward.
@@ -28,17 +30,18 @@ class BaseReward(ABC):
         """
         self.config = config
         self.name = self.__class__.__name__
-        self.weight = config.get("weight", 1.0) # Weight is now part of the reward's own config too
-        self.smoothing_window_size = config.get("smoothing_window_size", 5) # For internal smoothing
-        self._reward_history: List[float] = [] # For internal reward smoothing
+        self.weight = config.get(
+            "weight", 1.0
+        )  # Weight is now part of the reward's own config too
+        self.smoothing_window_size = config.get(
+            "smoothing_window_size", 5
+        )  # For internal smoothing
+        self._reward_history: List[float] = []  # For internal reward smoothing
 
         logger.debug(f"Initialized {self.name} with config: {config}")
 
     @abstractmethod
-    def compute(
-        self,
-        context: RewardContext
-    ) -> float:
+    def compute(self, context: RewardContext) -> float:
         """
         Compute reward for a single generated response based on context.
 
@@ -57,10 +60,7 @@ class BaseReward(ABC):
             self._reward_history.pop(0)
         return float(np.mean(self._reward_history))
 
-    def batch_compute(
-        self,
-        contexts: List[RewardContext]
-    ) -> List[float]:
+    def batch_compute(self, contexts: List[RewardContext]) -> List[float]:
         """
         Compute rewards for a batch of responses.
 
@@ -86,10 +86,7 @@ class BaseReward(ABC):
         finally:
             pass
 
-    def validate_inputs(
-        self,
-        context: RewardContext
-    ) -> None:
+    def validate_inputs(self, context: RewardContext) -> None:
         """
         Validates reward function inputs, ensuring required fields are present and correctly typed.
 
@@ -102,9 +99,13 @@ class BaseReward(ABC):
         if not isinstance(context, RewardContext):
             raise ValueError(f"Context must be RewardContext, got {type(context)}")
         if not isinstance(context.generated_text, str):
-            raise ValueError(f"Generated text must be string, got {type(context.generated_text)}")
+            raise ValueError(
+                f"Generated text must be string, got {type(context.generated_text)}"
+            )
         if not isinstance(context.reference_completion, str):
-            raise ValueError(f"Reference completion must be string, got {type(context.reference_completion)}")
+            raise ValueError(
+                f"Reference completion must be string, got {type(context.reference_completion)}"
+            )
         if not isinstance(context.metadata, dict):
             raise ValueError(f"Metadata must be dict, got {type(context.metadata)}")
 
@@ -128,15 +129,14 @@ class RewardComposer:
         self.rewards = rewards
 
         total_weight = sum(weight for _, weight in rewards)
-        if not (0.99 <= total_weight <= 1.01): # Allow slight floating point deviation
-            logger.warning(f"Reward weights do not sum to 1.0 (got {total_weight:.2f}). This may lead to unexpected total reward scaling.")
+        if not (0.99 <= total_weight <= 1.01):  # Allow slight floating point deviation
+            logger.warning(
+                f"Reward weights do not sum to 1.0 (got {total_weight:.2f}). This may lead to unexpected total reward scaling."
+            )
 
         logger.info(f"Initialized RewardComposer with {len(rewards)} rewards.")
 
-    def compute(
-        self,
-        context: RewardContext
-    ) -> Dict[str, float]:
+    def compute(self, context: RewardContext) -> Dict[str, float]:
         """
         Computes a weighted combination of all configured rewards for a single context.
 
@@ -154,15 +154,19 @@ class RewardComposer:
                 score = reward_fn.compute(context)
 
                 # Apply internal smoothing if reward function has a smoothing method
-                if hasattr(reward_fn, '_smooth_reward') and callable(getattr(reward_fn, '_smooth_reward')):
+                if hasattr(reward_fn, "_smooth_reward") and callable(
+                    getattr(reward_fn, "_smooth_reward")
+                ):
                     score = reward_fn._smooth_reward(score)
 
                 weighted_score = score * weight
-                results[reward_fn.name] = score # Store raw (possibly smoothed) score
+                results[reward_fn.name] = score  # Store raw (possibly smoothed) score
                 total_reward += weighted_score
             except Exception as e:
-                logger.warning(f"Reward '{reward_fn.name}' failed to compute for context: {e}")
-                results[reward_fn.name] = 0.0 # Assign 0.0 on failure
+                logger.warning(
+                    f"Reward '{reward_fn.name}' failed to compute for context: {e}"
+                )
+                results[reward_fn.name] = 0.0  # Assign 0.0 on failure
 
-        results['total'] = total_reward
+        results["total"] = total_reward
         return results

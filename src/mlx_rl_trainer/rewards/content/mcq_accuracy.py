@@ -4,6 +4,7 @@ from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import register_reward
 from mlx_rl_trainer.rewards.context import RewardContext
 
+
 @register_reward("mcq_accuracy")
 class MCQAccuracyReward(BaseReward):
     """
@@ -35,7 +36,7 @@ class MCQAccuracyReward(BaseReward):
         match = re.search(r"([A-Z])", generated_answer, re.IGNORECASE)
         if not match:
             return 0.0
-        
+
         chosen_letter = match.group(1).upper()
 
         return 1.0 if chosen_letter in correct_letters else 0.0

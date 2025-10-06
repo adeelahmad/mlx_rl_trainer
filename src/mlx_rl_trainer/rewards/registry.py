@@ -31,12 +31,16 @@ class RewardRegistry:
         Args:
             name: A unique string identifier for this reward function.
         """
+
         def decorator(reward_class: Type[BaseReward]):
             if name in cls._rewards:
-                logger.warning(f"Overwriting existing reward: '{name}' with {reward_class.__name__}.")
+                logger.warning(
+                    f"Overwriting existing reward: '{name}' with {reward_class.__name__}."
+                )
             cls._rewards[name] = reward_class
             logger.info(f"Registered reward: '{name}' -> {reward_class.__name__}.")
             return reward_class
+
         return decorator
 
     @classmethod
@@ -54,7 +58,7 @@ class RewardRegistry:
             KeyError: If no reward is registered with the given name.
         """
         if name not in cls._rewards:
-            available = ', '.join(cls._rewards.keys())
+            available = ", ".join(cls._rewards.keys())
             raise KeyError(
                 f"Reward '{name}' not found. Available rewards: [{available}]."
             )
@@ -99,5 +103,6 @@ class RewardRegistry:
         """
         cls._rewards.clear()
         logger.info("Cleared reward registry.")
+
 
 register_reward = RewardRegistry.register

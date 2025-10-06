@@ -8,11 +8,15 @@ import numpy as np
 import mlx.core as mx
 from typing import List
 
-def safe_divide(numerator: float, denominator: float, default_if_zero: float = 0.0) -> float:
+
+def safe_divide(
+    numerator: float, denominator: float, default_if_zero: float = 0.0
+) -> float:
     """Performs division safely, returning a default value if denominator is zero."""
     if denominator == 0:
         return default_if_zero
     return numerator / denominator
+
 
 def safe_mean(data: List[float]) -> float:
     """Calculates the mean of a list of floats, handling empty lists."""
@@ -20,11 +24,13 @@ def safe_mean(data: List[float]) -> float:
         return 0.0
     return float(np.mean(data))
 
+
 def safe_std(data: List[float]) -> float:
     """Calculates the standard deviation of a list of floats, handling empty lists."""
     if not data or len(data) < 2:
         return 0.0
     return float(np.std(data))
+
 
 def softmax(x: mx.array, axis: int = -1) -> mx.array:
     """Computes softmax for an MLX array."""
@@ -32,6 +38,7 @@ def softmax(x: mx.array, axis: int = -1) -> mx.array:
     exp_x = mx.exp(x - max_val)
     sum_exp_x = mx.sum(exp_x, axis=axis, keepdims=True)
     return exp_x / sum_exp_x
+
 
 def log_softmax(x: mx.array, axis: int = -1) -> mx.array:
     """Computes log-softmax for an MLX array."""

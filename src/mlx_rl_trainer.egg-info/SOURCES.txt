@@ -51,6 +51,11 @@ src/mlx_rl_trainer/rewards/programming/__init__.py
 src/mlx_rl_trainer/rewards/programming/code_execution.py
 src/mlx_rl_trainer/rewards/reasoning/__init__.py
 src/mlx_rl_trainer/rewards/reasoning/thinking_quality.py
+src/mlx_rl_trainer/scripts/__init__.py
+src/mlx_rl_trainer/scripts/data_preprocessing.py
+src/mlx_rl_trainer/scripts/evaluate.py
+src/mlx_rl_trainer/scripts/serve.py
+src/mlx_rl_trainer/scripts/train.py
 src/mlx_rl_trainer/utils/__init__.py
 src/mlx_rl_trainer/utils/distributed.py
 src/mlx_rl_trainer/utils/math_utils.py

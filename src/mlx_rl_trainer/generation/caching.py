@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # --- MLX Global Config & Constants (re-declared for module independence) ---
 TARGET_FLOAT_DTYPE = mx.bfloat16
 
+
 class PagedKVCache:
     """
     A Paged Key-Value Cache for managing GPU memory efficiently.
@@ -66,7 +67,7 @@ class PagedKVCache:
         )
         self.key_cache = mx.zeros(cache_shape, dtype=dtype)
         self.value_cache = mx.zeros(cache_shape, dtype=dtype)
-        mx.eval(self.key_cache, self.value_cache) # Eagerly evaluate to allocate memory
+        mx.eval(self.key_cache, self.value_cache)  # Eagerly evaluate to allocate memory
 
         # Free blocks pool - contains indices of available blocks
         self.free_blocks: List[int] = list(range(num_blocks))
@@ -78,7 +79,9 @@ class PagedKVCache:
         self.sequence_lengths: Dict[int, int] = {}
 
         nbytes = self.key_cache.nbytes + self.value_cache.nbytes
-        logger.info(f"[PagedKVCache] Allocated {nbytes / 1e9:.2f} GB total for keys and values.")
+        logger.info(
+            f"[PagedKVCache] Allocated {nbytes / 1e9:.2f} GB total for keys and values."
+        )
 
     def reset(self):
         """Clears all sequence mappings and returns all blocks to the free pool.
@@ -87,12 +90,12 @@ class PagedKVCache:
         self.sequence_map.clear()
         self.sequence_lengths.clear()
         self.free_blocks = list(range(self.num_blocks))
-        logger.debug('[PagedKVCache] Cache state has been reset.')
+        logger.debug("[PagedKVCache] Cache state has been reset.")
 
     def _allocate_block(self) -> int:
         """Pops a single block index from the free pool. Raises MemoryError if no blocks are available."""
         if not self.free_blocks:
-            raise MemoryError('PagedKVCache is out of memory blocks.')
+            raise MemoryError("PagedKVCache is out of memory blocks.")
         return self.free_blocks.pop(0)
 
     def allocate_sequence(self, sequence_id: int, num_tokens: int):
@@ -114,7 +117,9 @@ class PagedKVCache:
         num_required_blocks = ceil(max(1, num_tokens) / self.block_size)
 
         if num_required_blocks > len(self.free_blocks):
-            raise MemoryError(f"Not enough free blocks for sequence {sequence_id} (required: {num_required_blocks}, available: {len(self.free_blocks)})")
+            raise MemoryError(
+                f"Not enough free blocks for sequence {sequence_id} (required: {num_required_blocks}, available: {len(self.free_blocks)})"
+            )
 
         allocated = [self._allocate_block() for _ in range(num_required_blocks)]
         self.sequence_map[sequence_id] = allocated
@@ -128,11 +133,11 @@ class PagedKVCache:
             sequence_id: The unique ID of the sequence to free.
         """
         if sequence_id not in self.sequence_map:
-            return # Sequence not found, nothing to free
+            return  # Sequence not found, nothing to free
 
         blocks_to_free = self.sequence_map.pop(sequence_id)
         self.sequence_lengths.pop(sequence_id, None)
-        self.free_blocks.extend(blocks_to_free) # Return blocks to pool
+        self.free_blocks.extend(blocks_to_free)  # Return blocks to pool
 
     def append_token(self, sequence_id: int):
         """
@@ -156,7 +161,9 @@ class PagedKVCache:
 
         self.sequence_lengths[sequence_id] += 1
 
-    def get_block_mapping_for_batch(self, sequence_ids: List[int]) -> Dict[int, List[int]]:
+    def get_block_mapping_for_batch(
+        self, sequence_ids: List[int]
+    ) -> Dict[int, List[int]]:
         """
         Retrieves the block indices for a given batch of sequence IDs.
 
