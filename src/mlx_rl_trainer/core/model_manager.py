@@ -28,9 +28,11 @@ try:
         apply_lora_layers_force_qkv_mlp,
         print_trainable_parameters,
     )
+
     print("apply_lora_layers_force_qkv_mlp imported")
     print("Attempting to import mlx_lm.utils")
     import mlx_lm.utils
+
     print("mlx_lm.utils imported")
 
     MLX_LM_AVAILABLE = True
@@ -167,7 +169,9 @@ class ModelManager:
 
         if MLX_LM_AVAILABLE:
             try:
-                model_instance, tokenizer_instance = mlx_lm.utils.load(model_path.as_posix())
+                model_instance, tokenizer_instance = mlx_lm.utils.load(
+                    model_path.as_posix()
+                )
                 rprint(
                     f"Successfully loaded '{type_name}' model and tokenizer using [green]mlx-lm[/green]."
                 )
@@ -307,6 +311,7 @@ class ModelManager:
                 f"Failed to save model for {model_name} to {save_path}: {e}"
             ) from e
 
+
 class ModelManager:
     """
     Model management lifecycle: loading, LoRA conversion, and multi-model coordination.
@@ -332,7 +337,9 @@ class ModelManager:
 
         if MLX_LM_AVAILABLE:
             try:
-                model_instance, tokenizer_instance = mlx_lm.utils.load(model_path.as_posix())
+                model_instance, tokenizer_instance = mlx_lm.utils.load(
+                    model_path.as_posix()
+                )
                 rprint(
                     f"Successfully loaded '{type_name}' model and tokenizer using [green]mlx-lm[/green]."
                 )
@@ -539,16 +546,11 @@ class ModelManager:
             mock_responses = mx.full(
                 (batch_size, max_tokens // 2), tokenizer.eos_token_id, dtype=mx.int32
             )
-            mock_log_probs = mx.zeros(
-                (batch_size, max_tokens // 2), dtype=mx.float32
-            )
+            mock_log_probs = mx.zeros((batch_size, max_tokens // 2), dtype=mx.float32)
             return mock_responses, mock_log_probs
 
     def get_logprobs_for_sequence(
-        self,
-        model: nn.Module,
-        prompts: mx.array,
-        responses: mx.array
+        self, model: nn.Module, prompts: mx.array, responses: mx.array
     ) -> mx.array:
         """
         Calculates the log probabilities of a given response sequence conditioned on a prompt.

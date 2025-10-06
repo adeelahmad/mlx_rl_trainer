@@ -45,7 +45,7 @@ from .text_utils import (
     apply_chat_template_wrapper,
     _tfidf_cosine,
     _extract_final_numeric,
-    _extract_predicted_letters
+    _extract_predicted_letters,
 )
 from .math_utils import safe_divide, safe_mean, safe_std, softmax, log_softmax
 from .distributed import DistributedUtil
@@ -93,5 +93,5 @@ __all__ = [
     "softmax",
     "log_softmax",
     "DistributedUtil",
-    "_extract_predicted_letters"
+    "_extract_predicted_letters",
 ]

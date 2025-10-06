@@ -199,7 +199,7 @@ def _extract_predicted_letters(
         # Look for patterns like "Answer: A", "A, B", "The answer is C."
         matches = re.findall(r"[A-Z]", answer_region.upper())
         if matches:
-            return list(set(matches)) # Return unique letters
+            return list(set(matches))  # Return unique letters
 
     # 2. Fallback: Look for patterns in the entire generated text
     matches = re.findall(r"[A-Z]", generated_text.upper())
@@ -828,8 +828,9 @@ def _ensure_schedule_dict(args):
     cfg.setdefault("warmup_init", min(init_lr, max(init_lr * 0.1, 1e-8)))
 
 
-
-def _extract_predicted_letters(generated_text: str, options: Optional[List[str]], reward_config: Any) -> List[str]:
+def _extract_predicted_letters(
+    generated_text: str, options: Optional[List[str]], reward_config: Any
+) -> List[str]:
     """
     Extracts predicted MCQ letter(s) from the generated answer region.
     Prioritizes single-letter choices, then tries to map text to options.
@@ -839,7 +840,7 @@ def _extract_predicted_letters(generated_text: str, options: Optional[List[str]]
     # 1. Look for single, anchored capital letters
     matches = re.findall(r"\b([A-Z])\b", ans_region.strip().upper())
     if matches:
-        return sorted(list(set(matches))) # Return unique sorted letters found
+        return sorted(list(set(matches)))  # Return unique sorted letters found
 
     # 2. Fallback: Try to semantically match extracted answer text to options
     if options:
@@ -848,10 +849,14 @@ def _extract_predicted_letters(generated_text: str, options: Optional[List[str]]
         for idx, opt_text in enumerate(options):
             if normalized_ans == _normalize_ans_for_match(opt_text):
                 matched_indices.append(idx)
-            elif len(normalized_ans) > 5 and normalized_ans in _normalize_ans_for_match(opt_text):
+            elif len(normalized_ans) > 5 and normalized_ans in _normalize_ans_for_match(
+                opt_text
+            ):
                 matched_indices.append(idx)
 
         if matched_indices:
-            return [_indices_to_letters([i]) for i in matched_indices] # Convert indices to letters
+            return [
+                _indices_to_letters([i]) for i in matched_indices
+            ]  # Convert indices to letters
 
     return []

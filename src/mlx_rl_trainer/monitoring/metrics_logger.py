@@ -46,6 +46,7 @@ from mlx_rl_trainer.utils.text_utils import (
 
 logger = logging.getLogger(__name__)
 
+
 def _calculate_mcq_accuracy(
     ref_letters_list: Optional[List[str]],
     gen_letters_list: Optional[List[str]],
@@ -65,6 +66,7 @@ def _calculate_mcq_accuracy(
                 correct_count += 1
 
     return correct_count / total_mcq if total_mcq > 0 else 0.0
+
 
 # --- Global W&B Run (Managed externally, but referenced here) ---
 wandb_run: Any = None  # Set by main script

@@ -22,7 +22,10 @@ class GRPOAlgorithm(BaseAlgorithm):
     """
 
     def calculate_loss_and_grads(
-        self, rollout_batch: Dict[str, mx.array], full_config: ExperimentConfig, pad_token_id: int
+        self,
+        rollout_batch: Dict[str, mx.array],
+        full_config: ExperimentConfig,
+        pad_token_id: int,
     ) -> Tuple[mx.array, Dict[str, Any], Dict[str, float]]:
         """
         Calculates the GRPO loss and its gradients.
@@ -97,9 +100,7 @@ class GRPOAlgorithm(BaseAlgorithm):
             return loss, kl_mean
 
         # Compute value and gradients
-        (loss, kl_mean), grads = value_and_grad(
-            self.actor, loss_fn
-        )(self.actor)
+        (loss, kl_mean), grads = value_and_grad(self.actor, loss_fn)(self.actor)
         # Since loss_fn returns (loss, kl_mean), value_and_grad returns gradients for the first value (loss)
         # grads is already the dictionary of gradients for the loss
 

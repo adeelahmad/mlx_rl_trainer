@@ -430,7 +430,6 @@ class GenerationConfig(BaseModel):
     )
 
 
-
 class DataConfig(BaseModel):
     """Configuration for data loading and preprocessing."""
 
@@ -743,7 +742,6 @@ class TrainerParams(BaseModel):
         20, description="Number of previous tokens to consider for repetition penalty."
     )
 
-
     # Dynamic Bias Controls (from TrainingArgs)
     min_think_tokens: int = Field(32)
     think_end_early_bias: float = Field(-12.0)
@@ -799,7 +797,7 @@ class TrainerParams(BaseModel):
 
     #     return self
 
-     # Dynamic Bias Controls for Generation
+    # Dynamic Bias Controls for Generation
     min_think_tokens: PositiveInt = Field(
         32,
         description="Minimum desired tokens in thinking region before allowing early end.",
@@ -1041,7 +1039,6 @@ class TrainerParams(BaseModel):
             setattr(self, "ban_phrases_for_bias", DEFAULT_BAN_KEYWORDS)
 
         return self
-
 
 
 class ExperimentConfig(BaseModel):

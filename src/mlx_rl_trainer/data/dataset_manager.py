@@ -271,28 +271,36 @@ class DatasetManager:
                         f"Skipping malformed test case: {tc_json_str[:50]}..."
                     )
 
-            processed_samples.append({
-                "input_ids": mx.array(tokenized_input_ids, dtype=mx.int32),
-                "raw_prompt": prompt,  # Store the raw prompt string
-                "raw_completion": completion,  # Store the raw completion string
-                "raw_test_cases": current_processed_test_cases,
-                "is_mcq": raw_batch.get("is_mcq", [False] * num_samples_in_batch)[i],
-                "mcq_options": raw_batch.get(
-                    "mcq_options", [[] for _ in range(num_samples_in_batch)]
-                )[i],
-                "mcq_correct_letters": raw_batch.get(
-                    "mcq_correct_letters", [""] * num_samples_in_batch
-                )[i],
-                "mcq_multi_select": raw_batch.get(
-                    "mcq_multi_select", [False] * num_samples_in_batch
-                )[i],
-                "is_invalid_sample": raw_batch.get(
-                    "is_invalid_sample", [False] * num_samples_in_batch
-                )[i],
-                "original_index": raw_batch.get(
-                    "original_index", list(range(num_samples_in_batch))
-                )[i],
-                # Store the entire original raw_batch entry for this sample if needed for metadata
-                "original_raw_data": {k: v[i] for k, v in raw_batch.items() if isinstance(v, list) and len(v) == num_samples_in_batch}
-            })
+            processed_samples.append(
+                {
+                    "input_ids": mx.array(tokenized_input_ids, dtype=mx.int32),
+                    "raw_prompt": prompt,  # Store the raw prompt string
+                    "raw_completion": completion,  # Store the raw completion string
+                    "raw_test_cases": current_processed_test_cases,
+                    "is_mcq": raw_batch.get("is_mcq", [False] * num_samples_in_batch)[
+                        i
+                    ],
+                    "mcq_options": raw_batch.get(
+                        "mcq_options", [[] for _ in range(num_samples_in_batch)]
+                    )[i],
+                    "mcq_correct_letters": raw_batch.get(
+                        "mcq_correct_letters", [""] * num_samples_in_batch
+                    )[i],
+                    "mcq_multi_select": raw_batch.get(
+                        "mcq_multi_select", [False] * num_samples_in_batch
+                    )[i],
+                    "is_invalid_sample": raw_batch.get(
+                        "is_invalid_sample", [False] * num_samples_in_batch
+                    )[i],
+                    "original_index": raw_batch.get(
+                        "original_index", list(range(num_samples_in_batch))
+                    )[i],
+                    # Store the entire original raw_batch entry for this sample if needed for metadata
+                    "original_raw_data": {
+                        k: v[i]
+                        for k, v in raw_batch.items()
+                        if isinstance(v, list) and len(v) == num_samples_in_batch
+                    },
+                }
+            )
         return processed_samples
