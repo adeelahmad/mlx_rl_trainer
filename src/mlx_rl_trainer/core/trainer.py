@@ -12,7 +12,8 @@ import logging
 import mlx.core as mx
 import mlx.nn as nn
 import gc
-
+from mlx.utils import tree_flatten, tree_unflatten
+import mlx
 from .config import ExperimentConfig  # Use new ExperimentConfig
 
 
@@ -100,6 +101,9 @@ class BaseTrainer(ABC):
         # Internal state for training loop
         self.global_step: int = 0
         self.current_epoch: int = 0
+        self.optimizer_is_set = False
+        self.lr_scheduler_is_set = False
+        self.actor_model_is_set = False
 
         logging.info("BaseTrainer initialized with injected dependencies.")
 
@@ -298,9 +302,7 @@ class BaseTrainer(ABC):
                 ):
                     self.checkpoint_manager.save_checkpoint(
                         step=update_step,
-                        model_state=dict(
-                            mx.utils.tree_flatten(self.actor_model.parameters())
-                        ),
+                        model_state=dict(tree_flatten(self.actor_model.parameters())),
                         optimizer_state=self.optimizer.state if self.optimizer else {},
                         metadata={
                             "num_updates": update_step,
@@ -310,23 +312,28 @@ class BaseTrainer(ABC):
                     )
 
         except (KeyboardInterrupt, TrainingRuntimeError) as e:
-            logging.warning(f"Training interrupted: {e}. Initiating graceful shutdown.")
+            logging.critical(
+                f"Training interrupted: {e}. Initiating graceful shutdown.",
+                exc_info=True,
+            )
         except Exception as e:
             logging.critical(f"An unexpected error halted training: {e}", exc_info=True)
         finally:
             logging.info("Training process finalized. Saving final state.")
-            # Ensure final_metric is derived robustly
-            final_metric = (
-                pbar.postfix.get("Reward", 0.0)
-                if hasattr(pbar, "postfix") and "Reward" in pbar.postfix
-                else 0.0
-            )
+            # FIX: Safely access pbar.postfix to prevent crash on early exit
+            final_metric = 0.0
+            if hasattr(pbar, "postfix") and pbar.postfix is not None:
+                try:
+                    # Attempt to parse the reward string, e.g., "0.876"
+                    reward_str = pbar.postfix.get("Reward")
+                    if isinstance(reward_str, str):
+                        final_metric = float(reward_str)
+                except (ValueError, TypeError):
+                    final_metric = 0.0  # Fallback if parsing fails
             try:
                 self.checkpoint_manager.save_checkpoint(
                     step=pbar.n,
-                    model_state=dict(
-                        mx.utils.tree_flatten(self.actor_model.parameters())
-                    ),
+                    model_state=dict(tree_flatten(self.actor_model.parameters())),
                     optimizer_state=self.optimizer.state if self.optimizer else {},
                     metadata={
                         "num_updates": pbar.n,

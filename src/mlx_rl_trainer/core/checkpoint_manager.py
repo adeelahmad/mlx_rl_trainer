@@ -13,6 +13,7 @@ import logging
 import os
 import mlx.core as mx
 import mlx.nn as nn
+import mlx
 from .trainer import CheckpointError
 from rich import print as rprint
 import random  # For RNG state
@@ -142,7 +143,7 @@ class CheckpointManager:
             mx.save_safetensors(str(temp_path / "model.safetensors"), model_state)
             mx.save_safetensors(
                 str(temp_path / "optimizer.safetensors"),
-                dict(mx.utils.tree_flatten(optimizer_state)),
+                dict(mlx.utils.tree_flatten(optimizer_state)),
             )
 
             # Store RNG state along with other metadata
@@ -222,7 +223,7 @@ class CheckpointManager:
 
             # Load optimizer state
             optimizer_state_flat = mx.load(str(latest_path / "optimizer.safetensors"))
-            optimizer.state = mx.utils.tree_unflatten(
+            optimizer.state = mlx.utils.tree_unflatten(
                 list(optimizer_state_flat.items())
             )
 

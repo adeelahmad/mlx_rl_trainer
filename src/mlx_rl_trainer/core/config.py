@@ -402,71 +402,6 @@ class EvaluatorConfig(BaseModel):
     )
 
 
-class GenerationConfig(BaseModel):
-    """Configuration for text generation parameters during rollouts and evaluation."""
-
-    max_tokens: PositiveInt = Field(
-        512, description="Maximum number of tokens to generate."
-    )
-    temperature: NonNegativeFloat = Field(
-        0.7, gt=0.0, le=2.0, description="Sampling temperature."
-    )
-    top_p: NonNegativeFloat = Field(
-        0.9, gt=0.0, le=1.0, description="Top-p sampling probability."
-    )
-
-    min_p: NonNegativeFloat = Field(
-        0.05, gt=0.0, le=1.0, description="Min-p sampling probability."
-    )
-    top_k: int = Field(0, ge=0, description="Top-k sampling cutoff (0 to disable).")
-    num_samples_per_prompt: PositiveInt = Field(
-        4, description="Number of unique responses to generate per prompt for rollouts."
-    )
-
-    # These are internal dynamic fields for Metal safety, not directly exposed in YAML
-    orig_max_gen_len: Optional[int] = Field(None, exclude=True)
-
-    repetition_penalty: float = Field(
-        1.15, ge=1.0, description="Repetition penalty factor."
-    )
-    repetition_context_size: PositiveInt = Field(
-        20, description="Number of previous tokens to consider for repetition penalty."
-    )
-
-    # Verbosity Biasing for Rollouts (from TrainingArgs)
-    ban_phrases_for_bias: List[str] = Field(default_factory=list)
-    encourage_phrases_for_bias: List[str] = Field(default_factory=list)
-    encourage_think_bias: float = Field(4.5)
-    ban_think_bias: float = Field(-3.0)
-
-    # Dynamic Bias Controls (from TrainingArgs)
-    min_think_tokens: int = Field(32)
-    think_end_early_bias: float = Field(-12.0)
-    bias_answer_start_after_min_think: bool = Field(True)
-    bias_close_think: float = Field(9.0)
-    bias_answer_start: float = Field(6.0)
-    punish_extra_think_end: float = Field(-12.0)
-    punish_reopen_think: float = Field(-10.0)
-    punish_reopen_answer: float = Field(-9.0)
-    bias_eos_after_answer: float = Field(3.0)
-
-    # Tags for content extraction are common across rewards, can be overridden here if needed
-    think_start_tag: str = Field(
-        "<think>", description="Think start tag for content extraction."
-    )
-    think_end_tag: str = Field(
-        "</think>", description="Think end tag for content extraction."
-    )
-    answer_start_tag: str = Field(
-        "<answer>", description="Answer start tag for content extraction."
-    )
-    answer_end_tag: str = Field(
-        "</answer>", description="Answer end tag for content extraction."
-    )
-
-    ban_phrases_for_bias: List[str] = Field(default_factory=list)
-
-
 class DataConfig(BaseModel):
     """Configuration for data loading and preprocessing."""
 
@@ -609,7 +544,7 @@ class TrainerParams(BaseModel):
     """Core training loop parameters."""
 
     algorithm: Literal["grpo", "ppo"] = Field(
-        ...,
+        "grpo",
         description="The Reinforcement Learning algorithm to use (e.g., 'grpo', 'ppo').",
     )
     output_dir: Path = Field(
@@ -1076,6 +1011,95 @@ class TrainerParams(BaseModel):
             setattr(self, "ban_phrases_for_bias", DEFAULT_BAN_KEYWORDS)
 
         return self
+
+
+class GenerationConfig(TrainerParams):
+    """Configuration for text generation parameters during rollouts and evaluation."""
+
+    max_tokens: PositiveInt = Field(
+        512, description="Maximum number of tokens to generate."
+    )
+    temperature: NonNegativeFloat = Field(
+        0.7, gt=0.0, le=2.0, description="Sampling temperature."
+    )
+    top_p: NonNegativeFloat = Field(
+        0.9, gt=0.0, le=1.0, description="Top-p sampling probability."
+    )
+
+    min_p: NonNegativeFloat = Field(
+        0.05, gt=0.0, le=1.0, description="Min-p sampling probability."
+    )
+    top_k: int = Field(0, ge=0, description="Top-k sampling cutoff (0 to disable).")
+    num_samples_per_prompt: PositiveInt = Field(
+        4, description="Number of unique responses to generate per prompt for rollouts."
+    )
+
+    # These are internal dynamic fields for Metal safety, not directly exposed in YAML
+    orig_max_gen_len: Optional[int] = Field(None, exclude=True)
+
+    repetition_penalty: float = Field(
+        1.15, ge=1.0, description="Repetition penalty factor."
+    )
+    repetition_context_size: PositiveInt = Field(
+        20, description="Number of previous tokens to consider for repetition penalty."
+    )
+
+    # Verbosity Biasing for Rollouts (from TrainingArgs)
+    ban_phrases_for_bias: List[str] = Field(default_factory=list)
+    encourage_phrases_for_bias: List[str] = Field(default_factory=list)
+    encourage_think_bias: float = Field(4.5)
+    ban_think_bias: float = Field(-3.0)
+
+    # Dynamic Bias Controls (from TrainingArgs)
+    min_think_tokens: int = Field(32)
+    think_end_early_bias: float = Field(-12.0)
+    bias_answer_start_after_min_think: bool = Field(True)
+    bias_close_think: float = Field(9.0)
+    bias_answer_start: float = Field(6.0)
+    punish_extra_think_end: float = Field(-12.0)
+    punish_reopen_think: float = Field(-10.0)
+    punish_reopen_answer: float = Field(-9.0)
+    bias_eos_after_answer: float = Field(3.0)
+
+    min_answer_tokens: PositiveInt = Field(
+        8, description="Minimum tokens for non-MCQ answer before allowing end."
+    )
+    min_answer_tokens_mcq: PositiveInt = Field(
+        1, description="Minimum tokens for MCQ answer before allowing end."
+    )
+    mcq_answer_end_bias: float = Field(
+        9.0, description="Positive bias for closing MCQ answer tag."
+    )
+
+    # Penalties
+    non_ascii_penalty: NonNegativeFloat = Field(
+        1.0, description="Penalty multiplier for non-ASCII characters."
+    )
+    off_topic_jaccard_threshold: NonNegativeFloat = Field(
+        0.05, description="Jaccard threshold below which off-topic penalty applies."
+    )
+    off_topic_penalty: NonNegativeFloat = Field(
+        1.0, description="Penalty multiplier for off-topic responses."
+    )
+    ban_penalty: NonNegativeFloat = Field(
+        3.0, description="Penalty multiplier for banned keywords."
+    )
+
+    # Tags for content extraction are common across rewards, can be overridden here if needed
+    think_start_tag: str = Field(
+        "<think>", description="Think start tag for content extraction."
+    )
+    think_end_tag: str = Field(
+        "</think>", description="Think end tag for content extraction."
+    )
+    answer_start_tag: str = Field(
+        "<answer>", description="Answer start tag for content extraction."
+    )
+    answer_end_tag: str = Field(
+        "</answer>", description="Answer end tag for content extraction."
+    )
+
+    ban_phrases_for_bias: List[str] = Field(default_factory=list)
 
 
 class ExperimentConfig(BaseModel):

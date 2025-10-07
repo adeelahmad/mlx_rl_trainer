@@ -555,24 +555,34 @@ class ModelManager:
         """
         Calculates the log probabilities of a given response sequence conditioned on a prompt.
         """
-        if MLX_LM_AVAILABLE:
-            if responses.shape[1] == 0:
-                return mx.zeros((prompts.shape[0], 0), dtype=mx.float32)
+        if responses.shape[1] == 0:
+            return mx.zeros((prompts.shape[0], 0), dtype=mx.float32)
 
-            full_sequence = mx.concatenate([prompts, responses], axis=1)
-            logits = model(full_sequence)
+        full_sequence = mx.concatenate([prompts, responses], axis=1)
 
-            # We want the logits that *predicted* each token in the response.
-            # This means we take logits from the end of the prompt up to the second-to-last token of the full sequence.
-            logits_for_responses = logits[:, prompts.shape[1] - 1 : -1, :]
+        # Get logits for the entire sequence. The model returns logits for the *next* token prediction.
+        out = model(full_sequence.astype(mx.int64), cache=None)
+        logits = (out[0] if isinstance(out, tuple) else out).astype(mx.float32)
 
-            log_probs = nn.log_softmax(logits.astype(mx.float32), axis=-1)
+        # We need the logits that were used to predict the tokens in the `responses` part.
+        # These are the logits from the end of the prompt up to the second-to-last token of the full sequence.
+        logits_for_responses = logits[:, prompts.shape[1] - 1 : -1, :]
 
-            response_log_probs = mx.take_along_axis(
-                log_probs, responses[..., None], axis=-1
-            ).squeeze(-1)
+        # Check for shape mismatch before proceeding
+        if logits_for_responses.shape[1] != responses.shape[1]:
+            logging.error(
+                f"Shape mismatch in get_logprobs_for_sequence: "
+                f"logits_for_responses shape {logits_for_responses.shape} != responses shape {responses.shape}. "
+                f"This can happen if max_gen_len is too short. Returning zeros."
+            )
+            return mx.zeros_like(responses, dtype=mx.float32)
 
-            return response_log_probs
-        else:
-            logging.warning("mlx-lm not available. Using mock logprob calculation.")
-            return mx.zeros(responses.shape, dtype=mx.float32)
+        # FIX: Apply log_softmax to the logits to get log probabilities.
+        log_probs_all = nn.log_softmax(logits_for_responses, axis=-1)
+
+        # Gather the log probabilities of the actual response tokens that were generated.
+        response_log_probs = mx.take_along_axis(
+            log_probs_all, responses[..., None].astype(mx.int64), axis=-1
+        ).squeeze(-1)
+
+        return response_log_probs.astype(mx.float32)
