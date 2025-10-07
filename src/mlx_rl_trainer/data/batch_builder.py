@@ -4,6 +4,8 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 from datasets import Dataset
 import mlx.core as mx
 
+from mlx_LM.tokenizer_utils import TokenizerWrapper
+
 
 from mlx_rl_trainer.core.config import ExperimentConfig, DataConfig, GenerationConfig
 from mlx_rl_trainer.utils.text_utils import (
