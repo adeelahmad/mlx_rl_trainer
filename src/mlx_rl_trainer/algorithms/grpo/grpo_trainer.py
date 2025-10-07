@@ -16,6 +16,7 @@ import mlx.optimizers as optim
 import numpy as np
 from rich import print as rprint
 from mlx_lm.tuner.utils import build_schedule
+from mlx.utils import tree_flatten, tree_map
 
 from ...core.trainer import (
     BaseTrainer,
@@ -115,12 +116,12 @@ class GRPOTrainer(BaseTrainer):
         lora_config = None
         if self.config.model.use_lora:
             lora_config = {
-                "num_lora_layers": self.config.model.get("num_lora_layers", -1),  # -1 = all layers
+                "num_lora_layers": getattr(self.config.model, "num_lora_layers", -1),  # -1 = all layers
                 "rank": self.config.model.lora_rank,
                 "scale": self.config.model.lora_alpha / self.config.model.lora_rank,  # alpha / rank
-                "dropout": self.config.model.lora_dropout,
-                "keys": self.config.model.get("lora_target_modules", None),  # Optional
-                "use_dora": self.config.model.get("use_dora", False),
+                "dropout": getattr(self.config.model, "lora_dropout", 0.0),
+                "keys": getattr(self.config.model, "lora_target_modules", None),  # Optional
+                "use_dora": getattr(self.config.model, "use_dora", False),
             }
 
         self.actor_model, self.tokenizer = self.model_manager.load_model(
@@ -233,9 +234,19 @@ class GRPOTrainer(BaseTrainer):
 
         logger.debug(f"Batch data keys: {list(batch_data.keys())}")
 
+        # Log a sample of the actual batch data for debugging
+        for key in list(batch_data.keys())[:5]:  # Show first 5 keys
+            value = batch_data[key]
+            if isinstance(value, list) and len(value) > 0:
+                logger.debug(f"  {key}: list with {len(value)} items, first item type: {type(value[0])}")
+                if isinstance(value[0], str):
+                    logger.debug(f"    First item preview: {value[0][:100]}")
+            else:
+                logger.debug(f"  {key}: {type(value)}")
+
         # Extract prompts - try multiple possible keys
         prompts_text = None
-        for key in ["raw_prompt", "prompt", "text", "input", "question"]:
+        for key in ["raw_prompt", "prompt", "text", "input", "question", "instruction"]:
             if key in batch_data:
                 prompts_text = batch_data[key]
                 logger.debug(f"Found prompts using key: '{key}'")
@@ -257,40 +268,88 @@ class GRPOTrainer(BaseTrainer):
 
         logger.info(f"Processing {len(prompts_text)} prompts for rollout generation")
 
+        # Log first prompt for debugging
+        if prompts_text:
+            first_prompt = str(prompts_text[0])
+            logger.debug(f"First prompt (first 200 chars): {first_prompt[:200]}")
+            logger.debug(f"First prompt length: {len(first_prompt)}")
+
         try:
             # Tokenize prompts
             prompts_tokens = []
             for i, prompt in enumerate(prompts_text):
                 try:
-                    tokens = self.tokenizer.encode(str(prompt), add_special_tokens=True)
+                    # Ensure prompt is not empty
+                    prompt_str = str(prompt).strip()
+                    if not prompt_str:
+                        logger.warning(f"Prompt {i} is empty, using placeholder")
+                        prompt_str = "Hello"
+
+                    tokens = self.tokenizer.encode(prompt_str, add_special_tokens=True)
+
+                    # Validate tokens are not empty
+                    if not tokens or len(tokens) == 0:
+                        logger.error(f"Tokenization of prompt {i} returned empty tokens")
+                        logger.error(f"Prompt was: {prompt_str[:100]}")
+                        # Use a minimal valid token sequence
+                        tokens = [self.tokenizer.bos_token_id if hasattr(self.tokenizer, 'bos_token_id') else 1]
+
                     prompts_tokens.append(tokens)
                     logger.debug(f"Prompt {i} tokenized: {len(tokens)} tokens")
                 except Exception as e:
                     logger.error(f"Error tokenizing prompt {i}: {e}")
+                    logger.error(f"Prompt text: {str(prompt)[:200]}")
                     raise
 
             if not prompts_tokens:
                 logger.error("No prompts were successfully tokenized")
                 return {}, 0.0, {}
 
+            # Validate all token lists have content
+            prompts_tokens = [t for t in prompts_tokens if len(t) > 0]
+            if not prompts_tokens:
+                logger.error("All tokenized prompts are empty")
+                return {}, 0.0, {}
+
             # Pad prompts to same length
             max_prompt_len = max(len(t) for t in prompts_tokens)
+            if max_prompt_len == 0:
+                logger.error("Maximum prompt length is 0")
+                return {}, 0.0, {}
+
             prompts_padded = []
             for tokens in prompts_tokens:
-                padding = [self.tokenizer.pad_token_id] * (max_prompt_len - len(tokens))
-                prompts_padded.append(padding + tokens)
+                if len(tokens) < max_prompt_len:
+                    # Pad on the left (prepend padding)
+                    padding = [self.tokenizer.pad_token_id] * (max_prompt_len - len(tokens))
+                    prompts_padded.append(padding + tokens)
+                else:
+                    prompts_padded.append(tokens)
 
+            # Create mx.array and validate shape
             prompts_mx = mx.array(prompts_padded, dtype=mx.int32)
             logger.debug(f"Prompts tokenized and padded: shape={prompts_mx.shape}")
 
+            # Validate shape is not empty
+            if prompts_mx.size == 0 or prompts_mx.shape[0] == 0 or prompts_mx.shape[1] == 0:
+                logger.error(f"Invalid prompts array shape: {prompts_mx.shape}")
+                logger.error(f"prompts_padded length: {len(prompts_padded)}")
+                if prompts_padded:
+                    logger.error(f"First padded prompt length: {len(prompts_padded[0])}")
+                return {}, 0.0, {}
+
             # Generate responses using actor model
             logger.debug("Generating responses with actor model...")
+            logger.debug(f"About to call generate_with_logprobs with prompts shape: {prompts_mx.shape}")
+            logger.debug(f"Prompts array stats - size: {prompts_mx.size}, dtype: {prompts_mx.dtype}")
+            logger.debug(f"First few tokens: {prompts_mx[0, :min(10, prompts_mx.shape[1])].tolist() if prompts_mx.shape[0] > 0 else 'empty'}")
+
             responses_mx, actor_log_probs = self.model_manager.generate_with_logprobs(
                 model=self.actor_model,
                 prompts=prompts_mx,
                 tokenizer=self.tokenizer,
-                temp=self.config.trainer.temperature,
-                max_tokens=self.config.data.max_gen_len
+                temp=self._get_temperature(),
+                max_tokens=self._get_max_gen_len()
             )
             logger.debug(f"Generated responses: shape={responses_mx.shape}")
 
@@ -315,16 +374,26 @@ class GRPOTrainer(BaseTrainer):
             rewards_list = []
             for i, (prompt, response) in enumerate(zip(prompts_text, responses_text)):
                 try:
-                    reward_dict = self.reward_composer.compute_reward(
-                        prompt=str(prompt),
-                        response=str(response),
-                        context={}
+                    # RewardComposer has a compute() method
+                    # From dir() we can see: 'compute', 'rewards'
+                    reward_dict = self.reward_composer.compute(
+                        generated=str(response),
+                        reference="",
+                        metadata={"prompt": str(prompt)}
                     )
-                    reward_value = reward_dict.get("total", 0.0)
+
+                    reward_value = reward_dict.get("total", 0.0) if isinstance(reward_dict, dict) else float(reward_dict)
                     rewards_list.append(reward_value)
                     logger.debug(f"Sample {i}: reward={reward_value:.4f}")
                 except Exception as e:
                     logger.error(f"Error computing reward for sample {i}: {e}")
+                    logger.error(f"Trying to inspect reward_composer.compute signature...")
+                    import inspect
+                    try:
+                        sig = inspect.signature(self.reward_composer.compute)
+                        logger.error(f"compute() signature: {sig}")
+                    except:
+                        pass
                     rewards_list.append(0.0)
 
             rewards_mx = mx.array(rewards_list, dtype=mx.float32)
@@ -436,17 +505,41 @@ class GRPOTrainer(BaseTrainer):
             # Compute gradient norm
             grad_norm = 0.0
             if grads:
+                # Compute norm from nested gradient structure
+                flat_grads = tree_flatten(grads)
                 grad_norm = float(
-                    mx.sqrt(sum(mx.sum(g * g) for g in grads.values())).item()
+                    mx.sqrt(sum(mx.sum(g * g) for _, g in flat_grads)).item()
                 )
                 logger.debug(f"Gradient norm: {grad_norm:.6f}")
 
                 # Apply gradients
-                self.optimizer.apply_gradients(
-                    grads,
-                    self.actor_model.trainable_parameters()
-                )
-                mx.eval(self.actor_model.parameters())  # Ensure evaluation
+                # Filter grads to only include trainable parameters
+                try:
+                    trainable_params = self.actor_model.trainable_parameters()
+
+                    # Recursive function to filter gradients
+                    def filter_grads(grads_dict, params_dict):
+                        filtered = {}
+                        for key in params_dict.keys():
+                            if key in grads_dict:
+                                if isinstance(params_dict[key], dict):
+                                    filtered[key] = filter_grads(grads_dict[key], params_dict[key])
+                                else:
+                                    filtered[key] = grads_dict[key]
+                        return filtered
+
+                    # Filter gradients to match trainable_parameters structure
+                    filtered_grads = filter_grads(grads, trainable_params)
+
+                    # Now apply with matching structures
+                    self.optimizer.apply_gradients(filtered_grads, trainable_params)
+                    mx.eval(self.actor_model.parameters())
+                    logger.debug("Gradients applied successfully")
+
+                except Exception as e:
+                    logger.error(f"Error applying gradients: {e}", exc_info=True)
+                    logger.error(f"Grad keys (first 5): {list(tree_flatten(grads))[:5]}")
+                    logger.error(f"Trainable keys (first 5): {list(tree_flatten(trainable_params))[:5]}")
             else:
                 logger.warning("No gradients to apply in train_step")
 
@@ -516,6 +609,24 @@ class GRPOTrainer(BaseTrainer):
             logger.warning(f"Error getting learning rate: {e}")
             return 0.0
 
+    def _get_temperature(self) -> float:
+        """Helper to safely get temperature from config."""
+        temperature = getattr(self.config.trainer, 'temperature', None)
+        if temperature is None:
+            temperature = getattr(self.config.generation, 'temperature', None) if hasattr(self.config, 'generation') else None
+        if temperature is None:
+            temperature = 0.7  # Default temperature
+        return temperature
+
+    def _get_max_gen_len(self) -> int:
+        """Helper to safely get max generation length from config."""
+        max_gen_len = getattr(self.config.data, 'max_gen_len', None)
+        if max_gen_len is None:
+            max_gen_len = getattr(self.config.generation, 'max_tokens', None) if hasattr(self.config, 'generation') else None
+        if max_gen_len is None:
+            max_gen_len = 128  # Default max generation length
+        return max_gen_len
+
     def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
         """
         Runs registered evaluators against the validation dataset.
@@ -533,12 +644,12 @@ class GRPOTrainer(BaseTrainer):
             logger.warning("Validation skipped: no validation dataset available.")
             return []
 
-        eval_gen_config = self.config.generation.model_dump()
+        eval_gen_config = self.config.generation.model_dump() if hasattr(self.config, 'generation') else {}
         eval_gen_config.update(
             {
-                "system_prompt": self.config.system_prompt,
-                "max_kv_size": self.config.get("max_kv_size", None),
-                "max_gen_len": self.config.data.max_gen_len,
+                "system_prompt": getattr(self.config, 'system_prompt', ""),
+                "max_kv_size": getattr(self.config, 'max_kv_size', None),
+                "max_gen_len": self._get_max_gen_len(),
             }
         )
 

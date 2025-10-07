@@ -136,22 +136,22 @@ class ModelManager:
         rprint(f"Applying LoRA adapters to '{type_name}' model...")
 
         # Extract LoRA parameters with defaults
-        num_lora_layers = lora_config.get("num_lora_layers", -1)  # -1 means all layers
-        lora_rank = lora_config.get("rank", 8)
-        lora_scale = lora_config.get("scale", 16.0)  # alpha / rank
-        lora_dropout = lora_config.get("dropout", 0.0)
-        lora_keys = lora_config.get("keys", None)
-        use_dora = lora_config.get("use_dora", False)
+        num_lora_layers = lora_config.get('num_lora_layers', -1)  # -1 means all layers
+        lora_rank = lora_config.get('rank', 8)
+        lora_scale = lora_config.get('scale', 16.0)  # alpha / rank
+        lora_dropout = lora_config.get('dropout', 0.0)
+        lora_keys = lora_config.get('keys', None)
+        use_dora = lora_config.get('use_dora', False)
 
         # Prepare config dict for linear_to_lora_layers
         lora_params = {
-            "rank": lora_rank,
-            "scale": lora_scale,
-            "dropout": lora_dropout,
+            'rank': lora_rank,
+            'scale': lora_scale,
+            'dropout': lora_dropout,
         }
 
         if lora_keys is not None:
-            lora_params["keys"] = lora_keys
+            lora_params['keys'] = lora_keys
 
         # Apply LoRA using mlx-lm's utility function
         try:
@@ -159,12 +159,10 @@ class ModelManager:
                 model=model,
                 num_layers=num_lora_layers,
                 config=lora_params,
-                use_dora=use_dora,
+                use_dora=use_dora
             )
 
-            rprint(
-                f"✓ Applied LoRA to '{type_name}' model (rank={lora_rank}, scale={lora_scale})"
-            )
+            rprint(f"✓ Applied LoRA to '{type_name}' model (rank={lora_rank}, scale={lora_scale})")
             print_trainable_parameters(model)
 
         except Exception as e:
@@ -174,7 +172,10 @@ class ModelManager:
         return model
 
     def load_adapter_weights(
-        self, model: nn.Module, adapter_path: Path, type_name: str
+        self,
+        model: nn.Module,
+        adapter_path: Path,
+        type_name: str
     ) -> nn.Module:
         """
         Load pre-trained adapter weights into a model.
@@ -210,7 +211,9 @@ class ModelManager:
         rprint(f"Fusing LoRA weights for '{type_name}'...")
 
         # Check if model has LoRA layers
-        has_lora = any(isinstance(m, MLXLoRALinear) for _, m in model.named_modules())
+        has_lora = any(
+            isinstance(m, MLXLoRALinear) for _, m in model.named_modules()
+        )
 
         if not has_lora:
             logging.warning(f"No LoRA layers found in '{type_name}' model")
@@ -232,7 +235,7 @@ class ModelManager:
                 fused_weight = base_weight + lora_weight
 
                 # Create new linear layer with fused weights
-                bias = hasattr(module.linear, "bias")
+                bias = hasattr(module.linear, 'bias')
                 output_dims, input_dims = fused_weight.shape
                 fused_linear = nn.Linear(input_dims, output_dims, bias=bias)
                 fused_linear.weight = fused_weight
@@ -243,7 +246,6 @@ class ModelManager:
 
         if fused_layers:
             from mlx.utils import tree_unflatten
-
             model.update_modules(tree_unflatten(fused_layers))
             rprint(f"✓ Fused {len(fused_layers)} LoRA layers in '{type_name}'")
 
@@ -294,7 +296,10 @@ class ModelManager:
                     fused_model = self.fuse_lora_weights(model_instance, model_name)
 
                     weights = dict(mx.utils.tree_flatten(fused_model.parameters()))
-                    mx.save_safetensors(str(save_path / "model.safetensors"), weights)
+                    mx.save_safetensors(
+                        str(save_path / "model.safetensors"),
+                        weights
+                    )
                     logging.info(
                         f"✓ Saved fused model weights to {save_path / 'model.safetensors'}"
                     )
@@ -306,7 +311,8 @@ class ModelManager:
 
                     if lora_params:
                         mx.save_safetensors(
-                            str(save_path / "adapters.safetensors"), lora_params
+                            str(save_path / "adapters.safetensors"),
+                            lora_params
                         )
 
                         # Also save adapter config for compatibility with mlx-lm
@@ -316,16 +322,13 @@ class ModelManager:
                             "lora_parameters": {
                                 "rank": getattr(
                                     next(
-                                        m
-                                        for m in model_instance.modules()
+                                        m for m in model_instance.modules()
                                         if isinstance(m, MLXLoRALinear)
-                                    ),
-                                    "rank",
-                                    8,
+                                    ), 'rank', 8
                                 ),
                                 "scale": 1.0,  # Will be in the weights
                                 "dropout": 0.0,
-                            },
+                            }
                         }
 
                         with open(save_path / "adapter_config.json", "w") as f:
@@ -343,7 +346,10 @@ class ModelManager:
             else:
                 # Save full model weights
                 weights = dict(mx.utils.tree_flatten(model_instance.parameters()))
-                mx.save_safetensors(str(save_path / "model.safetensors"), weights)
+                mx.save_safetensors(
+                    str(save_path / "model.safetensors"),
+                    weights
+                )
                 logging.info(
                     f"✓ Saved full model weights to {save_path / 'model.safetensors'}"
                 )
@@ -377,6 +383,22 @@ class ModelManager:
                 - generated_tokens: Shape (batch_size, generated_length)
                 - log_probs: Shape (batch_size, generated_length)
         """
+        # Validate inputs
+        if prompts.size == 0:
+            logging.error(f"Empty prompts array passed to generate_with_logprobs: shape={prompts.shape}")
+            raise ValueError(f"Prompts array is empty with shape {prompts.shape}")
+
+        if prompts.ndim != 2:
+            logging.error(f"Invalid prompts dimensions: expected 2D, got {prompts.ndim}D with shape {prompts.shape}")
+            raise ValueError(f"Prompts must be 2D, got shape {prompts.shape}")
+
+        batch_size, prompt_length = prompts.shape
+        if batch_size == 0 or prompt_length == 0:
+            logging.error(f"Invalid prompts shape: batch_size={batch_size}, prompt_length={prompt_length}")
+            raise ValueError(f"Invalid prompts shape: {prompts.shape}")
+
+        logging.debug(f"generate_with_logprobs: batch_size={batch_size}, prompt_length={prompt_length}, max_tokens={max_tokens}")
+
         # Create KV cache for efficient generation
         model_cache = make_prompt_cache(model)
 
