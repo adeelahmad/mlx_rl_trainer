@@ -940,15 +940,9 @@ def make_dynamic_tag_bias_processor(
         if tool_ids and P_TOOL < 0:
             logits = logits.at[:, tool_ids].add(P_TOOL)
 
-        def find_last_pos_mx(tag_id):
-            if tag_id is None:
-                return mx.full((B,), -1, dtype=mx.int32)
-            matches = history_mx == tag_id
-            rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
-            # Add this check
-            if max_hist_len <= 0:
-                return mx.full((B,), -1, dtype=mx.int32)
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1).astype(mx.int32)
+
+
+
 
 
         last_ts, last_te, last_as, last_ae = (
@@ -1047,3 +1041,14 @@ def _mask_after_answer(
         mx.broadcast_to(indices[None, :], responses_mx.shape) < boundary_index[:, None]
     )
     return initial_mask * end_mask.astype(mx.float32)
+
+
+_is_metal_intedef find_last_pos_mx(tag_id):
+    if tag_id is None:
+        return mx.full((B,), -1, dtype=mx.int32)
+    matches = history_mx == tag_id
+    rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
+    # Add this check
+    if max_hist_len <= 0:
+        return mx.full((B,), -1, dtype=mx.int32)
+    return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1).astype(mx.int32)
