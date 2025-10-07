@@ -548,10 +548,10 @@ class TrainerParams(BaseModel):
         description="The Reinforcement Learning algorithm to use (e.g., 'grpo', 'ppo').",
     )
 
-    batch_size: int = Field(..., gt=0)
+    batch_size: int = Field(1, gt=0)
     gradient_accumulation_steps: int = Field(1, gt=0)
-    learning_rate: float = Field(..., gt=0.0)
-    max_epochs: int = Field(..., gt=0)
+    learning_rate: float = Field(1e-3, gt=0.0)
+    max_epochs: int = Field(2, gt=0)
     warmup_steps: int = Field(0, ge=0)
     max_grad_norm: float = Field(1.0, gt=0.0)
 
@@ -1041,6 +1041,13 @@ class GenerationConfig(TrainerParams):
     num_samples_per_prompt: PositiveInt = Field(
         4, description="Number of unique responses to generate per prompt for rollouts."
     )
+
+    batch_size: int = Field(1, gt=0)
+    gradient_accumulation_steps: int = Field(1, gt=0)
+    learning_rate: float = Field(1e-3, gt=0.0)
+    max_epochs: int = Field(2, gt=0)
+    warmup_steps: int = Field(0, ge=0)
+    max_grad_norm: float = Field(1.0, gt=0.0)
 
     # These are internal dynamic fields for Metal safety, not directly exposed in YAML
     orig_max_gen_len: Optional[int] = Field(None, exclude=True)

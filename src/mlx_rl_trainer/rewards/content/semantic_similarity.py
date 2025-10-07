@@ -21,7 +21,7 @@ from mlx_rl_trainer.utils.text_utils import (
 logger = logging.getLogger(__name__)
 
 
-@RewardRegistry.register("content_similarity")
+@RewardRegistry.register("semantic_similarity")
 class SemanticSimilarityReward(BaseReward):
     """
     Rewards semantic similarity between generated and reference text.
