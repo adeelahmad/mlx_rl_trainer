@@ -138,6 +138,10 @@ class CheckpointManager:
         if temp_path.exists():
             shutil.rmtree(temp_path)  # Clean up previous failed temp save
 
+        # If final_path already exists, remove it to allow atomic rename
+        if final_path.exists():
+            shutil.rmtree(final_path)
+
         try:
             temp_path.mkdir(parents=True)
             mx.save_safetensors(str(temp_path / "model.safetensors"), model_state)
@@ -241,15 +245,12 @@ class CheckpointManager:
 
                 if "numpy" in rng_state:
                     np_rng_state = rng_state["numpy"]
-                    np.random.set_state((np_rng_state[0], np.array(np_rng_state[1], dtype=np.uint32), np_rng_state[2], np_rng_state[3], np_rng_state[4]))
+                    # Parse the string representation of the array back into a list of integers
+                    array_str = np_rng_state[1].replace('[', '').replace(']', '').strip()
+                    array_elements = [int(x) for x in array_str.split() if x]
+                    np.random.set_state((np_rng_state[0], np.array(array_elements, dtype=np.uint32), int(np_rng_state[2]), int(np_rng_state[3]), float(np_rng_state[4])))
                 # For MLX, we set the global key (if it's a simple seed or a list)
-                if "mlx_key_full_array" in rng_state and isinstance(
-                    rng_state["mlx_key_full_array"], list
-                ):
-                    mx.random.seed(
-                        mx.array(rng_state["mlx_key_full_array"], dtype=mx.uint32)
-                    )
-                elif "mlx_key_seed" in rng_state and isinstance(
+                if "mlx_key_seed" in rng_state and isinstance(
                     rng_state["mlx_key_seed"], int
                 ):
                     mx.random.seed(rng_state["mlx_key_seed"])

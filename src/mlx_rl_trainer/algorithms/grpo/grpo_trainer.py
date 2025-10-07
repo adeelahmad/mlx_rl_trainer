@@ -243,13 +243,13 @@ class GRPOTrainer(BaseTrainer):
 
         batch_data = batch_prompts_data[0]  # The actual batch dictionary
 
-        # --- Data Extraction (Using the correct PLURAL keys) ---
-        prompts_list_of_arrays = batch_data["input_ids"]
-        raw_prompts = batch_data["raw_prompts"]
-        raw_completions = batch_data["raw_completions"]
+        # --- Data Extraction (Using the correct SINGULAR keys from the dataloader) ---
+        prompts_list_of_arrays = [batch_data["input_ids"]] if isinstance(batch_data["input_ids"], mx.array) else batch_data["input_ids"]
+        raw_prompts = batch_data["raw_prompt"]
+        raw_completions = batch_data["raw_completion"]
         raw_test_cases = batch_data["raw_test_cases"]
-        raw_meta_data = batch_data["meta_data"]
-        is_invalid_sample_flags = batch_data["is_invalid_sample_flags"]
+        raw_meta_data = batch_data["original_raw_data"]
+        is_invalid_sample_flags = batch_data["is_invalid_sample"]
 
         num_prompts_in_batch = len(prompts_list_of_arrays)
         if num_prompts_in_batch == 0:
