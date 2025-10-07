@@ -7,9 +7,11 @@ import json
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Callable, Union
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
+import mlx.core as mx
 import mlx.nn as nn
 from mlx_rl_trainer.core.config import (
     GenerationConfig,
+    ExperimentConfig,
 )  # Import GenerationConfig for tags
 
 logger = logging.getLogger(__name__)
@@ -876,3 +878,171 @@ class TwoBlockFormatter:
         self, texts: Sequence[str], detailed: bool = False
     ) -> Union[List[float], List[Dict[str, float]]]:
         return [self._score_one(t, detailed=detailed) for t in texts]
+
+
+def make_dynamic_tag_bias_processor(
+    tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
+) -> Callable:
+    gen_cfg = config.generation
+    tag_ids = _resolve_tag_ids(tokenizer, gen_cfg)
+    mcq_letter_ids = sorted(set(sum(_letter_token_ids(tokenizer).values(), [])))
+    ban_ids = _first_token_ids_for_lexemes(tokenizer, gen_cfg.ban_phrases_for_bias)
+    encourage_ids = _first_token_ids_for_lexemes(
+        tokenizer, gen_cfg.encourage_phrases_for_bias
+    )
+    tool_ids = _first_token_ids_for_lexemes(tokenizer, _TOOL_LIKE_MARKERS)
+
+    te, ts, as_id, ae, eos_tok = (
+        tag_ids.get(k)
+        for k in ("think_end", "think_start", "answer_start", "answer_end", "eos")
+    )
+    B_CLOSE, B_AS, P_REOPEN_THINK, P_EXTRA_TE, P_REOPEN_ANS, B_EOS_ANS = (
+        gen_cfg.bias_close_think,
+        gen_cfg.bias_answer_start,
+        gen_cfg.punish_reopen_think,
+        gen_cfg.punish_extra_think_end,
+        gen_cfg.punish_reopen_answer,
+        gen_cfg.bias_eos_after_answer,
+    )
+    MIN_ANS, MIN_ANS_MCQ, HARD_MASK, LIFT_MCQ, BAN_MCQ, BAN_NONMCQ = (
+        gen_cfg.min_answer_tokens,
+        gen_cfg.min_answer_tokens_mcq,
+        gen_cfg.hard_mask_mcq_first_token,
+        gen_cfg.mcq_letter_lift,
+        gen_cfg.mcq_ban_first_bias,
+        gen_cfg.nonmcq_ban_first_bias,
+    )
+    MCQ_CLOSE_K, B_MCQ_CLOSE, MIN_THINK, B_END_EARLY, B_AS_MIN_THINK = (
+        gen_cfg.mcq_close_after_k,
+        gen_cfg.mcq_answer_end_bias,
+        gen_cfg.min_think_tokens,
+        gen_cfg.think_end_early_bias,
+        gen_cfg.bias_answer_start_after_min_think,
+    )
+    B_ENCOURAGE, P_TOOL = (
+        gen_cfg.encourage_think_bias,
+        gen_cfg.tool_call_penalty * -10.0,
+    )
+
+    def _proc_vectorized(hist_list: List[List[int]], logits: mx.array) -> mx.array:
+        if logits.ndim != 2:
+            return logits
+        B, V = logits.shape
+        neg_inf, pad_id = mx.array(-1e9, dtype=logits.dtype), tokenizer.pad_token_id
+        max_hist_len = max(len(row) for row in hist_list) if hist_list else 0
+        if max_hist_len == 0:
+            return logits
+
+        history_mx = mx.array(
+            [row + [pad_id] * (max_hist_len - len(row)) for row in hist_list],
+            dtype=mx.int32,
+        )
+        if tool_ids and P_TOOL < 0:
+            logits = logits.at[:, tool_ids].add(P_TOOL)
+
+        def find_last_pos_mx(tag_id):
+            if tag_id is None:
+                return mx.full((B,), -1, dtype=mx.int32)
+            matches = history_mx == tag_id
+            # --- FIX START ---
+            # Cast argmax result to int32 to prevent overflow with -1
+            rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
+            # --- FIX END ---
+            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+
+        last_ts, last_te, last_as, last_ae = (
+            find_last_pos_mx(t) for t in (ts, te, as_id, ae)
+        )
+        history_len_mx = mx.array([len(row) for row in hist_list], dtype=mx.int32)
+
+        inside_think = mx.logical_and(
+            last_ts != -1, mx.logical_and(last_te < last_ts, last_as < last_ts)
+        )
+        inside_answer = mx.logical_and(last_as != -1, last_ae < last_as)
+        ae_seen = last_ae != -1
+        k_think = mx.where(inside_think, history_len_mx - (last_ts + 1), 0)
+        k_answer = mx.where(inside_answer, history_len_mx - (last_as + 1), 0)
+        is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
+
+        if ts is not None and te is not None:
+            logits = logits.at[:, ts].add(mx.where(last_te != -1, P_REOPEN_THINK, 0.0))
+            if as_id is not None:
+                logits = logits.at[:, as_id].add(
+                    mx.where(last_ae > last_as, P_REOPEN_ANS, 0.0)
+                )
+            te_count = mx.sum(history_mx == te, axis=1)
+            bias_at_te = mx.where(te_count == 0, B_CLOSE, P_EXTRA_TE)
+            min_think_penalty_mask = mx.logical_and(inside_think, (k_think < MIN_THINK))
+            bias_at_te = mx.where(min_think_penalty_mask, B_END_EARLY, bias_at_te)
+            logits = logits.at[:, te].add(bias_at_te)
+            can_start_answer = mx.logical_and(
+                last_te > last_as, mx.logical_not(inside_answer)
+            )
+            min_think_ok = mx.logical_not(B_AS_MIN_THINK)
+            if B_AS_MIN_THINK:
+                min_think_ok = k_think >= MIN_THINK
+            can_start_answer = mx.logical_and(can_start_answer, min_think_ok)
+            if as_id is not None:
+                logits = logits.at[:, as_id].add(mx.where(can_start_answer, B_AS, 0.0))
+
+        if eos_tok is not None:
+            logits = logits.at[:, eos_tok].add(mx.where(ae_seen, B_EOS_ANS, 0.0))
+        if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
+            logits = logits.at[inside_think.tolist(), encourage_ids].add(B_ENCOURAGE)
+
+        mcq_first_token_mask = mx.logical_and(
+            is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
+        )
+        if mx.any(mcq_first_token_mask).item() and HARD_MASK:
+            mcq_allowed_logits = mx.full((V,), neg_inf, dtype=logits.dtype)
+            if mcq_letter_ids:
+                mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].set(LIFT_MCQ)
+            if ban_ids:
+                mcq_allowed_logits = mcq_allowed_logits.at[ban_ids].add(BAN_MCQ)
+            logits = mx.where(
+                mcq_first_token_mask[:, None], mcq_allowed_logits[None, :], logits
+            )
+
+        non_mcq_first_answer = mx.logical_and(
+            mx.logical_not(is_mcq_mask), mx.logical_and(inside_answer, (k_answer == 0))
+        )
+        if mx.any(non_mcq_first_answer).item() and ban_ids:
+            logits = logits.at[non_mcq_first_answer.tolist(), ban_ids].add(BAN_NONMCQ)
+
+        if ae is not None:
+            min_ans_len = mx.where(is_mcq_mask, MIN_ANS_MCQ, MIN_ANS)
+            min_len_penalty_mask = mx.logical_and(
+                inside_answer, (k_answer < min_ans_len)
+            )
+            logits = logits.at[:, ae].add(mx.where(min_len_penalty_mask, -8.0, 0.0))
+            mcq_close_mask = mx.logical_and(
+                is_mcq_mask, mx.logical_and(inside_answer, (k_answer >= MCQ_CLOSE_K))
+            )
+            logits = logits.at[:, ae].add(mx.where(mcq_close_mask, B_MCQ_CLOSE, 0.0))
+
+        return logits
+
+    return _proc_vectorized
+
+
+def _mask_after_answer(
+    responses_mx: mx.array,
+    initial_mask: mx.array,
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+) -> mx.array:
+    if responses_mx.ndim != 2:
+        return initial_mask
+    B, L_gen = responses_mx.shape
+    initial_mask = initial_mask.astype(mx.float32)
+    answer_end_id = _resolve_tag_ids(tokenizer, config.generation).get("answer_end")
+    if answer_end_id is None:
+        return initial_mask
+    indices = mx.arange(L_gen)
+    is_answer_end = responses_mx == answer_end_id
+    first_end_indices = mx.argmin(mx.where(is_answer_end, indices, L_gen + 1), axis=1)
+    boundary_index = first_end_indices + 1
+    end_mask = (
+        mx.broadcast_to(indices[None, :], responses_mx.shape) < boundary_index[:, None]
+    )
+    return initial_mask * end_mask.astype(mx.float32)

@@ -34,9 +34,7 @@ class TagStructureReward(BaseReward):
             )
         )
         th_e = len(
-            re.findall(
-                re.escape(gen_config.think_end_tag), generated or "", flags=re.I
-            )
+            re.findall(re.escape(gen_config.think_end_tag), generated or "", flags=re.I)
         )
 
         think = extract_think_region(generated, gen_config)

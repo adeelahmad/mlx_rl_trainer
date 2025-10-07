@@ -52,7 +52,9 @@ class MCQAccuracyReward(BaseReward):
             metadata.get("mcq_options"),
             gen_config,
         )
-        predicted_set = set(predicted_letters.split(",")) if predicted_letters else set()
+        predicted_set = (
+            set(predicted_letters.split(",")) if predicted_letters else set()
+        )
 
         if not predicted_set:
             return 0.0

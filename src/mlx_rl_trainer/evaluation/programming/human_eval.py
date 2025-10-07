@@ -92,7 +92,9 @@ class HumanEvalEvaluator(BaseEvaluator):
                 solution_pass_scores = []
                 for future in concurrent.futures.as_completed(futures):
                     try:
-                        solution_pass_scores.append(future.result(timeout=self.timeout + 2))
+                        solution_pass_scores.append(
+                            future.result(timeout=self.timeout + 2)
+                        )
                     except Exception:
                         solution_pass_scores.append(0.0)
 

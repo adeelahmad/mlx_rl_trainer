@@ -324,7 +324,6 @@ class TrainerParams(BaseModel):
     # Add the missing field
     effective_batch_size: int = Field(0, exclude=True)
 
-
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
         self.effective_batch_size = (
