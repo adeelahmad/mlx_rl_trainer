@@ -321,6 +321,10 @@ class TrainerParams(BaseModel):
     eval_every: PositiveInt = Field(10)
     reward_smoothing_window: PositiveInt = Field(20)
 
+    # Add the missing field
+    effective_batch_size: int = Field(0, exclude=True)
+
+
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
         self.effective_batch_size = (
