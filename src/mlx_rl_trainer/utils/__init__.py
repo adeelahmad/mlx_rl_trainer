@@ -20,7 +20,7 @@ from .mlx_utils import (
     metal_before_update,
     _global_grad_norm,
     _maybe_clip_grad_norm,
-    _is_metal_intedef,
+    _is_metal_internal_error,
 )
 
 from .text_utils import (
@@ -110,6 +110,5 @@ __all__ = [
     "softmax",
     "log_softmax",
     # distributed
-    "DistributedUtil",
-    "_is_metal_intedef",
+    "DistributedUtil"
 ]
