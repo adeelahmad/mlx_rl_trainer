@@ -46,11 +46,14 @@ class TrainingRuntimeError(CustomBaseException):
 class TrainingMetrics:
     loss: float
     reward_mean: float
+    reward_std: float
     grad_norm: float
     learning_rate: float
     step_time_s: float
     tokens_per_sec: float
     kl_divergence: float
+    epoch: int = 0
+    step: int = 0
     custom_metrics: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -105,6 +108,7 @@ class BaseTrainer(ABC):
         self.optimizer_is_set = False
         self.lr_scheduler_is_set = False
         self.actor_model_is_set = False
+        self.step = 0
 
         logging.info("BaseTrainer initialized with injected dependencies.")
 
@@ -220,12 +224,20 @@ class BaseTrainer(ABC):
                             )
 
                     # Generate rollouts and perform one training step
-                    (
-                        rollout_data,
-                        avg_reward_from_rollouts,
-                        raw_rewards_breakdown,
-                    ) = self.generate_rollouts(prompts_batch, self.global_step)
-                    metrics = self.train_step([prompts_batch], self.global_step)
+                    # (
+                    #     rollout_data,
+                    #     avg_reward_from_rollouts,
+                    #     raw_rewards_breakdown,
+                    # ) = self.generate_rollouts(prompts_batch, self.global_step)
+                    # metrics = self.train_step([prompts_batch], self.global_step)
+                    #
+                    # AFTER (CORRECT):
+                    rollout_batch, avg_reward, raw_rewards = self.generate_rollouts(
+                        prompts_batch, self.global_step
+                    )
+                    metrics = self.train_step(
+                        rollout_batch, self.global_step
+                    )  # Use rollout
                     accumulated_metrics.append(metrics)
 
                 # Aggregate and log metrics from accumulation steps
@@ -321,7 +333,11 @@ class BaseTrainer(ABC):
             logging.info("Training process finalized. Saving final state.")
             # FIX: Safely access pbar.postfix to prevent crash on early exit
             final_metric = 0.0
-            if hasattr(pbar, "postfix") and isinstance(pbar.postfix, dict) and pbar.postfix is not None:
+            if (
+                hasattr(pbar, "postfix")
+                and isinstance(pbar.postfix, dict)
+                and pbar.postfix is not None
+            ):
                 try:
                     # Attempt to parse the reward string, e.g., "0.876"
                     reward_str = pbar.postfix.get("Reward")

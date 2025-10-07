@@ -1,7 +1,6 @@
 # file_path: mlx_rl_trainer/src/mlx_rl_trainer/core/model_manager.py
-# revision_no: 003
-# goals_of_writing_code_block: Add missing generation and log-probability methods to the ModelManager to make it fully compatible with the GRPOTrainer.
-# type_of_code_response: replace code
+# revision_no: 006
+# goals_of_writing_code_block: Use actual mlx_lm utility functions (linear_to_lora_layers, etc.)
 """
 Model management lifecycle: loading, LoRA conversion, and multi-model coordination.
 """
@@ -17,140 +16,45 @@ from rich import print as rprint
 from .config import ModelConfig
 from .trainer import ModelLoadError
 
-# --- MLX-LM Imports (Conditional for Mock) ---
+# --- MLX-LM Imports ---
 try:
     import mlx_lm
-    from mlx_lm.models import cache
+    from mlx_lm import load, generate
+    from mlx_lm.models.cache import make_prompt_cache
     from mlx_lm.tokenizer_utils import TokenizerWrapper
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
     from mlx_lm.tuner.utils import (
-        apply_lora_layers,
-        apply_lora_layers_force_qkv_mlp,
+        linear_to_lora_layers,
         print_trainable_parameters,
+        remove_lora_layers,
+        dequantize,
+        load_adapters,
     )
-
-    print("apply_lora_layers_force_qkv_mlp imported")
-    print("Attempting to import mlx_lm.utils")
-    import mlx_lm.utils
-
-    print("mlx_lm.utils imported")
+    from mlx_lm.utils import save_config
 
     MLX_LM_AVAILABLE = True
-except ImportError:
+    logging.info("mlx_lm successfully imported")
+except ImportError as e:
     MLX_LM_AVAILABLE = False
-    logging.warning(
-        "mlx-lm not found. ModelManager will use mock implementations only."
-    )
-    # Define dummy/mock versions if mlx_lm is not available
-
-    class TokenizerWrapper:
-        def __init__(
-            self, vocab_size: int = 32000, pad_token_id: int = 0, eos_token_id: int = 2
-        ):
-            self.vocab_size = vocab_size
-            self.pad_token_id = pad_token_id
-            self.eos_token_id = eos_token_id
-            self.name_or_path = "mock_tokenizer"
-
-        def encode(self, text: str, add_special_tokens: bool = False) -> List[int]:
-            return [1] * min(len(text.split()), 50) + (
-                [self.eos_token_id] if add_special_tokens else []
-            )
-
-        def batch_decode(
-            self, ids: List[List[int]], skip_special_tokens: bool = False
-        ) -> List[str]:
-            return [f"decoded_response_{i}" for i in range(len(ids))]
-
-        def add_special_tokens(self, special_tokens_dict: Dict[str, Any]) -> int:
-            return 0
-
-        def apply_chat_template(
-            self,
-            messages: List[Dict],
-            tokenize: bool = False,
-            add_generation_prompt: bool = False,
-        ) -> str:
-            return "MOCK_CHAT_PROMPT: " + messages[-1]["content"]
-
-        def save_pretrained(self, path: Path):
-            pass
-
-    class MLXLoRALinear:
-        pass  # Mock class
-
-    class cache:  # Mock cache
-        @staticmethod
-        def make_prompt_cache(*args, **kwargs):
-            return None
-
-    def apply_lora_layers(*args, **kwargs):
-        return 0
-
-    def apply_lora_layers_force_qkv_mlp(*args, **kwargs):
-        return 0
-
-    def print_trainable_parameters(*args, **kwargs):
-        pass
-
-    def mlx_lm_load(path: Path):
-        return MockModel(), TokenizerWrapper()
-
-    def mlx_lm_save_config(*args, **kwargs):
-        pass
-
-
-class MockModel(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int = 32000,
-        embed_dim: int = 128,
-        num_layers: int = 4,
-        num_kv_heads: int = 2,
-        hidden_size: int = 128,
-        num_attention_heads: int = 4,
-        **kwargs,
-    ):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.lm_head = nn.Linear(embed_dim, vocab_size)
-        self.layers = [nn.Linear(embed_dim, embed_dim) for _ in range(num_layers)]
-        self.n_kv_heads = num_kv_heads
-        self.head_dim = hidden_size // num_attention_heads
-        self.n_layers = num_layers
-        self.model_config = kwargs  # Store for mock loading
-
-    def __call__(self, x: mx.array, cache: Any = None, mask: Any = None) -> mx.array:
-        # Mock forward pass
-        B, L = x.shape
-        x = self.embedding(x)
-        for layer in self.layers:
-            x = layer(x)
-        return self.lm_head(x)
-
-    def freeze(self):
-        pass
-
-    def train(self, mode: bool = True):
-        pass
-
-    def eval(self):
-        self.train(False)
-
-    def load_weights(self, weights: List[Tuple[str, mx.array]], strict: bool = False):
-        pass
-
-    def update_modules(self, modules: Dict[str, Any]):
-        pass
+    error_msg = f"mlx-lm not found: {e}. ModelManager requires mlx-lm to be installed."
+    logging.error(error_msg)
+    raise ImportError(
+        "mlx-lm is required for ModelManager. Install it with: pip install mlx-lm"
+    ) from e
 
 
 class ModelManager:
     """
     Model management lifecycle: loading, LoRA conversion, and multi-model coordination.
+    Includes generation and log-probability computation methods for GRPO training.
+
+    This implementation requires mlx-lm to be installed and available.
     """
 
     def __init__(self, config: ModelConfig):
         self.config = config
+        if not MLX_LM_AVAILABLE:
+            raise RuntimeError("mlx-lm is required but not available")
 
     def load_model(
         self,
@@ -161,86 +65,189 @@ class ModelManager:
         lora_config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[nn.Module, Any]:
         """
-        Loads a model and its tokenizer, applying LoRA if specified.
+        Loads a model and its tokenizer using mlx-lm, applying LoRA if specified.
+
+        Args:
+            model_path: Path to the model directory
+            type_name: Descriptive name for logging (e.g., "actor", "critic", "reference")
+            is_trainable: Whether to set the model to training mode
+            apply_lora: Whether to apply LoRA adapters
+            lora_config: LoRA configuration dict with keys:
+                - 'num_lora_layers': number of layers to convert (default: all)
+                - 'rank': LoRA rank
+                - 'scale': LoRA alpha / rank
+                - 'dropout': dropout probability
+                - 'keys': optional list of module keys to target
+                - 'use_dora': whether to use DoRA instead of LoRA
+
+        Returns:
+            Tuple of (model, tokenizer)
         """
-        logging.info(f"Attempting to load '{type_name}' model from {model_path}...")
-        model_instance: nn.Module
-        tokenizer_instance: Any
+        logging.info(f"Loading '{type_name}' model from {model_path} using mlx-lm...")
 
-        if MLX_LM_AVAILABLE:
-            try:
-                model_instance, tokenizer_instance = mlx_lm.utils.load(
-                    model_path.as_posix()
-                )
-                rprint(
-                    f"Successfully loaded '{type_name}' model and tokenizer using [green]mlx-lm[/green]."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"mlx-lm model load failed ({e}). Falling back to mock model.",
-                    exc_info=True,
-                )
-                model_instance, tokenizer_instance = self._load_mock_model(model_path)
-        else:
-            model_instance, tokenizer_instance = self._load_mock_model(model_path)
-
-        if is_trainable:
-            model_instance.train()
-        else:
-            model_instance.freeze()
-
-        if apply_lora and lora_config:
-            rprint(f"Applying LoRA adapters to '{type_name}' model...")
-            num_wrapped = apply_lora_layers(model_instance, lora_config)
-            if num_wrapped == 0:
-                logging.warning(
-                    f"No LoRA layers matched target_modules. Attempting force-apply to QKV/MLP for '{type_name}'."
-                )
-                num_wrapped = apply_lora_layers_force_qkv_mlp(
-                    model_instance, lora_config
-                )
-            if num_wrapped == 0:
-                logging.warning(
-                    f"LoRA application resulted in 0 wrapped layers for '{type_name}'. Check lora_target_modules."
-                )
-            else:
-                print_trainable_parameters(model_instance)
-
-        return model_instance, tokenizer_instance
-
-    def _load_mock_model(self, model_path: Path) -> Tuple[MockModel, TokenizerWrapper]:
-        """Loads a mock model and tokenizer for when mlx-lm is not available or fails."""
         try:
-            model_config_path = model_path / "config.json"
-            if not model_config_path.exists():
-                dummy_config = {
-                    "config": {
-                        "vocab_size": 32000,
-                        "embed_dim": 128,
-                        "num_layers": 4,
-                        "num_kv_heads": 2,
-                        "hidden_size": 128,
-                        "num_attention_heads": 4,
-                    }
-                }
-                model_config_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(model_config_path, "w") as f:
-                    json.dump(dummy_config, f)
-                logging.info(f"Created dummy mock model config at {model_config_path}.")
-
-            with open(model_config_path, "r") as f:
-                cfg_data = json.load(f).get("config", {})
-
-            model = MockModel(**cfg_data)
-            tokenizer = TokenizerWrapper(vocab_size=cfg_data.get("vocab_size", 32000))
+            # Load model and tokenizer using mlx-lm
+            model_instance, tokenizer_instance = load(str(model_path))
             rprint(
-                f"Successfully loaded [yellow]mock model[/yellow] and tokenizer from {model_path}."
+                f"✓ Successfully loaded '{type_name}' model and tokenizer from [green]{model_path}[/green]"
             )
-            return model, tokenizer
+
+            # Apply LoRA if requested
+            if apply_lora and lora_config:
+                model_instance = self._apply_lora_to_model(
+                    model_instance, type_name, lora_config
+                )
+
+            # Set training mode after LoRA application
+            if is_trainable:
+                model_instance.train()
+                logging.info(f"Set '{type_name}' model to training mode")
+            else:
+                model_instance.freeze()
+                logging.info(f"Froze '{type_name}' model weights")
+
+            return model_instance, tokenizer_instance
+
         except Exception as e:
             raise ModelLoadError(
-                f"Failed to load mock model from {model_path}: {e}"
+                f"Failed to load '{type_name}' model from {model_path}: {e}"
             ) from e
+
+    def _apply_lora_to_model(
+        self, model: nn.Module, type_name: str, lora_config: Dict[str, Any]
+    ) -> nn.Module:
+        """
+        Applies LoRA adapters to the model using mlx-lm's linear_to_lora_layers.
+
+        Args:
+            model: The model to apply LoRA to
+            type_name: Model name for logging
+            lora_config: Dict containing LoRA parameters:
+                - num_lora_layers: Number of transformer layers to convert (from end)
+                - rank: LoRA rank (r)
+                - scale: LoRA alpha / rank
+                - dropout: Dropout probability
+                - keys: Optional list of module names to target
+                - use_dora: Whether to use DoRA (default: False)
+
+        Returns:
+            Model with LoRA adapters applied
+        """
+        rprint(f"Applying LoRA adapters to '{type_name}' model...")
+
+        # Extract LoRA parameters with defaults
+        num_lora_layers = lora_config.get("num_lora_layers", -1)  # -1 means all layers
+        lora_rank = lora_config.get("rank", 8)
+        lora_scale = lora_config.get("scale", 16.0)  # alpha / rank
+        lora_dropout = lora_config.get("dropout", 0.0)
+        lora_keys = lora_config.get("keys", None)
+        use_dora = lora_config.get("use_dora", False)
+
+        # Prepare config dict for linear_to_lora_layers
+        lora_params = {
+            "rank": lora_rank,
+            "scale": lora_scale,
+            "dropout": lora_dropout,
+        }
+
+        if lora_keys is not None:
+            lora_params["keys"] = lora_keys
+
+        # Apply LoRA using mlx-lm's utility function
+        try:
+            linear_to_lora_layers(
+                model=model,
+                num_layers=num_lora_layers,
+                config=lora_params,
+                use_dora=use_dora,
+            )
+
+            rprint(
+                f"✓ Applied LoRA to '{type_name}' model (rank={lora_rank}, scale={lora_scale})"
+            )
+            print_trainable_parameters(model)
+
+        except Exception as e:
+            logging.error(f"Failed to apply LoRA to '{type_name}': {e}")
+            raise
+
+        return model
+
+    def load_adapter_weights(
+        self, model: nn.Module, adapter_path: Path, type_name: str
+    ) -> nn.Module:
+        """
+        Load pre-trained adapter weights into a model.
+
+        Args:
+            model: Model with LoRA layers already applied
+            adapter_path: Path to adapter weights directory
+            type_name: Model name for logging
+
+        Returns:
+            Model with loaded adapter weights
+        """
+        try:
+            rprint(f"Loading adapter weights for '{type_name}' from {adapter_path}")
+            model = load_adapters(model, str(adapter_path))
+            rprint(f"✓ Loaded adapter weights for '{type_name}'")
+            return model
+        except Exception as e:
+            logging.error(f"Failed to load adapters for '{type_name}': {e}")
+            raise
+
+    def fuse_lora_weights(self, model: nn.Module, type_name: str) -> nn.Module:
+        """
+        Fuse LoRA weights back into the base model weights.
+
+        Args:
+            model: Model with LoRA layers
+            type_name: Model name for logging
+
+        Returns:
+            Model with fused weights (LoRA layers removed)
+        """
+        rprint(f"Fusing LoRA weights for '{type_name}'...")
+
+        # Check if model has LoRA layers
+        has_lora = any(isinstance(m, MLXLoRALinear) for _, m in model.named_modules())
+
+        if not has_lora:
+            logging.warning(f"No LoRA layers found in '{type_name}' model")
+            return model
+
+        # Fuse by converting LoRA weights to base weights, then removing LoRA layers
+        # First, we need to get the fused weights from each LoRA layer
+        fused_layers = []
+        for name, module in model.named_modules():
+            if isinstance(module, MLXLoRALinear):
+                # Get the fused weight: W + (B @ A) * scale
+                base_weight = module.linear.weight
+                lora_b = module.lora_b
+                lora_a = module.lora_a
+                scale = module.scale
+
+                # Fuse: W_fused = W + scale * (B @ A)
+                lora_weight = scale * (lora_b @ lora_a)
+                fused_weight = base_weight + lora_weight
+
+                # Create new linear layer with fused weights
+                bias = hasattr(module.linear, "bias")
+                output_dims, input_dims = fused_weight.shape
+                fused_linear = nn.Linear(input_dims, output_dims, bias=bias)
+                fused_linear.weight = fused_weight
+                if bias:
+                    fused_linear.bias = module.linear.bias
+
+                fused_layers.append((name, fused_linear))
+
+        if fused_layers:
+            from mlx.utils import tree_unflatten
+
+            model.update_modules(tree_unflatten(fused_layers))
+            rprint(f"✓ Fused {len(fused_layers)} LoRA layers in '{type_name}'")
+
+        return model
 
     def save_model(
         self,
@@ -253,232 +260,97 @@ class ModelManager:
         save_full_model: bool = False,
     ) -> None:
         """
-        Saves the model weights and configuration.
+        Saves the model weights, tokenizer, and configuration.
+
+        Args:
+            model_name: Name of the model for logging
+            save_path: Directory to save the model
+            model_instance: The model to save
+            tokenizer_instance: The tokenizer to save
+            model_config_dict: Model configuration dictionary
+            training_args_config: Training arguments (currently unused but kept for compatibility)
+            save_full_model: If True and model has LoRA, fuse and save full weights
         """
         try:
             save_path.mkdir(parents=True, exist_ok=True)
-            tokenizer_instance.save_pretrained(save_path)
 
-            if MLX_LM_AVAILABLE:
-                mlx_lm.utils.save_config(model_config_dict, save_path / "config.json")
-            else:
-                with open(save_path / "config.json", "w") as f:
-                    json.dump(model_config_dict, f, indent=2)
+            # Save tokenizer
+            tokenizer_instance.save_pretrained(str(save_path))
+            logging.info(f"Saved tokenizer to {save_path}")
 
+            # Save model config
+            save_config(model_config_dict, config_path=save_path / "config.json")
+            logging.info(f"Saved config to {save_path / 'config.json'}")
+
+            # Check if model has LoRA adapters
             is_lora_model = any(
                 isinstance(m, MLXLoRALinear) for _, m in model_instance.named_modules()
             )
 
             if is_lora_model:
                 if save_full_model:
-                    from mlx_lm.tuner.utils import fuse_lora_layers
+                    # Fuse LoRA weights into base model and save
+                    rprint(f"Fusing LoRA layers for '{model_name}'...")
+                    fused_model = self.fuse_lora_weights(model_instance, model_name)
 
-                    fused_model = fuse_lora_layers(model_instance)
-                    mx.save_safetensors(
-                        str(save_path / "model.fused.safetensors"),
-                        dict(mx.utils.tree_flatten(fused_model.parameters())),
+                    weights = dict(mx.utils.tree_flatten(fused_model.parameters()))
+                    mx.save_safetensors(str(save_path / "model.safetensors"), weights)
+                    logging.info(
+                        f"✓ Saved fused model weights to {save_path / 'model.safetensors'}"
                     )
-                    logger.info(
-                        f"Saved fused LoRA model weights to {save_path / 'model.fused.safetensors'}"
-                    )
-                    del fused_model
                 else:
+                    # Save only LoRA adapters
                     lora_params = dict(
                         mx.utils.tree_flatten(model_instance.trainable_parameters())
                     )
+
                     if lora_params:
                         mx.save_safetensors(
                             str(save_path / "adapters.safetensors"), lora_params
                         )
-                        logger.info(
-                            f"Saved LoRA adapter weights to {save_path / 'adapters.safetensors'}"
+
+                        # Also save adapter config for compatibility with mlx-lm
+                        adapter_config = {
+                            "fine_tune_type": "lora",
+                            "num_layers": -1,  # Indicates all layers
+                            "lora_parameters": {
+                                "rank": getattr(
+                                    next(
+                                        m
+                                        for m in model_instance.modules()
+                                        if isinstance(m, MLXLoRALinear)
+                                    ),
+                                    "rank",
+                                    8,
+                                ),
+                                "scale": 1.0,  # Will be in the weights
+                                "dropout": 0.0,
+                            },
+                        }
+
+                        with open(save_path / "adapter_config.json", "w") as f:
+                            json.dump(adapter_config, f, indent=2)
+
+                        logging.info(
+                            f"✓ Saved LoRA adapters ({len(lora_params)} params) to "
+                            f"{save_path / 'adapters.safetensors'}"
                         )
                     else:
-                        logger.warning(
-                            f"No trainable LoRA parameters found for {model_name}; skipping adapters.safetensors."
+                        logging.warning(
+                            f"No trainable LoRA parameters found for '{model_name}'. "
+                            f"Skipping adapters.safetensors."
                         )
             else:
-                mx.save_safetensors(
-                    str(save_path / "model.safetensors"),
-                    dict(mx.utils.tree_flatten(model_instance.parameters())),
-                )
-                logger.info(
-                    f"Saved full model weights to {save_path / 'model.safetensors'}"
+                # Save full model weights
+                weights = dict(mx.utils.tree_flatten(model_instance.parameters()))
+                mx.save_safetensors(str(save_path / "model.safetensors"), weights)
+                logging.info(
+                    f"✓ Saved full model weights to {save_path / 'model.safetensors'}"
                 )
 
         except Exception as e:
             raise ModelLoadError(
-                f"Failed to save model for {model_name} to {save_path}: {e}"
-            ) from e
-
-
-class ModelManager:
-    """
-    Model management lifecycle: loading, LoRA conversion, and multi-model coordination.
-    """
-
-    def __init__(self, config: ModelConfig):
-        self.config = config
-
-    def load_model(
-        self,
-        model_path: Path,
-        type_name: str,
-        is_trainable: bool = False,
-        apply_lora: bool = False,
-        lora_config: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[nn.Module, Any]:
-        """
-        Loads a model and its tokenizer, applying LoRA if specified.
-        """
-        logging.info(f"Attempting to load '{type_name}' model from {model_path}...")
-        model_instance: nn.Module
-        tokenizer_instance: Any
-
-        if MLX_LM_AVAILABLE:
-            try:
-                model_instance, tokenizer_instance = mlx_lm.utils.load(
-                    model_path.as_posix()
-                )
-                rprint(
-                    f"Successfully loaded '{type_name}' model and tokenizer using [green]mlx-lm[/green]."
-                )
-            except Exception as e:
-                logging.warning(
-                    f"mlx-lm model load failed ({e}). Falling back to mock model.",
-                    exc_info=True,
-                )
-                model_instance, tokenizer_instance = self._load_mock_model(model_path)
-        else:
-            model_instance, tokenizer_instance = self._load_mock_model(model_path)
-
-        if is_trainable:
-            model_instance.train()
-        else:
-            model_instance.freeze()
-
-        if apply_lora and lora_config:
-            rprint(f"Applying LoRA adapters to '{type_name}' model...")
-            num_wrapped = apply_lora_layers(model_instance, lora_config)
-            if num_wrapped == 0:
-                logging.warning(
-                    f"No LoRA layers matched target_modules. Attempting force-apply to QKV/MLP for '{type_name}'."
-                )
-                num_wrapped = apply_lora_layers_force_qkv_mlp(
-                    model_instance, lora_config
-                )
-            if num_wrapped == 0:
-                logging.warning(
-                    f"LoRA application resulted in 0 wrapped layers for '{type_name}'. Check lora_target_modules."
-                )
-            else:
-                print_trainable_parameters(model_instance)
-
-        return model_instance, tokenizer_instance
-
-    def _load_mock_model(self, model_path: Path) -> Tuple[MockModel, TokenizerWrapper]:
-        """
-        Loads a mock model and tokenizer for when mlx-lm is not available or fails.
-        """
-        try:
-            model_config_path = model_path / "config.json"
-            if not model_config_path.exists():
-                dummy_config = {
-                    "config": {
-                        "vocab_size": 32000,
-                        "embed_dim": 128,
-                        "num_layers": 4,
-                        "num_kv_heads": 2,
-                        "hidden_size": 128,
-                        "num_attention_heads": 4,
-                    }
-                }
-                model_config_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(model_config_path, "w") as f:
-                    json.dump(dummy_config, f)
-                logging.info(f"Created dummy mock model config at {model_config_path}.")
-
-            with open(model_config_path, "r") as f:
-                cfg_data = json.load(f).get("config", {})
-
-            model = MockModel(**cfg_data)
-            tokenizer = TokenizerWrapper(vocab_size=cfg_data.get("vocab_size", 32000))
-            rprint(
-                f"Successfully loaded [yellow]mock model[/yellow] and tokenizer from {model_path}."
-            )
-            return model, tokenizer
-        except Exception as e:
-            raise ModelLoadError(
-                f"Failed to load mock model from {model_path}: {e}"
-            ) from e
-
-    def save_model(
-        self,
-        model_name: str,
-        save_path: Path,
-        model_instance: nn.Module,
-        tokenizer_instance: Any,
-        model_config_dict: Dict[str, Any],
-        training_args_config: Any,
-        save_full_model: bool = False,
-    ) -> None:
-        """
-        Saves the model weights and configuration.
-        """
-        try:
-            save_path.mkdir(parents=True, exist_ok=True)
-            tokenizer_instance.save_pretrained(save_path)
-
-            if MLX_LM_AVAILABLE:
-                mlx_lm.utils.save_config(model_config_dict, save_path / "config.json")
-            else:
-                with open(save_path / "config.json", "w") as f:
-                    json.dump(model_config_dict, f, indent=2)
-
-            is_lora_model = any(
-                isinstance(m, MLXLoRALinear) for _, m in model_instance.named_modules()
-            )
-
-            if is_lora_model:
-                if save_full_model:
-                    from mlx_lm.tuner.utils import fuse_lora_layers
-
-                    fused_model = fuse_lora_layers(model_instance)
-                    mx.save_safetensors(
-                        str(save_path / "model.fused.safetensors"),
-                        dict(mx.utils.tree_flatten(fused_model.parameters())),
-                    )
-                    logger.info(
-                        f"Saved fused LoRA model weights to {save_path / 'model.fused.safetensors'}"
-                    )
-                    del fused_model
-                else:
-                    lora_params = dict(
-                        mx.utils.tree_flatten(model_instance.trainable_parameters())
-                    )
-                    if lora_params:
-                        mx.save_safetensors(
-                            str(save_path / "adapters.safetensors"), lora_params
-                        )
-                        logger.info(
-                            f"Saved LoRA adapter weights to {save_path / 'adapters.safetensors'}"
-                        )
-                    else:
-                        logger.warning(
-                            f"No trainable LoRA parameters found for {model_name}; skipping adapters.safetensors."
-                        )
-            else:
-                mx.save_safetensors(
-                    str(save_path / "model.safetensors"),
-                    dict(mx.utils.tree_flatten(model_instance.parameters())),
-                )
-                logger.info(
-                    f"Saved full model weights to {save_path / 'model.safetensors'}"
-                )
-
-        except Exception as e:
-            raise ModelLoadError(
-                f"Failed to save model for {model_name} to {save_path}: {e}"
+                f"Failed to save '{model_name}' to {save_path}: {e}"
             ) from e
 
     def generate_with_logprobs(
@@ -492,97 +364,139 @@ class ModelManager:
         """
         Generates token sequences from prompts and returns the generated tokens
         along with their corresponding log probabilities.
+
+        Args:
+            model: The model to use for generation
+            prompts: Input token IDs of shape (batch_size, prompt_length)
+            tokenizer: Tokenizer with eos_token_id and pad_token_id
+            temp: Sampling temperature (0 for greedy)
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            Tuple of (generated_tokens, log_probs):
+                - generated_tokens: Shape (batch_size, generated_length)
+                - log_probs: Shape (batch_size, generated_length)
         """
-        if MLX_LM_AVAILABLE:
-            model_cache = cache.make_prompt_cache(model)
-            y = prompts
-            logits = model(y, cache=model_cache)[:, -1, :]
+        # Create KV cache for efficient generation
+        model_cache = make_prompt_cache(model)
 
-            generated_tokens = []
-            log_probs = []
-            batch_size = prompts.shape[0]
-            ended = mx.zeros(batch_size, dtype=mx.bool_)
+        # Initial forward pass with prompts
+        y = prompts
+        logits = model(y, cache=model_cache)
 
-            for _ in range(max_tokens):
-                if temp == 0:
-                    next_token = mx.argmax(logits, axis=-1)
-                else:
-                    next_token = mx.random.categorical(logits * (1 / temp))
+        # Handle both tuple output (logits, cache) and direct logits
+        if isinstance(logits, tuple):
+            logits = logits[0]
 
-                current_log_probs = nn.log_softmax(logits.astype(mx.float32), axis=-1)
-                next_log_prob = mx.take_along_axis(
-                    current_log_probs, next_token[:, None], axis=-1
-                ).squeeze(-1)
+        # Get logits for next token (last position)
+        logits = logits[:, -1, :].astype(mx.float32)
 
-                next_token = mx.where(ended, tokenizer.pad_token_id, next_token)
-                next_log_prob = mx.where(ended, 0.0, next_log_prob)
+        generated_tokens = []
+        log_probs = []
+        batch_size = prompts.shape[0]
+        ended = mx.zeros(batch_size, dtype=mx.bool_)
 
-                generated_tokens.append(next_token)
-                log_probs.append(next_log_prob)
+        for _ in range(max_tokens):
+            # Sample next token
+            if temp == 0:
+                next_token = mx.argmax(logits, axis=-1)
+            else:
+                next_token = mx.random.categorical(logits * (1.0 / temp))
 
-                if tokenizer.eos_token_id is not None:
-                    ended = mx.logical_or(ended, next_token == tokenizer.eos_token_id)
+            # Calculate log probabilities
+            current_log_probs = nn.log_softmax(logits, axis=-1)
+            next_log_prob = mx.take_along_axis(
+                current_log_probs, next_token[:, None], axis=-1
+            ).squeeze(-1)
 
-                if mx.all(ended).item():
-                    break
+            # Mask out tokens for sequences that have ended
+            next_token = mx.where(ended, tokenizer.pad_token_id, next_token)
+            next_log_prob = mx.where(ended, 0.0, next_log_prob)
 
-                logits = model(next_token[:, None], cache=model_cache)[:, -1, :]
+            generated_tokens.append(next_token)
+            log_probs.append(next_log_prob)
 
-            responses_mx = (
-                mx.stack(generated_tokens, axis=1)
-                if generated_tokens
-                else mx.zeros((batch_size, 0), dtype=mx.int32)
-            )
-            actor_lp_resp = (
-                mx.stack(log_probs, axis=1)
-                if log_probs
-                else mx.zeros((batch_size, 0), dtype=mx.float32)
-            )
+            # Check for EOS tokens
+            if tokenizer.eos_token_id is not None:
+                ended = mx.logical_or(ended, next_token == tokenizer.eos_token_id)
 
-            return responses_mx, actor_lp_resp
-        else:
-            logging.warning("mlx-lm not available. Using mock generation.")
-            batch_size = prompts.shape[0]
-            mock_responses = mx.full(
-                (batch_size, max_tokens // 2), tokenizer.eos_token_id, dtype=mx.int32
-            )
-            mock_log_probs = mx.zeros((batch_size, max_tokens // 2), dtype=mx.float32)
-            return mock_responses, mock_log_probs
+            # Early stopping if all sequences have ended
+            if mx.all(ended).item():
+                break
+
+            # Forward pass for next iteration
+            logits = model(next_token[:, None], cache=model_cache)
+            if isinstance(logits, tuple):
+                logits = logits[0]
+            logits = logits[:, -1, :].astype(mx.float32)
+
+        # Stack results
+        responses_mx = (
+            mx.stack(generated_tokens, axis=1)
+            if generated_tokens
+            else mx.zeros((batch_size, 0), dtype=mx.int32)
+        )
+        actor_lp_resp = (
+            mx.stack(log_probs, axis=1)
+            if log_probs
+            else mx.zeros((batch_size, 0), dtype=mx.float32)
+        )
+
+        return responses_mx, actor_lp_resp
 
     def get_logprobs_for_sequence(
         self, model: nn.Module, prompts: mx.array, responses: mx.array
     ) -> mx.array:
         """
         Calculates the log probabilities of a given response sequence conditioned on a prompt.
+        This is used for computing reference log-probs in GRPO training.
+
+        Args:
+            model: The model to use for computing log probs
+            prompts: Input token IDs of shape (batch_size, prompt_length)
+            responses: Generated token IDs of shape (batch_size, response_length)
+
+        Returns:
+            Log probabilities of shape (batch_size, response_length)
         """
         if responses.shape[1] == 0:
             return mx.zeros((prompts.shape[0], 0), dtype=mx.float32)
 
+        # Concatenate prompt and response
         full_sequence = mx.concatenate([prompts, responses], axis=1)
 
-        # Get logits for the entire sequence. The model returns logits for the *next* token prediction.
-        out = model(full_sequence.astype(mx.int64), cache=None)
-        logits = (out[0] if isinstance(out, tuple) else out).astype(mx.float32)
+        # Forward pass through model
+        out = model(full_sequence, cache=None)
 
-        # We need the logits that were used to predict the tokens in the `responses` part.
-        # These are the logits from the end of the prompt up to the second-to-last token of the full sequence.
+        # Handle both tuple output and direct logits
+        if isinstance(out, tuple):
+            logits = out[0]
+        else:
+            logits = out
+
+        logits = logits.astype(mx.float32)
+
+        # Get logits that predict the response tokens
+        # These are the logits from position (prompt_length - 1) to (total_length - 2)
         logits_for_responses = logits[:, prompts.shape[1] - 1 : -1, :]
 
-        # Check for shape mismatch before proceeding
+        # Validate shapes
         if logits_for_responses.shape[1] != responses.shape[1]:
             logging.error(
                 f"Shape mismatch in get_logprobs_for_sequence: "
-                f"logits_for_responses shape {logits_for_responses.shape} != responses shape {responses.shape}. "
-                f"This can happen if max_gen_len is too short. Returning zeros."
+                f"logits shape {logits_for_responses.shape} vs responses shape {responses.shape}. "
+                f"Prompt length: {prompts.shape[1]}, Response length: {responses.shape[1]}, "
+                f"Full sequence length: {full_sequence.shape[1]}, Logits length: {logits.shape[1]}. "
+                f"This may indicate max_tokens is too short. Returning zeros."
             )
             return mx.zeros_like(responses, dtype=mx.float32)
 
-        # FIX: Apply log_softmax to the logits to get log probabilities.
+        # Compute log probabilities
         log_probs_all = nn.log_softmax(logits_for_responses, axis=-1)
 
-        # Gather the log probabilities of the actual response tokens that were generated.
+        # Gather log probs for actual response tokens
         response_log_probs = mx.take_along_axis(
-            log_probs_all, responses[..., None].astype(mx.int64), axis=-1
+            log_probs_all, responses[..., None], axis=-1
         ).squeeze(-1)
 
         return response_log_probs.astype(mx.float32)

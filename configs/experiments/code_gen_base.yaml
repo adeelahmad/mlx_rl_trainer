@@ -8,7 +8,7 @@
 trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_001"
-  num_training_steps: 1000
+  num_training_steps: 10000
   learning_rate: 2.0e-6
   ppo_batch_size: 2 # Number of unique prompts per micro-batch
   num_rollout_samples: 2 # Number of responses to generate per prompt
