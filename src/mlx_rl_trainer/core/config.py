@@ -181,7 +181,7 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        10, description="Save a full checkpoint every N training updates."
+        25, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         3, description="Number of most recent checkpoints to retain."
@@ -193,7 +193,7 @@ class CheckpointConfig(BaseModel):
 
 class MonitoringConfig(BaseModel):
     use_wandb: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
-    wandb_project: Optional[str] = Field("mlx-grpo", description="W&B project name.")
+    wandb_project: Optional[str] = Field("mlx-grpo-qwen3-new", description="W&B project name.")
     wandb_entity: Optional[str] = Field(
         None, description="Your W&B entity (username or team name)."
     )
@@ -218,8 +218,8 @@ class GenerationConfig(BaseModel):
     # Tags & Format
     think_start_tag: str = Field("<think>")
     think_end_tag: str = Field("</think>")
-    answer_start_tag: str = Field("<answer>")
-    answer_end_tag: str = Field("</answer>")
+    answer_start_tag: str = Field(")
+    answer_end_tag: str = Field("")
 
     # Sampling parameters
     think_boost_tokens: int = Field(32)
@@ -228,7 +228,7 @@ class GenerationConfig(BaseModel):
     sampling_top_p: NonNegativeFloat = Field(0.7)
     sampling_min_p: NonNegativeFloat = Field(0.02)
     sampling_top_k: int = Field(20)
-    repetition_penalty: Optional[float] = Field(1.15)
+    repetition_penalty: Optional[float] = Field(1.4)
     repetition_context_size: Optional[int] = Field(20)
 
     # Dynamic Bias Controls (from BEFORE_STATE)
@@ -255,15 +255,13 @@ class GenerationConfig(BaseModel):
     # Verbosity Biasing for Rollouts
     ban_phrases_for_bias: List[str] = Field(
         default_factory=lambda: [
-            "I think the answer",
-            "I believe that",
             "Confused",
             "stuck",
             "frustrated",
         ]
     )
     encourage_phrases_for_bias: List[str] = Field(
-        default_factory=lambda: ["chk", "calc", "∴", "w/"]
+        default_factory=lambda: []
     )
     encourage_think_bias: float = Field(4.5)
     ban_think_bias: float = Field(-3.0)
@@ -365,7 +363,15 @@ class ExperimentConfig(BaseModel):
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
 
     max_kv_size: PositiveInt = Field(1536)
-    system_prompt: str = Field(THINK_STYLE_PROMPT_LITERAL)
+    system_prompt: |
+      You are ReasonableQwen3 . Always respond in this format:
+
+      <think>
+      [Your compressed reasoning - use abbreviated notation]
+      </think>
+      [Your final answer - clear and direct]
+
+      CRITICAL: You MUST include <think></think> tags, then provide answer directly after.
 
     use_paged_kv_cache: bool = Field(True)
     kv_cache_block_size: PositiveInt = Field(16)

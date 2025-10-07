@@ -1,50 +1,54 @@
-# file_path: mlx_rl_trainer/configs/experiments/code_gen_base.yaml
-# revision_no = 002
-# goals_of_writing_code_block: Define a Pydantic-validated configuration for a code generation RL training task, adding num_rollout_samples.
-# type_of_code_response: change existing
 # Production-ready configuration for a code generation task using GRPO.
 # This file is validated against the pydantic schemas in src/mlx_rl_trainer/core/config.py.
 
 trainer:
   algorithm: "grpo"
-  output_dir: "./outputs/code_gen_run_001"
-  num_training_steps: 1000
-  learning_rate: 2.0e-6
-  ppo_batch_size: 1 # Number of unique prompts per micro-batch
-  num_rollout_samples: 3 # Number of responses to generate per prompt
-  grad_accum_steps: 2
-  save_every: 10
-  eval_every: 50
-  grpo_beta: 0.05
-  seed: 42
+  output_dir: "./outputs/code_gen_run_002"
+  num_training_steps: 10000
+  learning_rate: 2e-6 # CORRECTED: Lowered to a safe value for fine-tuning.
+  ppo_batch_size: 1
+  num_rollout_samples: 3
+  grad_accum_steps: 1
+  # CORRECTED: Increased beta to prevent model collapse.
+  grpo_beta: 0.1
+  seed: 429
 
 model:
-  model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
-  ref_model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
+  model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
+  ref_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   use_lora: false
   lora_rank: 16
 
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl" # "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
-  val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl" # "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
+  val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 512
-  max_gen_len: 384
+  max_gen_len: 246
   loader_type: "jsonl"
   shuffle_data: true
-  system_prompt: ""
+
+# The system_prompt from your ExperimentConfig will be used automatically by the trainer.
+# You don't need to specify it here unless you want to override the default.
 
 rewards:
-  - name: "code_execution"
-    weight: 0.80
-    config:
-      timeout: 3 # seconds
-  - name: "semantic_similarity"
+  - name: "format_structure" # ADDED: A dedicated reward for getting the format right.
     weight: 0.20
+    config: {}
+  - name: "code_execution"
+    weight: 0.20 # ADJUSTED
+    config:
+      timeout: 3
+  - name: "semantic_similarity"
+    weight: 0.60 # ADJUSTED
     config:
       method: "jaccard"
 
 evaluation:
   - name: "human_eval"
     config:
-      k_values: [1, 2] # Calculate pass@1 and pass@2
-      num_samples: 10 # Number of problems to evaluate
+      k_values: [1, 2]
+      num_samples: 10
+
+monitoring:
+  log_samples_every: 1 # Log samples at every update step to debug easily.
+  max_logged_samples: 50 # Log a few samples to see the outputs.
