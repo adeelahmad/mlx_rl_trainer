@@ -6,7 +6,7 @@ from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.utils import build_schedule
 from mlx_lm.utils import load_config as mlx_lm_load_config
 
-from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics
+from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics
 from mlx_rl_trainer.utils.mlx_utils import (
     _maybe_clip_grad_norm,
     mask_grads_to_layer_band,
@@ -52,14 +52,14 @@ class GRPOTrainer(BaseTrainer):
     def generate_rollouts(
         self, batch_data: Dict[str, Any], update_step: int
     ) -> Tuple[Dict, float, Dict]:
-        # Fix #4: is_invalid_batch is derived locally from batch_data
-        is_invalid_batch = any(batch_data.get("is_invalid_sample", []))
+        prompts_data = batch_data.get("prompts_data", [])
+        is_invalid_batch = any(p.get("is_invalid_sample", False) for p in prompts_data)
 
         return generate_rollouts_for_batch(
             model=self.actor_model,
             ref_model=self.ref_model,
             tokenizer=self.tokenizer,
-            prompts_data=batch_data,
+            prompts_data=prompts_data,
             dataset=self.data_manager._train_dataset,
             config=self.config,
             reward_composer=self.reward_composer,
@@ -72,7 +72,6 @@ class GRPOTrainer(BaseTrainer):
     def train_step(
         self, rollout_batch: Dict[str, mx.array], update_step: int
     ) -> Tuple[TrainingMetrics, Dict[str, mx.array]]:
-        # Fix #5: Added update_step parameter
         start_time = time.time()
 
         loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(
@@ -84,7 +83,6 @@ class GRPOTrainer(BaseTrainer):
             lambda g: g / self.config.trainer.grad_accum_steps, grads
         )
 
-        # Fix #6 & #10: Return TrainingMetrics object and gradients
         metrics_obj = TrainingMetrics(
             loss=loss.item(),
             reward_mean=rollout_batch["advantages"].mean().item(),

@@ -4,6 +4,7 @@ from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import register_reward
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.utils.text_utils import extract_think_region
+from mlx_rl_trainer.core.config import GenerationConfig
 
 
 @register_reward("thinking_quality")
@@ -24,11 +25,9 @@ class ThinkingQualityReward(BaseReward):
         """
         Computes the thinking quality reward.
         """
-        from mlx_rl_trainer.utils.text_utils import _get_static_reward_config
+        gen_config = GenerationConfig()
 
-        reward_config = _get_static_reward_config()
-
-        think_content = extract_think_region(context.generated_text, reward_config)
+        think_content = extract_think_region(context.generated_text, gen_config)
         if not think_content:
             return 0.0
 

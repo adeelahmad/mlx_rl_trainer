@@ -11,11 +11,9 @@ import logging
 from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.context import RewardContext
-from mlx_rl_trainer.core.config import RewardConfig
-from mlx_rl_trainer.utils.text_utils import (
-    _extract_predicted_letters,
-    _letters_to_canonical,
-)  # FIX: Import from text_utils
+from mlx_rl_trainer.core.config import GenerationConfig
+from mlx_rl_trainer.utils.mcq_utils import _extract_predicted_letters
+from mlx_rl_trainer.utils.text_utils import _letters_to_canonical
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +44,15 @@ class MCQAccuracyReward(BaseReward):
 
         gold_set = set(correct_letters.split(","))
 
-        # Dynamically create RewardConfig for extraction utility
-        reward_cfg_for_extraction = RewardConfig(name="temp", config=self.config)
+        # Dynamically create GenerationConfig for extraction utility
+        gen_config = GenerationConfig()
 
-        predicted_letters_list = _extract_predicted_letters(
+        predicted_letters = _extract_predicted_letters(
             context.generated_text,
             metadata.get("mcq_options"),
-            reward_cfg_for_extraction,
+            gen_config,
         )
-        predicted_set = set(predicted_letters_list)
+        predicted_set = set(predicted_letters.split(",")) if predicted_letters else set()
 
         if not predicted_set:
             return 0.0

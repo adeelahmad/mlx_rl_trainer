@@ -7,6 +7,7 @@
 import sys
 import logging
 from pathlib import Path
+import json
 import argparse
 import uuid
 import mlx.core as mx

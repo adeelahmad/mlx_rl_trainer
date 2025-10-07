@@ -5,7 +5,7 @@ import logging
 from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.context import RewardContext
-from mlx_rl_trainer.core.config import RewardConfig
+from mlx_rl_trainer.core.config import GenerationConfig
 from mlx_rl_trainer.utils.text_utils import extract_think_region, extract_answer_region
 
 logger = logging.getLogger(__name__)
@@ -26,21 +26,21 @@ class TagStructureReward(BaseReward):
         Computes the format structure reward for the generated text.
         """
         generated = context.generated_text
-        reward_config = RewardConfig(**self.config)
+        gen_config = GenerationConfig()
 
         th_s = len(
             re.findall(
-                re.escape(reward_config.think_start_tag), generated or "", flags=re.I
+                re.escape(gen_config.think_start_tag), generated or "", flags=re.I
             )
         )
         th_e = len(
             re.findall(
-                re.escape(reward_config.think_end_tag), generated or "", flags=re.I
+                re.escape(gen_config.think_end_tag), generated or "", flags=re.I
             )
         )
 
-        think = extract_think_region(generated, reward_config)
-        ans = extract_answer_region(generated, reward_config)
+        think = extract_think_region(generated, gen_config)
+        ans = extract_answer_region(generated, gen_config)
 
         if th_s == 1 and th_e == 1:
             if len(think) > 10 and len(ans) > 10:

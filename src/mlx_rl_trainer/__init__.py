@@ -24,7 +24,6 @@ from mlx_rl_trainer.core.config import (
     MonitoringConfig,
 )
 from mlx_rl_trainer.core.model_manager import ModelManager
-from mlx_rl_trainer.data.dataset_manager import DatasetManager
 from mlx_rl_trainer.core.checkpoint_manager import CheckpointManager
 from mlx_rl_trainer.rewards.registry import RewardRegistry, register_reward
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
@@ -51,7 +50,6 @@ __all__ = [
     "CheckpointConfig",
     "MonitoringConfig",
     "ModelManager",
-    "DatasetManager",
     "CheckpointManager",
     "RewardRegistry",
     "register_reward",

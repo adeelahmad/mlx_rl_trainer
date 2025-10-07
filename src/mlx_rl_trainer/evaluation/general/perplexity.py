@@ -8,6 +8,7 @@ import logging
 import random
 import mlx.core as mx
 import mlx.nn as nn  # For cross_entropy
+import numpy as np
 from typing import Dict, Any, List
 from datasets import Dataset
 from mlx_lm.tokenizer_utils import TokenizerWrapper

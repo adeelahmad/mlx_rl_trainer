@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from datasets import Dataset
 import mlx.core as mx
 
-from mlx_rl_trainer.core.config import ExperimentConfig
+from mlx_rl_trainer.core.config import DataConfig
 from mlx_rl_trainer.utils.text_utils import (
     _mcq_meta_from_sample,
     apply_chat_template_wrapper,
@@ -45,11 +45,12 @@ def build_rollout_batch(
     tokenizer: TokenizerWrapper,
     dataset: Dataset,
     indices: List[int],
-    config: ExperimentConfig,
+    config: DataConfig,
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
     prompts_data: List[Dict[str, Any]] = []
     max_len_in_batch = 0
     pad_id = tokenizer.pad_token_id
+    system_prompt = getattr(config, 'system_prompt', '')
 
     for i in indices:
         try:
@@ -65,12 +66,12 @@ def build_rollout_batch(
             )
 
             formatted_prompt = apply_chat_template_wrapper(
-                tokenizer, prompt_text, config.system_prompt
+                tokenizer, prompt_text, system_prompt
             )
             p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
-            if len(p_tokens) > config.data.max_prompt_len:
-                p_tokens = p_tokens[-config.data.max_prompt_len :]
+            if len(p_tokens) > config.max_prompt_len:
+                p_tokens = p_tokens[-config.max_prompt_len :]
             if not p_tokens:
                 logger.warning(f"Skipping empty prompt (idx {i}).")
                 continue

@@ -8,7 +8,7 @@ import mlx.core as mx
 from datasets import Dataset, load_dataset
 from tqdm.auto import tqdm
 from ..core.config import DataConfig, THINK_STYLE_PROMPT_LITERAL
-from ..core.trainer import DataLoadError, TrainingRuntimeError
+from ..core.exceptions import DataLoadError, TrainingRuntimeError
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_rl_trainer.utils.text_utils import (
     _contains_keywords,
@@ -46,7 +46,6 @@ def _normalize_record(
         obj.get(completion_key, obj.get("completion", obj.get("response", "")))
     )
 
-    # Fix #1: Ensure test_cases is always a list
     test_cases = obj.get("test_cases", [])
     if not isinstance(test_cases, list):
         test_cases = [test_cases] if test_cases else []
@@ -119,9 +118,8 @@ class DatasetManager:
             if path.suffix.lower() in [".jsonl", ".ndjson"]:
                 return await self._async_read_jsonl(path)
             elif path.suffix.lower() == ".json":
-                return json.loads(
-                    await aiofiles.open(path, "r", encoding="utf-8").read()
-                )
+                content = await aiofiles.open(path, "r", encoding="utf-8").read()
+                return json.loads(content)
             else:
                 hf_split = getattr(
                     self.config, f"dataset_{split_name}_split", split_name
@@ -185,61 +183,9 @@ class DatasetManager:
 
         return Dataset.from_list(normalized_records)
 
-    def _prepare_batch(self, raw_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if self.tokenizer is None:
-            raise TrainingRuntimeError(
-                "Tokenizer must be set before preparing batches."
-            )
-
-        prepared_batch = {
-            "tokens": [],
-            "text": [],
-            "ref_answer_str": [],
-            "ref_think_str": [],
-            "is_invalid_sample": [],
-            "is_mcq": [],
-            "mcq_options": [],
-            "mcq_correct_letters": [],
-            "mcq_multi_select": [],
-            "meta": [],
-            "raw_test_cases": [],
-        }
-
-        for record in raw_batch:
-            formatted_prompt = apply_chat_template_wrapper(
-                self.tokenizer,
-                record["prompt"],
-                record.get("system", self.system_prompt),
-            )
-            encoded_ids = self.tokenizer.encode(
-                formatted_prompt, add_special_tokens=True
-            )
-            if len(encoded_ids) > self.config.max_prompt_len:
-                encoded_ids = encoded_ids[-self.config.max_prompt_len :]
-
-            prepared_batch["tokens"].append(mx.array(encoded_ids, dtype=mx.int32))
-            prepared_batch["text"].append(formatted_prompt)
-            prepared_batch["ref_answer_str"].append(record["completion"])
-            prepared_batch["ref_think_str"].append(
-                ""
-            )  # This should be derived from completion if needed
-            prepared_batch["is_invalid_sample"].append(
-                record.get("is_invalid_sample", False)
-            )
-
-            meta = record.get("meta", {})
-            prepared_batch["is_mcq"].append(meta.get("is_mcq", False))
-            prepared_batch["mcq_options"].append(meta.get("mcq_options", []))
-            prepared_batch["mcq_correct_letters"].append(
-                meta.get("mcq_correct_letters", "")
-            )
-            prepared_batch["mcq_multi_select"].append(
-                meta.get("mcq_multi_select", False)
-            )
-            prepared_batch["raw_test_cases"].append(record.get("test_cases", []))
-            prepared_batch["meta"].append(meta)  # Full meta for context
-
-        return prepared_batch
+    @property
+    def tokenizer(self):
+        return self._tokenizer
 
     def get_dataloader(self, split: str, batch_size: int) -> Iterator[Dict[str, Any]]:
         dataset = self._train_dataset if split == "train" else self._val_dataset
@@ -256,7 +202,12 @@ class DatasetManager:
                 raw_batch_list = dataset.select(batch_indices).to_list()
                 if raw_batch_list:
                     try:
-                        yield self._prepare_batch(raw_batch_list)
+                        from mlx_rl_trainer.data.batch_builder import build_rollout_batch
+                        prompts_data, prompts_mx, _ = build_rollout_batch(
+                            self._tokenizer, dataset, batch_indices, self.config
+                        )
+                        if prompts_mx.size > 0:
+                            yield {"prompts_data": prompts_data}
                     except Exception as e:
                         logger.error(
                             f"Error preparing batch {i//batch_size}: {e}. Skipping batch.",
