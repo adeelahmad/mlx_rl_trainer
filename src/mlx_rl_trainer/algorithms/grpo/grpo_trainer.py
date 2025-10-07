@@ -17,7 +17,7 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 from rich import print as rprint
-
+import gc
 from mlx_lm.tuner.utils import build_schedule
 from mlx_lm.models import cache
 from mlx_lm.sample_utils import make_logits_processors
@@ -180,28 +180,25 @@ class GRPOTrainer(BaseTrainer):
     def generate_rollouts(
         self, batch_prompts_data: List[Dict[str, Any]], update_step: int
     ) -> Tuple[Dict[str, mx.array], float, Dict[str, float]]:
-        if not all([self.actor_model, self.tokenizer, self.ref_model]):
+        """
+        Generates rollouts using the actor model and computes rewards.
+        """
+        if self.actor_model is None or self.tokenizer is None or self.ref_model is None:
             raise TrainingRuntimeError(
                 "Models or tokenizer not initialized for rollout generation."
             )
 
         prompts_list_of_arrays = [sample["input_ids"] for sample in batch_prompts_data]
         if not prompts_list_of_arrays:
-            return {}, 0.0, {}
+            return {}, 0.0, {"raw_format": 0.0, "raw_content_combined": 0.0}
 
         max_prompt_len_mb = max(arr.shape[0] for arr in prompts_list_of_arrays)
         padded_prompts_mx = mx.array(
             [
-                mx.concatenate(
-                    [
-                        arr,
-                        mx.full(
-                            (max_prompt_len_mb - arr.shape[0],),
-                            self.tokenizer.pad_token_id,
-                            dtype=mx.int32,
-                        ),
-                    ],
-                    axis=0,
+                mx.pad(
+                    arr,
+                    (0, max_prompt_len_mb - arr.shape[0]),
+                    constant_values=self.tokenizer.pad_token_id,
                 )
                 for arr in prompts_list_of_arrays
             ],
@@ -215,8 +212,11 @@ class GRPOTrainer(BaseTrainer):
         )
 
         self.actor_model.eval()
+        max_kv_capacity = self.config.max_kv_size or (
+            max_prompt_len_mb + self.config.data.max_gen_len
+        )
         model_caches = cache.make_prompt_cache(
-            self.actor_model, max_kv_size=self.config.max_kv_size
+            self.actor_model, max_kv_size=max_kv_capacity
         )
 
         attn_mask = _create_4d_attention_mask(
@@ -235,7 +235,7 @@ class GRPOTrainer(BaseTrainer):
             repetition_context_size=self.config.generation.repetition_context_size,
         )
         mcq_flags_repeated = [
-            p["is_mcq"]
+            p.get("is_mcq", False)
             for p in batch_prompts_data
             for _ in range(num_samples_per_prompt)
         ]
@@ -243,41 +243,58 @@ class GRPOTrainer(BaseTrainer):
             self.tokenizer, self.config, mcq_flags_repeated
         )
 
-        think_temp = self.config.generation.temperature
-        answer_temp = self.config.generation.temperature
+        think_temp = self.config.trainer.think_temperature
+        answer_temp = self.config.trainer.answer_temperature
 
         hist_tokens_py = [list(row) for row in prompts_rep.tolist()]
         responses_tok_list, actor_lp_cached_list = [], []
         ended = mx.full((total_samples,), False, dtype=mx.bool_)
         curr_tok = None
 
+        # Generation Loop
         for step in range(self.config.data.max_gen_len):
             if mx.all(ended).item():
                 break
 
-            logits_to_process = (
-                next_logits
-                if step == 0
-                else self.actor_model(
+            if step == 0:
+                logits_to_process = next_logits
+            else:
+                out = self.actor_model(
                     curr_tok[:, None].astype(mx.int64), cache=model_caches
-                )[0][:, -1, :].astype(mx.float32)
-            )
-            for f in rep_processors:
-                logits_to_process = f(hist_tokens_py, logits_to_process)
+                )
+                logits_to_process = (out[0] if isinstance(out, tuple) else out)[
+                    :, -1, :
+                ].astype(mx.float32)
+
+            # FIX: Apply logit processors sample by sample, as they are not batched.
+            processed_logits_list = []
+            for i in range(total_samples):
+                # We can't apply rep_processors and dynamic_bias_processor in a batched way.
+                # dynamic_bias_processor IS vectorized, but rep_processors is not.
+                # So we must loop.
+                temp_logits = logits_to_process[i : i + 1, :]
+                for f in rep_processors:
+                    temp_logits = f(hist_tokens_py[i], temp_logits)
+                processed_logits_list.append(temp_logits)
+
+            # Re-assemble the batch of logits
+            logits_to_process = mx.concatenate(processed_logits_list, axis=0)
+
+            # The dynamic_bias_processor IS vectorized, so it can be called on the full batch.
             logits_to_process = dynamic_bias_processor(
                 hist_tokens_py, logits_to_process
             )
 
-            sampler = safe_make_sampler(
-                self.config,
-                temp=think_temp
+            current_temp = (
+                think_temp
                 if step < self.config.trainer.min_think_tokens
-                else answer_temp,
+                else answer_temp
             )
+            sampler = safe_make_sampler(self.config, temp=current_temp)
             sampled_tok = sampler(logits_to_process)
 
             lp_step_selected = mx.take_along_axis(
-                mx.log_softmax(logits_to_process.astype(mx.float32), axis=-1),
+                nn.log_softmax(logits_to_process.astype(mx.float32), axis=-1),
                 sampled_tok[..., None],
                 axis=-1,
             ).squeeze(-1)
@@ -295,7 +312,7 @@ class GRPOTrainer(BaseTrainer):
 
             responses_tok_list.append(token_to_add[:, None])
             actor_lp_cached_list.append(logprob_to_add[:, None])
-            curr_tok = sampled_tok
+            curr_tok = token_to_add  # Use the padded token for the next step's input
 
             for i in range(total_samples):
                 if not ended_prev[i].item():
@@ -343,12 +360,17 @@ class GRPOTrainer(BaseTrainer):
             rewards_dict = self.reward_composer.compute(context)
             rewards_total.append(rewards_dict.get("total", 0.0))
             rewards_fmt.append(rewards_dict.get("TagStructureReward", 0.0))
-            rewards_cont.append(rewards_dict.get("CodeExecutionReward", 0.0))
+            rewards_cont.append(
+                rewards_dict.get(
+                    "CodeExecutionReward",
+                    rewards_dict.get("SemanticSimilarityReward", 0.0),
+                )
+            )
 
             if mcq_flags_repeated[i]:
                 gen_letters = _extract_predicted_letters(
                     coerced_responses[i],
-                    original_data.get("meta", {}).get("mcq_options"),
+                    original_data.get("meta", {}).get("options", []),
                     self.config.rewards[0],
                 )
                 mcq_gen_letters_all_list.append(",".join(gen_letters))
@@ -383,8 +405,8 @@ class GRPOTrainer(BaseTrainer):
             rollout_data_for_loss,
             avg_reward,
             {
-                "raw_format": np.mean(rewards_fmt),
-                "raw_content_combined": np.mean(rewards_cont),
+                "raw_format": np.mean(rewards_fmt) if rewards_fmt else 0.0,
+                "raw_content_combined": np.mean(rewards_cont) if rewards_cont else 0.0,
             },
         )
 

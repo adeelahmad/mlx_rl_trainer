@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional, List, Tuple, Callable
 import logging
 import mlx.core as mx
 import mlx.nn as nn
+import gc
+
 from .config import ExperimentConfig  # Use new ExperimentConfig
 
 

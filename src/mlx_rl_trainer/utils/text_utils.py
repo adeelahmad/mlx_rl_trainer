@@ -500,9 +500,43 @@ import json
 from typing import List, Sequence, Dict, Any, Union
 
 
+_TOOL_LIKE_MARKERS = (
+    "<tool_call",
+    "</tool_call",
+    "<tool>",
+    "</tool>",
+    "<tool_",
+    "<function",
+    "</function",
+    "<json",
+    "</json",
+    "<scratchpad",
+    "</scratchpad",
+)
+
+_SPECIAL_PAT = re.compile(
+    r"(?:<\|im_end\|>|<\|im_start\|>|<\|endoftext\|>|</?tool[^>]*>|</?function[^>]*>|</?json[^>]*>|</?scratchpad[^>]*>)",
+    re.I,
+)
+
+
 def _strip_specials(s: str) -> str:
-    """Remove special unwanted characters from text."""
-    return s.strip()
+    return _SPECIAL_PAT.sub("", s)
+
+
+def _first_token_ids_for_lexemes(
+    tokenizer: TokenizerWrapper, lexemes: Sequence[str]
+) -> List[int]:
+    """Collect first-token ids for each lexeme and its space-prefixed variant."""
+    ids: List[int] = []
+    for lx in lexemes:
+        t = tokenizer.encode(lx, add_special_tokens=False)
+        if len(t) >= 1 and int(t[0]) not in ids:
+            ids.append(int(t[0]))
+        t = tokenizer.encode(" " + lx, add_special_tokens=False)
+        if len(t) >= 1 and int(t[0]) not in ids:
+            ids.append(int(t[0]))
+    return ids
 
 
 class TwoBlockFormatter:

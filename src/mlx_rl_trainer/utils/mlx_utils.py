@@ -1,6 +1,6 @@
 # file_path: mlx_rl_trainer/src/mlx_rl_trainer/utils/mlx_utils.py
-# revision_no: 003
-# goals_of_writing_code_block: Integrate definitions for _first_token_ids_for_lexemes and _mask_after_answer to resolve ImportErrors across the utility chain.
+# revision_no: 004
+# goals_of_writing_code_block: Correct the TypeError in the `make_dynamic_tag_bias_processor` by using `mx.logical_*` functions for boolean array operations instead of Python's bitwise operators.
 # type_of_code_response: change existing
 """MLX-specific utility functions."""
 
@@ -35,7 +35,6 @@ LETTER_ALPH = string.ascii_uppercase
 
 # --- MLX-Specific Errors and Recovery (Unchanged) ---
 def _is_metal_internal_error(err: BaseException) -> bool:
-    """Checks if an exception string indicates a recoverable Metal internal error."""
     s = str(err)
     return (
         "Command buffer execution failed" in s
@@ -45,7 +44,6 @@ def _is_metal_internal_error(err: BaseException) -> bool:
 
 
 def metal_recover(stage: str):
-    """Attempts to recover the Metal device state after a crash."""
     logger.warning(f"[METAL] Recovering after error at stage: {stage}")
     try:
         mx.synchronize()
@@ -58,7 +56,6 @@ def metal_recover(stage: str):
 def metal_safe_apply_gradients(
     optimizer: optim.Optimizer, grads: Dict[str, mx.array], params: Dict[str, mx.array]
 ):
-    """Wrapper for optimizer.apply_gradients to catch and recover from Metal errors."""
     try:
         return optimizer.apply_gradients(grads, params)
     except Exception as e:
@@ -77,7 +74,6 @@ _HEAD_PAT = re.compile(r"\blm_head\b", re.I)
 
 
 def _find_layer_index(name: str) -> Optional[int]:
-    """Extracts the layer index from a parameter name (e.g., 'layers.12.attn.q_proj')."""
     m = _LAYER_PAT.search(name)
     if m:
         return int(m.group(1))
@@ -97,7 +93,6 @@ def _band_for_name(
     mid_band: Tuple[int, int],
     top_band: Tuple[int, int],
 ) -> str:
-    """Determines which band (low, mid, top, head, other) a parameter belongs to."""
     li = _find_layer_index(name)
 
     def _in_range(li: int, band_range: Optional[Tuple[int, int]]) -> bool:
@@ -126,10 +121,6 @@ def scale_grads_by_band(
     params_tree: Dict[str, mx.array],
     config: ExperimentConfig,
 ) -> Dict[str, mx.array]:
-    """Applies gradient multipliers based on layer index bands defined in ExperimentConfig."""
-    low_band = config.trainer.low_band
-    mid_band = config.trainer.mid_band
-    top_band = config.trainer.top_band
     low_mul = float(config.trainer.low_mul)
     mid_mul = float(config.trainer.mid_mul)
     top_mul = float(config.trainer.top_mul)
@@ -141,7 +132,12 @@ def scale_grads_by_band(
         if not isinstance(g, mx.array):
             out.append((name, g))
             continue
-        band = _band_for_name(name, low_band, mid_band, top_band)
+        band = _band_for_name(
+            name,
+            config.trainer.low_band,
+            config.trainer.mid_band,
+            config.trainer.top_band,
+        )
         mul = {"low": low_mul, "mid": mid_mul, "top": top_mul, "head": head_mul}.get(
             band, other_mul
         )
@@ -158,7 +154,6 @@ def mask_grads_to_layer_band(
     include_head: bool = True,
     include_final_norm: bool = True,
 ) -> Dict[str, mx.array]:
-    """Masks gradients to zero for layers outside the specified range."""
     flat = tree_flatten(grads_tree)
     kept = []
     for name, g in flat:
@@ -168,9 +163,8 @@ def mask_grads_to_layer_band(
         li = _find_layer_index(name)
         keep = False
         if li is not None:
-            in_band = (start is None or li >= start) and (end is None or li <= end)
-            keep = in_band
-        else:  # Non-layer specific params
+            keep = (start is None or li >= start) and (end is None or li <= end)
+        else:
             lname = name.lower()
             if (
                 "embed" in lname
@@ -199,15 +193,15 @@ def mask_grads_to_layer_band(
 def mask_grads_to_specific_layers(
     grads_tree: Dict[str, mx.array], layer_indices: Set[int]
 ) -> Dict[str, mx.array]:
-    """Masks gradients to zero unless they belong to a specific set of layer indices."""
     flat = tree_flatten(grads_tree)
     kept = []
     for name, g in flat:
         if not isinstance(g, mx.array):
             kept.append((name, g))
             continue
-        layer_idx = _find_layer_index(name)
-        if layer_idx is not None and layer_idx in layer_indices:
+        if (
+            layer_idx := _find_layer_index(name)
+        ) is not None and layer_idx in layer_indices:
             kept.append((name, g))
         else:
             kept.append((name, mx.zeros_like(g)))
@@ -220,22 +214,13 @@ def mask_grads_to_specific_layers(
 def _create_4d_attention_mask(
     tokens: mx.array, pad_token_id: int, dtype: mx.Dtype = TARGET_FLOAT_DTYPE
 ) -> mx.array:
-    """Creates a combined causal and padding attention mask (4D shape: B, 1, T, T)."""
     if tokens.ndim != 2:
         raise ValueError(f"tokens must be 2D, got {tokens.shape}")
-    batch_size, seq_len = tokens.shape
-    causal_mask = nn.MultiHeadAttention.create_additive_causal_mask(
-        seq_len, dtype=dtype
-    )
-    padding_mask_2d = tokens == pad_token_id
-    padding_mask_4d_keys = padding_mask_2d[:, None, None, :]
-    neg_inf_val = mx.array(-65504.0 if dtype == mx.bfloat16 else -1e9, dtype=dtype)
-    additive_padding_mask = mx.where(
-        padding_mask_4d_keys,
-        neg_inf_val,
-        mx.zeros((batch_size, 1, 1, seq_len), dtype=dtype),
-    )
-    combined = mx.minimum(causal_mask[None, None, :, :], additive_padding_mask)
+    B, T = tokens.shape
+    causal_mask = nn.MultiHeadAttention.create_additive_causal_mask(T, dtype=dtype)
+    padding_mask = (tokens == pad_token_id)[:, None, None, :]
+    neg_inf = mx.array(-1e9, dtype=dtype)
+    combined = mx.minimum(causal_mask, mx.where(padding_mask, neg_inf, 0.0))
     return combined
 
 
@@ -243,15 +228,20 @@ def _create_4d_attention_mask(
 
 
 def safe_make_sampler(config: ExperimentConfig, temp: float) -> Callable:
-    """Safely creates a sampler function, handling various argument inconsistencies."""
     top_p = float(config.generation.top_p)
-    min_p = float(config.generation.get("min_p", 0.0))
-    top_k = int(config.generation.get("top_k", 0))
+    # Corrected attribute access
+    min_p_val = (
+        getattr(config.generation, "min_p", 0.0)
+        if hasattr(config.generation, "min_p")
+        else 0.0
+    )
+    top_k_val = int(config.generation.top_k)
+
     try:
-        return make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k)
+        return make_sampler(temp=temp, top_p=top_p, min_p=min_p_val, top_k=top_k_val)
     except TypeError:
         try:
-            return make_sampler(temp=temp, top_p=top_p, min_p=min_p)
+            return make_sampler(temp=temp, top_p=top_p, min_p=min_p_val)
         except TypeError:
             return make_sampler(temp=temp, top_p=top_p)
         except Exception as e:
@@ -276,47 +266,38 @@ _TOOL_LIKE_MARKERS = [
 def _first_token_ids_for_lexemes(
     tokenizer: TokenizerWrapper, lexemes: Sequence[str]
 ) -> List[int]:
-    """
-    Finds the token ID for the **first** token of a given list of word sequences (lexemes).
-    Checks both the raw lexeme and the lexeme prefixed with a space.
-    """
     ids: List[int] = []
     for lx in lexemes:
-        # Without leading space
-        t = tokenizer.encode(lx, add_special_tokens=False)
-        if len(t) >= 1 and int(t[0]) not in ids:
-            ids.append(int(t[0]))
-
-        # With leading space
-        t_space = tokenizer.encode(" " + lx, add_special_tokens=False)
-        if len(t_space) >= 1 and int(t_space[0]) not in ids:
-            ids.append(int(t_space[0]))
+        if (t := tokenizer.encode(lx, add_special_tokens=False)) and t[0] not in ids:
+            ids.append(t[0])
+        if (
+            t_space := tokenizer.encode(" " + lx, add_special_tokens=False)
+        ) and t_space[0] not in ids:
+            ids.append(t_space[0])
     return ids
 
 
 def _letter_token_ids(
     tokenizer: TokenizerWrapper, letters: Sequence[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 ) -> Dict[str, List[int]]:
-    """Tries to find token IDs for single letter options (A, B, C, D) and common suffixes."""
     out = {}
     for L in letters:
         cand = []
-        # Attempt 1: Raw letter
-        ids = tokenizer.encode(L, add_special_tokens=False)
-        if len(ids) == 1:
+        if (ids := tokenizer.encode(L, add_special_tokens=False)) and len(ids) == 1:
             cand.append(ids[0])
-
-        # Attempt 2: Space + Letter
-        ids = tokenizer.encode(" " + L, add_special_tokens=False)
-        if len(ids) == 1 and ids[0] not in cand:
+        if (
+            (ids := tokenizer.encode(" " + L, add_special_tokens=False))
+            and len(ids) == 1
+            and ids[0] not in cand
+        ):
             cand.append(ids[0])
-
-        # Attempt 3: Letter + Punctuation
         for suf in [")", ".", " )", " ."]:
-            ids = tokenizer.encode(L + suf, add_special_tokens=False)
-            if len(ids) == 1 and ids[0] not in cand:
+            if (
+                (ids := tokenizer.encode(L + suf, add_special_tokens=False))
+                and len(ids) == 1
+                and ids[0] not in cand
+            ):
                 cand.append(ids[0])
-
         out[L] = cand
     return out
 
@@ -324,8 +305,6 @@ def _letter_token_ids(
 def _resolve_tag_ids(
     tokenizer: TokenizerWrapper, config: ExperimentConfig
 ) -> Dict[str, Optional[int]]:
-    """Helper to convert critical tag strings into their corresponding single token IDs."""
-
     def _one_id(tok_str):
         if not tok_str:
             return None
@@ -335,24 +314,12 @@ def _resolve_tag_ids(
         except Exception:
             return None
 
-    format_reward_config = next(
-        (r for r in config.rewards if r.name == "format_structure"), None
-    )
-    if format_reward_config:
-        # Note: Using attribute names from RewardConfig pydantic definition if available, falling back to literals
-        think_start_tag = getattr(format_reward_config, "think_start_tag", "<think>")
-        think_end_tag = getattr(format_reward_config, "think_end_tag", "</think>")
-        answer_start_tag = getattr(format_reward_config, "answer_start_tag", "<answer>")
-        answer_end_tag = getattr(format_reward_config, "answer_end_tag", "</answer>")
-    else:
-        think_start_tag, think_end_tag = "<think>", "</think>"
-        answer_start_tag, answer_end_tag = "<answer>", "</answer>"
-
+    tags = config.generation
     return {
-        "think_start": _one_id(think_start_tag),
-        "think_end": _one_id(think_end_tag),
-        "answer_start": _one_id(answer_start_tag),
-        "answer_end": _one_id(answer_end_tag),
+        "think_start": _one_id(tags.think_start_tag),
+        "think_end": _one_id(tags.think_end_tag),
+        "answer_start": _one_id(tags.answer_start_tag),
+        "answer_end": _one_id(tags.answer_end_tag),
         "eos": tokenizer.eos_token_id,
     }
 
@@ -369,11 +336,11 @@ def make_dynamic_tag_bias_processor(
     letter_map = _letter_token_ids(tokenizer, letters=LETTER_ALPH)
     mcq_letter_ids = sorted(set(sum(letter_map.values(), [])))
 
-    ban_ids = _first_token_ids_for_lexemes(
-        tokenizer, config.trainer.ban_phrases_for_bias
-    )
+    # Use GenerationConfig for these parameters
+    gen_cfg = config.generation
+    ban_ids = _first_token_ids_for_lexemes(tokenizer, gen_cfg.ban_phrases_for_bias)
     encourage_ids = _first_token_ids_for_lexemes(
-        tokenizer, config.trainer.encourage_phrases_for_bias
+        tokenizer, gen_cfg.encourage_phrases_for_bias
     )
     tool_ids = _first_token_ids_for_lexemes(tokenizer, _TOOL_LIKE_MARKERS)
 
@@ -382,25 +349,25 @@ def make_dynamic_tag_bias_processor(
         for k in ("think_end", "think_start", "answer_start", "answer_end", "eos")
     )
 
-    B_CLOSE = config.trainer.bias_close_think
-    B_AS = config.trainer.bias_answer_start
-    P_REOPEN_THINK = config.trainer.punish_reopen_think
-    P_EXTRA_TE = config.trainer.punish_extra_think_end
-    P_REOPEN_ANS = config.trainer.punish_reopen_answer
-    B_EOS_ANS = config.trainer.bias_eos_after_answer
-    MIN_ANS = config.trainer.min_answer_tokens
-    MIN_ANS_MCQ = config.trainer.min_answer_tokens_mcq
-    HARD_MASK = config.trainer.hard_mask_mcq_first_token
-    LIFT_MCQ = config.trainer.mcq_letter_lift
-    BAN_MCQ = config.trainer.mcq_ban_first_bias
-    BAN_NONMCQ = config.trainer.nonmcq_ban_first_bias
-    MCQ_CLOSE_K = config.trainer.mcq_close_after_k
-    B_MCQ_CLOSE = config.trainer.mcq_answer_end_bias
-    MIN_THINK = config.trainer.min_think_tokens
-    B_END_EARLY = config.trainer.think_end_early_bias
-    B_AS_MIN_THINK = config.trainer.bias_answer_start_after_min_think
-    B_ENCOURAGE = config.trainer.encourage_think_bias
-    P_TOOL = config.trainer.tool_call_penalty * -100
+    B_CLOSE = gen_cfg.bias_close_think
+    B_AS = gen_cfg.bias_answer_start
+    P_REOPEN_THINK = gen_cfg.punish_reopen_think
+    P_EXTRA_TE = gen_cfg.punish_extra_think_end
+    P_REOPEN_ANS = gen_cfg.punish_reopen_answer
+    B_EOS_ANS = gen_cfg.bias_eos_after_answer
+    MIN_ANS = gen_cfg.min_answer_tokens
+    MIN_ANS_MCQ = gen_cfg.min_answer_tokens_mcq
+    HARD_MASK = gen_cfg.hard_mask_mcq_first_token
+    LIFT_MCQ = gen_cfg.mcq_letter_lift
+    BAN_MCQ = gen_cfg.mcq_ban_first_bias
+    BAN_NONMCQ = gen_cfg.nonmcq_ban_first_bias
+    MCQ_CLOSE_K = gen_cfg.mcq_close_after_k
+    B_MCQ_CLOSE = gen_cfg.mcq_answer_end_bias
+    MIN_THINK = gen_cfg.min_think_tokens
+    B_END_EARLY = gen_cfg.think_end_early_bias
+    B_AS_MIN_THINK = gen_cfg.bias_answer_start_after_min_think
+    B_ENCOURAGE = gen_cfg.encourage_think_bias
+    P_TOOL = gen_cfg.tool_call_penalty * -100
 
     def _proc_vectorized(hist_list: List[List[int]], logits: mx.array) -> mx.array:
         """Vectorized logit processor function applied during generation."""
@@ -409,7 +376,6 @@ def make_dynamic_tag_bias_processor(
         B, V = logits.shape
         dtype = logits.dtype
         neg_inf = mx.array(-1e9, dtype=dtype)
-
         max_hist_len = max(len(row) for row in hist_list) if hist_list else 0
         if max_hist_len == 0:
             return logits
@@ -427,8 +393,11 @@ def make_dynamic_tag_bias_processor(
             if tag_id is None:
                 return mx.full((B,), -1, dtype=mx.int32)
             matches = history_mx == tag_id
-            rev_indices = mx.argmax(mx.flip(matches, axis=1), axis=1)
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+            has_match = mx.any(matches, axis=1)
+            indices = mx.arange(max_hist_len)
+            masked_indices = mx.where(matches, indices, -1)
+            last_indices = mx.max(masked_indices, axis=1)
+            return mx.where(has_match, last_indices, -1)
 
         last_ts, last_te, last_as, last_ae = (
             find_last_pos_mx(ts),
@@ -447,62 +416,61 @@ def make_dynamic_tag_bias_processor(
 
         is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
 
-        # --- Apply biases using vectorized 'where' conditions ---
-
         if ts is not None and te is not None:
-            te_count = mx.array([row.count(te) for row in hist_list], dtype=mx.int32)
-
+            te_count = mx.sum(history_mx == te, axis=1)
             logits[:, ts] += mx.where(last_te != -1, P_REOPEN_THINK, 0.0)
             if as_id is not None:
                 logits[:, as_id] += mx.where(last_ae > last_as, P_REOPEN_ANS, 0.0)
-
             bias_at_te = mx.where(te_count == 0, B_CLOSE, P_EXTRA_TE)
-            min_think_penalty = inside_think & (k_think < MIN_THINK)
+            min_think_penalty = mx.logical_and(inside_think, (k_think < MIN_THINK))
             bias_at_te = mx.where(min_think_penalty, B_END_EARLY, bias_at_te)
-            if te is not None:
-                logits[:, te] += bias_at_te
+            logits[:, te] += bias_at_te
 
-            can_start_answer = (last_te > last_as) & ~inside_answer
-            can_start_answer &= ~B_AS_MIN_THINK | (k_think >= MIN_THINK)
+            can_start_answer = mx.logical_and(
+                (last_te > last_as), mx.logical_not(inside_answer)
+            )
+            # FIX: Use mx.logical_or and mx.logical_not for boolean array logic
+            if B_AS_MIN_THINK:
+                can_start_answer = mx.logical_and(
+                    can_start_answer, (k_think >= MIN_THINK)
+                )
+
             if as_id is not None:
                 logits[:, as_id] += mx.where(can_start_answer, B_AS, 0.0)
 
         if eos_tok is not None:
             logits[:, eos_tok] += mx.where(ae_seen, B_EOS_ANS, 0.0)
-
         if encourage_ids and inside_think.any():
-            enc_mask_mx = mx.zeros((V,), dtype=dtype)
-            enc_mask_mx = enc_mask_mx.at[encourage_ids].set(1.0)
-            logits[inside_think.tolist(), :] += enc_mask_mx[None, :] * B_ENCOURAGE
+            logits[inside_think.tolist(), encourage_ids] += B_ENCOURAGE
 
-        mcq_first_token_mask = is_mcq_mask & inside_answer & (k_answer == 0)
+        mcq_first_token_mask = mx.logical_and(
+            is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
+        )
         if mx.any(mcq_first_token_mask).item() and HARD_MASK:
             mcq_allowed_logits = mx.full((V,), neg_inf, dtype=dtype)
-            mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].set(0.0)
-            mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].set(
-                mcq_allowed_logits[mcq_letter_ids] + LIFT_MCQ
-            )
+            if mcq_letter_ids:
+                mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].set(LIFT_MCQ)
             if ban_ids:
-                mcq_allowed_logits = mcq_allowed_logits.at[ban_ids].set(BAN_MCQ)
-            if tool_ids:
-                mcq_allowed_logits = mcq_allowed_logits.at[tool_ids].set(P_TOOL)
+                mcq_allowed_logits = mcq_allowed_logits.at[ban_ids].add(BAN_MCQ)
             logits = mx.where(
                 mcq_first_token_mask[:, None], mcq_allowed_logits[None, :], logits
             )
 
-        non_mcq_first_answer = (~is_mcq_mask) & inside_answer & (k_answer == 0)
+        non_mcq_first_answer = mx.logical_and(
+            mx.logical_not(is_mcq_mask), mx.logical_and(inside_answer, (k_answer == 0))
+        )
         if mx.any(non_mcq_first_answer).item() and ban_ids:
             logits[non_mcq_first_answer.tolist(), ban_ids] += BAN_NONMCQ
-            if tool_ids:
-                logits[non_mcq_first_answer.tolist(), tool_ids] += P_TOOL
 
         if ae is not None:
             min_ans_len = mx.where(is_mcq_mask, MIN_ANS_MCQ, MIN_ANS)
-            min_len_penalty_mask = inside_answer & (k_answer < min_ans_len)
+            min_len_penalty_mask = mx.logical_and(
+                inside_answer, (k_answer < min_ans_len)
+            )
             logits[:, ae] += mx.where(min_len_penalty_mask, -8.0, 0.0)
-
-        if ae is not None:
-            mcq_close_mask = is_mcq_mask & inside_answer & (k_answer >= MCQ_CLOSE_K)
+            mcq_close_mask = mx.logical_and(
+                is_mcq_mask, mx.logical_and(inside_answer, (k_answer >= MCQ_CLOSE_K))
+            )
             logits[:, ae] += mx.where(mcq_close_mask, B_MCQ_CLOSE, 0.0)
 
         return logits
@@ -510,60 +478,27 @@ def make_dynamic_tag_bias_processor(
     return _proc_vectorized
 
 
-# --- Implementation of _mask_after_answer ---
 def _mask_after_answer(
     responses_mx: mx.array,
     initial_mask: mx.array,
     tokenizer: TokenizerWrapper,
     config: ExperimentConfig,
 ) -> mx.array:
-    """
-    Creates a mask (float32, 0.0 or 1.0) over the generated response tokens,
-    setting the mask to 0.0 for any tokens that appear AFTER the final </answer> tag (if present).
-    """
     if responses_mx.ndim != 2:
-        logger.warning(
-            f"Response array has incorrect dimensions: {responses_mx.ndim}. Returning initial mask."
-        )
         return initial_mask
-
     B, L_gen = responses_mx.shape
-    initial_mask = initial_mask.astype(mx.float32)
-
-    # Determine end tag token IDs
     tag_ids = _resolve_tag_ids(tokenizer, config)
     answer_end_id = tag_ids.get("answer_end")
-
     if answer_end_id is None:
-        logger.warning(
-            "Answer end tag not tokenizable to a single ID. Returning initial mask."
-        )
         return initial_mask
-
-    # 1. Find the index of the first answer_end_id in each sequence
-    LARGE_NUMBER = L_gen + 1
-    indices = mx.arange(L_gen, dtype=mx.int32)
-    is_answer_end = mx.equal(responses_mx, answer_end_id)
-
-    # Argmin trick: finds index of first True. If no True, finds index of LARGE_NUMBER (which is L_gen)
-    first_end_indices = mx.argmin(
-        mx.where(is_answer_end, indices, LARGE_NUMBER), axis=1
-    )
-
-    # 2. Create index matrix and boundary index for masking
-    row_indices = mx.broadcast_to(indices[None, :], responses_mx.shape)
-
-    # Boundary index: the index *after* the tag
+    indices = mx.arange(L_gen)
+    is_answer_end = responses_mx == answer_end_id
+    first_end_indices = mx.argmin(mx.where(is_answer_end, indices, L_gen + 1), axis=1)
     boundary_index = first_end_indices + 1
-
-    # Create mask: True up to and including the token *at* the end tag index
-    end_mask = row_indices < boundary_index[:, None]
-
-    # Combine with initial padding mask
-    final_mask = initial_mask * end_mask.astype(mx.float32)
-
-    mx.eval(final_mask)
-    return final_mask
+    end_mask = (
+        mx.broadcast_to(indices[None, :], responses_mx.shape) < boundary_index[:, None]
+    )
+    return initial_mask.astype(mx.float32) * end_mask.astype(mx.float32)
 
 
 class ContentAlignBridge(nn.Module):
