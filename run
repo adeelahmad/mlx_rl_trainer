@@ -1,0 +1,412 @@
+# -----------------------------------------------------------------------------
+# Fix 1: Correct the ImportError in core/__init__.py
+# -----------------------------------------------------------------------------
+cat > ./src/mlx_rl_trainer/core/__init__.py <<'EOF'
+"""Core abstractions that define the trainer's architecture."""
+from .config import ExperimentConfig, RewardConfig, EvaluatorConfig, DataConfig, ModelConfig, TrainerParams, GenerationConfig, CheckpointingConfig, MonitoringConfig
+from .trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics, CustomBaseException, ModelLoadError, InvalidConfigurationError, DataLoadError, CheckpointError
+from .model_manager import ModelManager
+from .dataset_manager import DatasetManager
+from .checkpoint_manager import CheckpointManager
+
+__all__ = [
+    "ExperimentConfig", "RewardConfig", "EvaluatorConfig", "DataConfig", "ModelConfig", "TrainerParams", "GenerationConfig", "CheckpointingConfig", "MonitoringConfig",
+    "BaseTrainer", "TrainingMetrics", "EvaluationMetrics", "CustomBaseException", "ModelLoadError", "InvalidConfigurationError", "DataLoadError", "CheckpointError",
+    "ModelManager", "DatasetManager", "CheckpointManager"
+]
+EOF
+
+# -----------------------------------------------------------------------------
+# Fix 2: Correct the main package __init__.py
+# -----------------------------------------------------------------------------
+cat > ./src/mlx_rl_trainer/__init__.py <<'EOF'
+"""
+MLX RL Trainer - A modular reinforcement learning framework for MLX.
+"""
+__version__ = "1.0.0"
+
+# Expose key components for easier imports from the library
+from .core.trainer import (
+    BaseTrainer, TrainingMetrics, EvaluationMetrics, ModelLoadError, DataLoadError, CheckpointError
+)
+from .core.config import (
+    ExperimentConfig, RewardConfig, EvaluatorConfig, DataConfig, ModelConfig, TrainerParams
+)
+from .core.model_manager import ModelManager
+from .core.dataset_manager import DatasetManager
+from .core.checkpoint_manager import CheckpointManager
+
+from .rewards.registry import RewardRegistry, register_reward
+from .rewards.base_reward import RewardComposer
+from .rewards.context import RewardContext
+
+from .evaluation.registry import EvaluatorRegistry
+EOF
+
+# -----------------------------------------------------------------------------
+# Fix 3: Implement the detailed Generation logic in generation/generator.py
+# This is a critical file that ports logic from the original script.
+# -----------------------------------------------------------------------------
+cat > ./src/mlx_rl_trainer/generation/generator.py <<'EOF'
+import logging, gc, re
+from typing import Dict, Any, List, Optional, Tuple
+import mlx.core as mx, mlx.nn as nn
+from mlx_lm.models import cache
+from mlx_lm.tokenizer_utils import TokenizerWrapper
+import numpy as np
+
+from mlx_rl_trainer.core.config import ExperimentConfig
+from mlx_rl_trainer.rewards.base_reward import RewardComposer
+from mlx_rl_trainer.generation.caching import PagedKVCache
+from mlx_rl_trainer.data.batch_builder import build_rollout_batch
+from mlx_rl_trainer.utils.mlx_utils import _create_4d_attention_mask, safe_make_sampler, _resolve_tag_ids, _first_token_ids_for_lexemes, _letter_token_ids, _apply_processors_vectorized, _mask_after_answer
+from mlx_rl_trainer.rewards.content.mcq_accuracy import _parse_pred_mcq_letters
+from mlx_rl_trainer.monitoring.metrics_logger import _maybe_log_samples
+from mlx_rl_trainer.rewards.format.tag_structure import extract_think_region
+from mlx_rl_trainer.rewards.reasoning.thinking_quality import compute_think_reward_with_length_penalty
+from mlx_rl_trainer.rewards.content.semantic_similarity import hybrid_answer_reward
+from mlx_rl_trainer.rewards.format.tag_structure import TagStructureReward
+
+logger = logging.getLogger(__name__)
+
+def generate_rollouts_for_batch(
+    model: nn.Module, ref_model: nn.Module, tokenizer: TokenizerWrapper, 
+    prompts_data: List[Dict], config: ExperimentConfig, reward_composer: RewardComposer,
+    paged_kv_cache: Optional[PagedKVCache], run_id: str, current_update: int,
+    is_invalid_batch: bool,
+) -> Tuple[Dict[str, mx.array], float, Dict[str, float]]:
+    
+    model.eval()
+    num_prompts = len(prompts_data)
+    if num_prompts == 0:
+        return {}, 0.0, {}
+
+    prompts_data_replicated = [p for p in prompts_data for _ in range(config.trainer.num_rollout_samples)]
+    
+    # Build batch from raw data
+    indices = [p['original_index'] for p in prompts_data_replicated]
+    _, prompts_mx, max_prompt_len = build_rollout_batch(tokenizer, dataset=None, indices=indices, config=config, raw_data=prompts_data_replicated)
+
+    total_samples = prompts_mx.shape[0]
+    max_gen_len = config.data.max_gen_len
+    pad_id = tokenizer.pad_token_id
+    eos_id = tokenizer.eos_token_id
+
+    # --- Generation Loop ---
+    model_caches = cache.make_prompt_cache(model, max_kv_size=config.max_kv_size)
+    
+    # Initial forward pass
+    out_actor = model(prompts_mx.astype(mx.int64), cache=model_caches)
+    next_logits = (out_actor[0] if isinstance(out_actor, tuple) else out_actor)[:, -1, :].astype(mx.float32)
+
+    # Prepare logit processors
+    tag_ids = _resolve_tag_ids(tokenizer, config)
+    special_ids = _first_token_ids_for_lexemes(tokenizer, ('<|im_end|>', '<|im_start|>', '<|endoftext|>'))
+    tool_ids = _first_token_ids_for_lexemes(tokenizer, ('<tool_code>', '</tool_code>'))
+    letter_map = _letter_token_ids(tokenizer)
+    mcq_letter_ids = sorted(set(sum(letter_map.values(), [])))
+    ban_ids = _first_token_ids_for_lexemes(tokenizer, config.generation.ban_phrases_for_bias)
+    encourage_ids = _first_token_ids_for_lexemes(tokenizer, config.generation.encourage_phrases_for_bias)
+
+    mcq_flags = [p.get('is_mcq', False) for p in prompts_data_replicated]
+    
+    hist_tokens_py = prompts_mx.tolist()
+    responses_tok_list, actor_lp_cached_list = [], []
+    ended = mx.full((total_samples,), False, dtype=mx.bool_)
+    
+    for step in range(max_gen_len):
+        if mx.all(ended).item():
+            break
+
+        temp = config.generation.think_temperature if step < config.generation.think_boost_tokens else config.generation.answer_temperature
+        sampler = safe_make_sampler(config, temp=temp)
+        
+        logits_processed = _apply_processors_vectorized(
+            hist_tokens_py, next_logits, mcq_flags, tag_ids, config, 
+            special_ids, tool_ids, mcq_letter_ids, ban_ids, encourage_ids
+        )
+        
+        sampled_tokens = sampler(logits_processed)
+        log_probs = nn.log_softmax(logits_processed, axis=-1)
+        sampled_log_probs = mx.take_along_axis(log_probs, sampled_tokens[:, None], axis=-1).squeeze(-1)
+        
+        ended_prev = ended
+        if eos_id is not None:
+            ended = mx.logical_or(ended, sampled_tokens == eos_id)
+        
+        tokens_to_add = mx.where(ended_prev, pad_id, sampled_tokens)
+        lp_to_add = mx.where(ended_prev, 0.0, sampled_log_probs)
+        
+        responses_tok_list.append(tokens_to_add[:, None])
+        actor_lp_cached_list.append(lp_to_add[:, None])
+        
+        for i in range(total_samples):
+            if not ended_prev[i].item():
+                hist_tokens_py[i].append(tokens_to_add[i].item())
+        
+        out_next = model(tokens_to_add[:, None].astype(mx.int64), cache=model_caches)
+        next_logits = (out_next[0] if isinstance(out_next, tuple) else out_next)[:, -1, :].astype(mx.float32)
+
+    mx.eval(responses_tok_list, actor_lp_cached_list)
+    responses_mx = mx.concatenate(responses_tok_list, axis=1) if responses_tok_list else mx.zeros((total_samples, 0), dtype=mx.int32)
+    actor_log_probs = mx.concatenate(actor_lp_cached_list, axis=1) if actor_lp_cached_list else mx.zeros((total_samples, 0), dtype=mx.float32)
+
+    # --- Reward Calculation ---
+    decoded = tokenizer.batch_decode(responses_mx.tolist(), skip_special_tokens=True)
+    
+    rewards_total = []
+    rewards_breakdown = {}
+
+    contexts = [reward_composer.context_cls(
+        generated_text=decoded[i],
+        prompt_text=prompts_data_replicated[i]['text'],
+        reference_completion=prompts_data_replicated[i]['ref_answer_str'],
+        metadata=prompts_data_replicated[i]
+    ) for i in range(total_samples)]
+    
+    batch_rewards_dicts = reward_composer.batch_compute(contexts)
+
+    rewards_total = mx.array([r['total'] for r in batch_rewards_dicts])
+    for key in batch_rewards_dicts[0]:
+        rewards_breakdown[key] = [r[key] for r in batch_rewards_dicts]
+
+    # --- Advantage & Log Probs ---
+    advantages = GRPOAlgorithm(config, model, ref_model).compute_advantages(rewards_total, config.trainer.num_rollout_samples)
+    
+    full_seq = mx.concatenate([prompts_mx, responses_mx], axis=1)
+    ref_logits = ref_model(full_seq)[:, max_prompt_len - 1:-1, :]
+    ref_log_probs_all = nn.log_softmax(ref_logits.astype(mx.float32), axis=-1)
+    ref_log_probs = mx.take_along_axis(ref_log_probs_all, responses_mx[..., None], axis=-1).squeeze(-1)
+
+    response_mask = (responses_mx != pad_id).astype(mx.float32)
+    response_mask = _mask_after_answer(responses_mx, response_mask, tokenizer, config)
+
+    # --- Logging ---
+    _maybe_log_samples(config, current_update, prompts_data_replicated, decoded, rewards_breakdown, "n/a", run_id, is_invalid_batch)
+
+    rollout_batch = {
+        "tokens": full_seq,
+        "response_mask": response_mask,
+        "advantages": advantages,
+        "ref_log_probs": ref_log_probs,
+        "actor_log_probs": actor_log_probs,
+    }
+    
+    avg_reward = mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0
+    avg_breakdown = {k: np.mean(v) for k, v in rewards_breakdown.items()}
+
+    model.train()
+    gc.collect()
+    mx.clear_cache()
+
+    return rollout_batch, avg_reward, avg_breakdown
+EOF
+
+# -----------------------------------------------------------------------------
+# Fix 4: Refactor trainer logic in core/trainer.py and algorithms/grpo/grpo_trainer.py
+# -----------------------------------------------------------------------------
+cat > ./src/mlx_rl_trainer/core/trainer.py <<'EOF'
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List, Tuple, Callable
+import logging
+import mlx.core as mx, mlx.nn as nn
+from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TimeElapsedColumn
+import numpy as np
+
+from .config import ExperimentConfig
+from .model_manager import ModelManager
+from .dataset_manager import DatasetManager
+from .checkpoint_manager import CheckpointManager
+from ..monitoring.metrics_logger import MetricsLogger
+
+logger = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class TrainingMetrics:
+    loss: float; reward_mean: float; grad_norm: float; learning_rate: float
+    kl_divergence: float; epoch: int; step: int
+
+@dataclass(frozen=True)
+class EvaluationMetrics:
+    task_name: str; pass_rate: float = 0.0; perplexity: Optional[float] = None
+    additional_info: Dict[str, Any] = field(default_factory=dict)
+    def to_dict(self) -> Dict[str, Any]:
+        data = {f"eval/{self.task_name}/pass_rate": self.pass_rate}
+        if self.perplexity is not None: data[f"eval/{self.task_name}/perplexity"] = self.perplexity
+        for k, v in self.additional_info.items(): data[f"eval/{self.task_name}/{k}"] = v
+        return data
+
+class BaseTrainer(ABC):
+    def __init__( self, config: ExperimentConfig, model_manager: ModelManager, data_manager: DatasetManager,
+                  checkpoint_manager: CheckpointManager, reward_composer: Any, paged_kv_cache: Any,
+                  metrics_logger: Optional[MetricsLogger], run_id: str):
+        self.config, self.model_manager, self.data_manager, self.checkpoint_manager, self.reward_composer, self.paged_kv_cache = \
+            config, model_manager, data_manager, checkpoint_manager, reward_composer, paged_kv_cache
+        self.metrics_logger, self.run_id = metrics_logger, run_id
+        self.actor_model, self.ref_model, self.tokenizer, self.optimizer, self.lr_scheduler = [None] * 5
+        self.global_step, self.current_epoch = 0, 0
+
+    @abstractmethod
+    def _setup(self) -> None: raise NotImplementedError
+    
+    @abstractmethod
+    def train_step(self, prompts_batch: List[Dict], update_step: int) -> TrainingMetrics: raise NotImplementedError
+
+    @abstractmethod
+    def evaluate(self, update_step: int) -> List[EvaluationMetrics]: raise NotImplementedError
+
+    def save_final_checkpoint(self, reason: str = "final"):
+        if self.actor_model and self.optimizer:
+            self.checkpoint_manager.save_checkpoint(
+                step=self.global_step, model=self.actor_model, optimizer=self.optimizer,
+                metadata={"num_updates": self.global_step, "epoch": self.current_epoch, "save_optimizer_state": self.config.checkpointing.save_optimizer_state},
+                reason=reason
+            )
+
+    def run(self, should_shutdown: Callable[[], bool]):
+        self._setup()
+        self.data_manager.load_datasets()
+        best_eval_metric = -float('inf')
+        
+        console = logging.getLogger("rich").parent.handlers[0].console
+
+        with Progress(
+            TextColumn("[progress.description]{task.description}"), BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"), "•",
+            TextColumn("Steps: {task.completed}/{task.total}"), "•",
+            TextColumn("Loss: {task.fields[loss]:.3f}"), "•",
+            TextColumn("Reward: {task.fields[reward]:.3f}"), "•",
+            TimeRemainingColumn(), console=console
+        ) as progress:
+            task = progress.add_task("Training", total=self.config.trainer.num_training_steps, completed=self.global_step, loss=np.nan, reward=np.nan)
+            
+            while self.global_step < self.config.trainer.num_training_steps:
+                if should_shutdown(): break
+                
+                train_data_iterator = self.data_manager.get_dataloader("train", self.config.trainer.ppo_batch_size)
+                
+                for prompts_batch in train_data_iterator:
+                    if self.global_step >= self.config.trainer.num_training_steps or should_shutdown(): break
+
+                    metrics = self.train_step(prompts_batch, self.global_step)
+                    
+                    progress.update(task, advance=1, loss=metrics.loss, reward=metrics.reward_mean)
+                    self.global_step += 1
+
+                    if self.config.trainer.eval_every > 0 and self.global_step % self.config.trainer.eval_every == 0:
+                        eval_results = self.evaluate(self.global_step)
+                        # ... logging and best model saving logic from BEFORE state could go here ...
+                        
+                    if self.config.checkpointing.save_every > 0 and self.global_step % self.config.checkpointing.save_every == 0:
+                        self.save_final_checkpoint(reason=f"step_{self.global_step}")
+                
+                self.current_epoch += 1
+EOF
+
+cat > ./src/mlx_rl_trainer/algorithms/grpo/grpo_trainer.py <<'EOF'
+import logging, gc
+from typing import Dict, Any, List, Optional, Tuple
+import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
+import numpy as np
+from mlx_lm.tuner.utils import build_schedule
+
+from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics
+from mlx_rl_trainer.generation.generator import generate_rollouts_for_batch
+from mlx_rl_trainer.algorithms.grpo.grpo_algorithm import GRPOAlgorithm
+from mlx_rl_trainer.utils.mlx_utils import scale_grads_by_band, mask_grads_to_layer_band
+
+logger = logging.getLogger(__name__)
+
+class GRPOTrainer(BaseTrainer):
+    def _setup(self) -> None:
+        logger.info("Setting up GRPOTrainer...")
+        
+        self.actor_model, self.tokenizer = self.model_manager.load_model(
+            self.config.model.model_path, "actor", is_trainable=True, 
+            apply_lora=self.config.model.use_lora, lora_config=self.config.model.model_dump()
+        )
+        self.ref_model, _ = self.model_manager.load_model(
+            self.config.model.ref_model_path, "reference", is_trainable=False
+        )
+        self.data_manager.tokenizer = self.tokenizer
+
+        self.grpo_algorithm = GRPOAlgorithm(self.config, self.actor_model, self.ref_model)
+        self.optimizer = optim.AdamW(
+            learning_rate=self.config.trainer.learning_rate, 
+            betas=(self.config.trainer.optimizer_beta1, self.config.trainer.optimizer_beta2), 
+            weight_decay=self.config.trainer.optimizer_weight_decay
+        )
+        self.lr_scheduler = build_schedule(self.config.trainer.lr_schedule_config)
+        
+        start_step, metadata = self.checkpoint_manager.load_latest_state(self.actor_model, self.optimizer)
+        self.global_step = start_step
+        self.current_epoch = metadata.get("epoch", 0)
+        logger.info(f"Trainer setup complete. Resuming from step {self.global_step}.")
+
+    def train_step(self, prompts_batch: List[Dict], update_step: int) -> TrainingMetrics:
+        accumulated_grads = None
+        all_losses, all_rewards, all_kls, all_grad_norms = [], [], [], []
+        
+        for i in range(self.config.trainer.grad_accum_steps):
+            is_invalid_batch = any(p.get('is_invalid_sample', False) for p in prompts_batch)
+            
+            rollout_batch, avg_reward, _ = generate_rollouts_for_batch(
+                model=self.actor_model, ref_model=self.ref_model, tokenizer=self.tokenizer,
+                prompts_data=prompts_batch, config=self.config, reward_composer=self.reward_composer,
+                paged_kv_cache=self.paged_kv_cache, run_id=self.run_id, current_update=update_step,
+                is_invalid_batch=is_invalid_batch
+            )
+            
+            if not rollout_batch: continue
+            
+            loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(rollout_batch, self.config)
+            
+            all_losses.append(loss.item())
+            all_rewards.append(avg_reward)
+            all_kls.append(metrics.get("kl_divergence", 0.0))
+            
+            # Scale gradients for accumulation
+            grads = {k: v / self.config.trainer.grad_accum_steps for k, v in grads.items()}
+            
+            if accumulated_grads is None:
+                accumulated_grads = grads
+            else:
+                accumulated_grads = {k: accumulated_grads[k] + v for k, v in grads.items()}
+        
+        if accumulated_grads is None: # Skipped all accumulation steps
+            return TrainingMetrics(loss=np.nan, reward_mean=np.nan, grad_norm=np.nan, learning_rate=self.lr_scheduler(update_step), kl_divergence=np.nan, epoch=self.current_epoch, step=update_step)
+        
+        # Clipping and scaling
+        clipped_grads, grad_norm = optim.clip_grad_norm(accumulated_grads, self.config.trainer.grad_clip_norm)
+        banded_grads = mask_grads_to_layer_band(clipped_grads, start=self.config.trainer.train_layer_start, end=self.config.trainer.train_layer_end, include_embed=False, include_head=True)
+        final_grads = scale_grads_by_band(banded_grads, self.config.trainer)
+        
+        # Update model
+        self.optimizer.learning_rate = self.lr_scheduler(update_step)
+        self.optimizer.apply_gradients(final_grads, self.actor_model.trainable_parameters())
+        mx.eval(self.actor_model.parameters(), self.optimizer.state)
+
+        # Log metrics
+        avg_loss = np.mean(all_losses)
+        avg_reward = np.mean(all_rewards)
+        avg_kl = np.mean(all_kls)
+        
+        if self.metrics_logger:
+            self.metrics_logger.log_metrics({
+                "train/loss": avg_loss, "train/reward_raw_mean": avg_reward, 
+                "train/grad_norm": grad_norm.item(), "train/learning_rate": self.optimizer.learning_rate, 
+                "train/kl_divergence": avg_kl, "train/epoch": self.current_epoch,
+            }, step=update_step)
+            
+        return TrainingMetrics(
+            loss=avg_loss, reward_mean=avg_reward, grad_norm=grad_norm.item(), 
+            learning_rate=self.optimizer.learning_rate, kl_divergence=avg_kl,
+            epoch=self.current_epoch, step=update_step
+        )
+
+    def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
+        logger.info(f"Evaluation at step {update_step} is a placeholder.")
+        return []
+EOF
+
