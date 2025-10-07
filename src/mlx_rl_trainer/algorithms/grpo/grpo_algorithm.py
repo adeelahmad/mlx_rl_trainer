@@ -33,8 +33,8 @@ class GRPOAlgorithm:
         self.reference = ref_model
 
         # Get hyperparameters from config
-        self.kl_coef = getattr(config.trainer, 'kl_coef', 0.1)
-        self.clip_range = getattr(config.trainer, 'clip_range', 0.2)
+        self.kl_coef = getattr(config.trainer, "kl_coef", 0.1)
+        self.clip_range = getattr(config.trainer, "clip_range", 0.2)
 
         logger.info(
             f"GRPOAlgorithm initialized with kl_coef={self.kl_coef}, "
@@ -42,9 +42,7 @@ class GRPOAlgorithm:
         )
 
     def compute_advantages(
-        self,
-        rewards_flat: mx.array,
-        samples_per_prompt: int = 1
+        self, rewards_flat: mx.array, samples_per_prompt: int = 1
     ) -> mx.array:
         """
         Compute advantages using group normalization.
@@ -69,7 +67,9 @@ class GRPOAlgorithm:
 
         if samples_per_prompt == 1:
             # Simple case: normalize across the entire batch
-            advantages = (rewards_flat - mx.mean(rewards_flat)) / (mx.std(rewards_flat) + 1e-8)
+            advantages = (rewards_flat - mx.mean(rewards_flat)) / (
+                mx.std(rewards_flat) + 1e-8
+            )
         else:
             # Reshape to (batch_size, samples_per_prompt)
             rewards_grouped = rewards_flat.reshape(batch_size, samples_per_prompt)
@@ -78,7 +78,9 @@ class GRPOAlgorithm:
             mean_per_group = mx.mean(rewards_grouped, axis=1, keepdims=True)
             std_per_group = mx.std(rewards_grouped, axis=1, keepdims=True)
 
-            advantages_grouped = (rewards_grouped - mean_per_group) / (std_per_group + 1e-8)
+            advantages_grouped = (rewards_grouped - mean_per_group) / (
+                std_per_group + 1e-8
+            )
 
             # Flatten back
             advantages = advantages_grouped.reshape(-1)
@@ -91,10 +93,7 @@ class GRPOAlgorithm:
         return advantages
 
     def calculate_loss_and_grads(
-        self,
-        rollout_batch: Dict[str, mx.array],
-        full_config: Any,
-        pad_token_id: int
+        self, rollout_batch: Dict[str, mx.array], full_config: Any, pad_token_id: int
     ) -> Tuple[mx.array, Dict[str, mx.array], Dict[str, float]]:
         """
         Calculate GRPO loss and gradients.
@@ -191,7 +190,9 @@ class GRPOAlgorithm:
             kl_div_masked = kl_div * response_mask_local
 
             # Mean KL per sequence (sum over tokens, mean over batch)
-            kl_per_seq = mx.sum(kl_div_masked, axis=1) / (mx.sum(response_mask_local, axis=1) + 1e-8)
+            kl_per_seq = mx.sum(kl_div_masked, axis=1) / (
+                mx.sum(response_mask_local, axis=1) + 1e-8
+            )
             kl_mean = mx.mean(kl_per_seq)
 
             # Compute policy loss
@@ -227,10 +228,14 @@ class GRPOAlgorithm:
             # Validate gradients
             if not grads:
                 logger.warning("No gradients computed in calculate_loss_and_grads")
-                return loss, {}, {
-                    "kl_divergence": 0.0,
-                    "policy_loss": 0.0,
-                }
+                return (
+                    loss,
+                    {},
+                    {
+                        "kl_divergence": 0.0,
+                        "policy_loss": 0.0,
+                    },
+                )
 
             # Convert gradients to dict format expected by optimizer
             grad_dict = dict(tree_flatten(grads))
@@ -253,7 +258,11 @@ class GRPOAlgorithm:
         except Exception as e:
             logger.error(f"Error during loss computation: {e}", exc_info=True)
             # Return zero loss and empty grads on error
-            return mx.array(0.0), {}, {
-                "kl_divergence": 0.0,
-                "policy_loss": 0.0,
-            }
+            return (
+                mx.array(0.0),
+                {},
+                {
+                    "kl_divergence": 0.0,
+                    "policy_loss": 0.0,
+                },
+            )

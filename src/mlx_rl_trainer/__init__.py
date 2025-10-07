@@ -1,11 +1,10 @@
-"""MLX RL Trainer - Production-ready reinforcement learning framework"""
+"""
+MLX RL Trainer - Production-ready reinforcement learning framework
+"""
 __version__ = "0.1.0"
 
-# Expose key components for easier imports
-from mlx_rl_trainer.core.trainer import (
-    BaseTrainer,
-    TrainingMetrics,
-    EvaluationMetrics,
+from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics
+from mlx_rl_trainer.core.exceptions import (
     CustomBaseException,
     ModelLoadError,
     DataLoadError,
@@ -19,7 +18,7 @@ from mlx_rl_trainer.core.config import (
     EvaluatorConfig,
     DataConfig,
     ModelConfig,
-    TrainerParams, # Corrected import from TrainerConfig to TrainerParams
+    TrainerParams,
     GenerationConfig,
     CheckpointConfig,
     MonitoringConfig,

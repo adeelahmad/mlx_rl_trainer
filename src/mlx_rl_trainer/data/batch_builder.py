@@ -5,31 +5,41 @@ from datasets import Dataset
 import mlx.core as mx
 
 from mlx_rl_trainer.core.config import ExperimentConfig
-from mlx_rl_trainer.utils.text_utils import _mcq_meta_from_sample, apply_chat_template_wrapper
+from mlx_rl_trainer.utils.text_utils import (
+    _mcq_meta_from_sample,
+    apply_chat_template_wrapper,
+)
 from mlx_lm.tokenizer_utils import TokenizerWrapper
-from mlx_rl_trainer.rewards.format.tag_structure import extract_think_region, extract_answer_region
+from mlx_rl_trainer.rewards.format.tag_structure import (
+    extract_think_region,
+    extract_answer_region,
+)
 from mlx_rl_trainer.core.config import GenerationConfig
 
 
 logger = logging.getLogger(__name__)
 
-def _compose_prompt_from_sample(sample: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
+
+def _compose_prompt_from_sample(
+    sample: Dict[str, Any]
+) -> Tuple[str, Optional[str], Optional[str]]:
     ref_ans, ref_think = None, None
-    
-    if 'prompt' in sample and isinstance(sample['prompt'], str):
-        prompt_text = sample['prompt']
-    elif 'question' in sample and isinstance(sample['question'], str):
-        prompt_text = sample['question']
+
+    if "prompt" in sample and isinstance(sample["prompt"], str):
+        prompt_text = sample["prompt"]
+    elif "question" in sample and isinstance(sample["question"], str):
+        prompt_text = sample["question"]
     else:
         prompt_text = json.dumps(sample, ensure_ascii=False)
 
-    completion = sample.get('completion', sample.get('answer', ''))
+    completion = sample.get("completion", sample.get("answer", ""))
     if isinstance(completion, str):
         gen_config = GenerationConfig()
         ref_think = extract_think_region(completion, gen_config)
         ref_ans = extract_answer_region(completion, gen_config) or completion.strip()
-    
+
     return prompt_text, ref_ans, ref_think
+
 
 def build_rollout_batch(
     tokenizer: TokenizerWrapper,
@@ -37,7 +47,6 @@ def build_rollout_batch(
     indices: List[int],
     config: ExperimentConfig,
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
-    
     prompts_data: List[Dict[str, Any]] = []
     max_len_in_batch = 0
     pad_id = tokenizer.pad_token_id
@@ -46,27 +55,35 @@ def build_rollout_batch(
         try:
             raw = dataset[i]
             prompt_text, ref_ans, ref_think = _compose_prompt_from_sample(raw)
-            
-            mcq_meta = _mcq_meta_from_sample({'prompt': prompt_text, 'completion': ref_ans, 'meta': raw.get('meta', {})})
-            
-            formatted_prompt = apply_chat_template_wrapper(tokenizer, prompt_text, config.system_prompt)
+
+            mcq_meta = _mcq_meta_from_sample(
+                {
+                    "prompt": prompt_text,
+                    "completion": ref_ans,
+                    "meta": raw.get("meta", {}),
+                }
+            )
+
+            formatted_prompt = apply_chat_template_wrapper(
+                tokenizer, prompt_text, config.system_prompt
+            )
             p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
             if len(p_tokens) > config.data.max_prompt_len:
-                p_tokens = p_tokens[-config.data.max_prompt_len:]
+                p_tokens = p_tokens[-config.data.max_prompt_len :]
             if not p_tokens:
                 logger.warning(f"Skipping empty prompt (idx {i}).")
                 continue
 
             entry = {
-                'original_index': i,
-                'text': formatted_prompt,
-                'tokens': p_tokens,
-                'ref_answer_str': ref_ans,
-                'ref_think_str': ref_think,
-                'is_invalid_sample': raw.get('is_invalid_sample', False)
+                "original_index": i,
+                "text": formatted_prompt,
+                "tokens": p_tokens,
+                "ref_answer_str": ref_ans,
+                "ref_think_str": ref_think,
+                "is_invalid_sample": raw.get("is_invalid_sample", False),
             }
-            entry.update(mcq_meta) 
+            entry.update(mcq_meta)
             prompts_data.append(entry)
             max_len_in_batch = max(max_len_in_batch, len(p_tokens))
 
@@ -78,7 +95,7 @@ def build_rollout_batch(
 
     padded_tokens = []
     for p in prompts_data:
-        tok = p['tokens']
+        tok = p["tokens"]
         pad_len = max_len_in_batch - len(tok)
         padded_tokens.append([pad_id] * pad_len + tok)
 

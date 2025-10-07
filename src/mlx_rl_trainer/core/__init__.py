@@ -6,7 +6,7 @@ from .config import (
     EvaluatorConfig,
     DataConfig,
     ModelConfig,
-    TrainerParams, # Corrected import from TrainerConfig to TrainerParams
+    TrainerParams,
     GenerationConfig,
     CheckpointConfig,
     MonitoringConfig,
@@ -15,6 +15,8 @@ from .trainer import (
     BaseTrainer,
     TrainingMetrics,
     EvaluationMetrics,
+)
+from .exceptions import (
     CustomBaseException,
     ModelLoadError,
     InvalidConfigurationError,

@@ -10,8 +10,8 @@ trainer:
   output_dir: "./outputs/code_gen_run_001"
   num_training_steps: 1000
   learning_rate: 2.0e-6
-  ppo_batch_size: 2       # Number of unique prompts per micro-batch
-  num_rollout_samples: 2  # Number of responses to generate per prompt
+  ppo_batch_size: 2 # Number of unique prompts per micro-batch
+  num_rollout_samples: 2 # Number of responses to generate per prompt
   grad_accum_steps: 4
   save_every: 250
   eval_every: 100
@@ -19,14 +19,14 @@ trainer:
   seed: 42
 
 model:
-  model_path: "./models/mock_model"
-  ref_model_path: "./models/mock_model"
+  model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
+  ref_model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
   use_lora: false
   lora_rank: 16
 
 data:
-  train_path: "./data/dummy_train.jsonl"
-  val_path: "./data/dummy_val.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
+  val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 512
   max_gen_len: 384
   loader_type: "jsonl"
@@ -45,5 +45,5 @@ rewards:
 evaluation:
   - name: "human_eval"
     config:
-      k_values: [1, 2]   # Calculate pass@1 and pass@2
-      num_samples: 10    # Number of problems to evaluate
+      k_values: [1, 2] # Calculate pass@1 and pass@2
+      num_samples: 10 # Number of problems to evaluate

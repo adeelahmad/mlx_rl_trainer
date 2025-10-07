@@ -1,282 +1,114 @@
-# file_path: mlx_rl_trainer/src/mlx_rl_trainer/core/dataset_manager.py
-# revision_no: 003
-# goals_of_writing_code_block: Refactor the file to remove obsolete module-level functions (get_dataset, filter_and_prepare_dataset) which caused an ImportError in __init__.py.
-# type_of_code_response: change existing
-import json
-import logging
-import random
-import re
-import string
+"""Data pipeline management: Loading, preprocessing, and efficient batching."""
+import json, logging, random, re, asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Generator, Iterator
-import concurrent.futures
-
-from datasets import Dataset, Features, Value, load_dataset
-from mlx_rl_trainer.core.config import DataConfig, THINK_STYLE_PROMPT_LITERAL
-from mlx_rl_trainer.core.trainer import DataLoadError, TrainingRuntimeError
-from mlx_rl_trainer.core.model_manager import TokenizerWrapper
-from mlx_rl_trainer.utils.text_utils import (
-    _contains_keywords,
-    _mcq_meta_from_sample,
-    apply_chat_template_wrapper,
-)
+from typing import Any, Dict, List, Optional, Iterator, Tuple, Generator
+import aiofiles
+from datasets import Dataset, load_dataset
+from tqdm.auto import tqdm
+from mlx_rl_trainer.core.config import DataConfig, THINK_STYLE_PROMPT_LITERAL, GenerationConfig
+from mlx_rl_trainer.core.exceptions import DataLoadError # Import from new exceptions module
+from mlx_lm.tokenizer_utils import TokenizerWrapper
+from mlx_rl_trainer.utils.text_utils import (_contains_keywords, _mcq_meta_from_sample, apply_chat_template_wrapper, extract_think_region, _looks_garbage)
+from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
 
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# UTILITY HELPER FUNCTIONS (Kept as private module helpers)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _ascii_ratio(s: str) -> float:
-    if not s:
-        return 1.0
-    ascii_cnt = sum(1 for ch in s if 32 <= ord(ch) <= 126 or ch in "\n\r\t")
-    return ascii_cnt / max(1, len(s))
-
-
-def _looks_garbage(s: str) -> bool:
-    if not s:
-        return True
-    if _ascii_ratio(s) < 0.75:
-        return True
-    if len(s) > 20000:
-        return True
-    if len(s.strip()) < 3:
-        return True
-    bad = re.findall(r"[^\w\s\-\.\,\:\;\(\)\[\]\/\+\=\&\<\>]", s)
-    return (len(bad) / max(1, len(s))) > 0.15
-
-
-def _normalize_record(
-    obj: Dict[str, Any], prompt_key: str, completion_key: str
-) -> Optional[Dict[str, Any]]:
-    if not isinstance(obj, dict):
-        return None
-
-    def _s(x: Any) -> str:
-        if x is None:
-            return ""
-        try:
-            return str(x)
-        except Exception:
-            return ""
-
-    prompt = obj.get(prompt_key, obj.get("prompt", obj.get("question", "")))
-    completion = obj.get(completion_key, obj.get("completion", obj.get("response", "")))
-    system = obj.get("system", "")
-
-    # Clean up completion format
-    completion = (
-        _s(completion)
-        .replace("<think>\n<think>\n", "<think>")
-        .replace("</think>\n</think>", "</think>")
-        .replace("<think>\n\n<think>", "<think>")
-    )
-    if completion and "<think>" not in completion:
-        completion = f"<think>\n\n</think>\n{completion}"
-
-    system = obj.get("system", THINK_STYLE_PROMPT_LITERAL)
-
-    rec = {
-        "prompt": _s(prompt),
-        "completion": _s(completion),
-        "system": _s(system),
-        "is_invalid_sample": obj.get("is_invalid_sample", False),
-        "test_cases": obj.get("test_cases", []),
-        "meta": obj.get("meta", {}),
-    }
-
-    if not rec["prompt"] and not rec["completion"]:
-        return None
-
-    # Enrich MCQ metadata (requires _mcq_meta_from_sample from text_utils.py to work correctly)
-    mcq_meta = _mcq_meta_from_sample(
-        {"prompt": rec["prompt"], "completion": rec["completion"], "meta": rec["meta"]}
-    )
-    rec["meta"].update(mcq_meta)
-
-    return rec
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DATASET MANAGER CLASS
-# ═══════════════════════════════════════════════════════════════════════════════
-
+def _normalize_record(obj: Dict[str, Any], prompt_key: str, completion_key: str, system_prompt_default: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(obj, dict): return None
+    def _s(x: Any) -> str: return str(x) if x is not None else ""
+    prompt = _s(obj.get(prompt_key, obj.get("prompt", obj.get("question", ""))))
+    completion = _s(obj.get(completion_key, obj.get("completion", obj.get("answer", ""))))
+    system = _s(obj.get("system", system_prompt_default))
+    gen_config_default = GenerationConfig()
+    completion_cleaned = (completion.replace(f'{gen_config_default.think_start_tag}\n{gen_config_default.think_start_tag}\n', gen_config_default.think_start_tag)
+                                    .replace(f'{gen_config_default.think_end_tag}\n{gen_config_default.think_end_tag}', gen_config_default.think_end_tag)
+                                    .replace(f'{gen_config_default.think_start_tag}\n\n{gen_config_default.think_start_tag}', gen_config_default.think_start_tag))
+    if completion_cleaned and gen_config_default.think_start_tag not in completion_cleaned: 
+        completion_cleaned = f"{gen_config_default.think_start_tag}\n\n{gen_config_default.think_end_tag}\n{completion_cleaned}"
+    meta = obj.get('meta', {}) if isinstance(obj.get('meta'), dict) else {}
+    mcq_meta = _mcq_meta_from_sample({"prompt": prompt, "completion": completion_cleaned, "meta": meta})
+    meta.update(mcq_meta)
+    if not prompt.strip() and not completion_cleaned.strip() and not system.strip(): return None
+    return {'prompt': prompt, 'completion': completion_cleaned, 'system': system, 'test_cases': obj.get('test_cases', []), 'is_invalid_sample': obj.get('is_invalid_sample', False), 'meta': meta}
 
 class DatasetManager:
-    """
-    Manages loading, filtering, tokenizing, and batching of datasets.
-    """
-
-    __slots__ = ("config", "tokenizer", "_train_dataset", "_val_dataset", "_is_loaded")
-
     def __init__(self, config: DataConfig, tokenizer: Optional[TokenizerWrapper]):
-        self.config: DataConfig = config
-        self.tokenizer: Optional[TokenizerWrapper] = tokenizer
+        self.config = config
+        self._tokenizer = tokenizer
         self._train_dataset: Optional[Dataset] = None
         self._val_dataset: Optional[Dataset] = None
         self._is_loaded = False
+        self.system_prompt: str = ""
         logger.debug("DatasetManager initialized.")
 
-    def load_datasets(self, force_reload: bool = False):
-        """Loads and pre-filters the training and validation datasets."""
-        if self._is_loaded and not force_reload:
-            logger.info("Datasets already loaded.")
-            return
+    def set_tokenizer(self, tokenizer: TokenizerWrapper):
+        self._tokenizer = tokenizer
+    def set_system_prompt(self, system_prompt: str):
+        self.system_prompt = system_prompt
 
-        self._train_dataset = self._load_and_process_split(
-            self.config.train_path, "train"
-        )
-        if self.config.val_path:
-            self._val_dataset = self._load_and_process_split(
-                self.config.val_path, "val"
-            )
+    async def _async_read_jsonl(self, path: Path) -> List[Dict[str, Any]]:
+        if not path.is_file(): raise FileNotFoundError(f"Data file not found: {path}")
+        data = []
+        async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
+            async for line in f:
+                if line.strip():
+                    try: data.append(json.loads(line.strip()))
+                    except json.JSONDecodeError: logger.warning(f"Malformed JSONL line in {path.name}, skipping.")
+        return data
 
-        self._is_loaded = True
-        logger.info(
-            f"Loaded datasets. Train samples: {len(self._train_dataset) if self._train_dataset else 0}, Val samples: {len(self._val_dataset) if self._val_dataset else 0}"
-        )
+    async def load_datasets(self, force_reload: bool = False):
+        if self._is_loaded and not force_reload: return
+        loop = asyncio.get_event_loop() 
 
-    def _load_and_process_split(self, path: Path, split: str) -> Dataset:
-        """Helper to load data from a single path (local or HF) and apply filtering."""
-
-        if not path:
-            return Dataset.from_dict({})
-
-        ds: Dataset
-
-        # Load logic (synchronous wrapper over common HF/local calls)
-        try:
-            if path.suffix.lower() in (".json", ".jsonl", ".ndjson"):
-                # Local JSON/JSONL file
-                ds = load_dataset("json", data_files={"data": str(path)})["data"]
+        async def load_raw_data_for_split(path: Path, split_name: str) -> List[Dict[str, Any]]:
+            if not path: return []
+            if path.suffix.lower() in ['.jsonl', '.ndjson']: return await self._async_read_jsonl(path)
+            elif path.suffix.lower() == '.json': 
+                raw_content = await aiofiles.open(path, mode='r', encoding='utf-8').read()
+                return json.loads(raw_content)
             else:
-                # HuggingFace dataset
-                hf_split = (
-                    self.config.dataset_train_split
-                    if split == "train"
-                    else self.config.dataset_val_split
-                )
-                ds = load_dataset(path.as_posix(), split=hf_split)
-        except Exception as e:
-            logger.error(f"Failed to load dataset from {path} for split {split}: {e}")
-            return Dataset.from_dict({})
+                hf_split_name = 'train' if split_name == 'train' else 'test'
+                dataset_obj = await asyncio.to_thread(load_dataset, path.as_posix(), split=hf_split_name)
+                return dataset_obj.to_list() if hasattr(dataset_obj, 'to_list') else list(dataset_obj)
 
-        # Normalize and filter
-        rows = []
-        for raw_rec in ds:
-            rec = _normalize_record(
-                raw_rec, self.config.dataset_prompt_key, self.config.dataset_answer_key
-            )
-            if rec is None:
-                continue
+        raw_train_data = await load_raw_data_for_split(self.config.train_path, "train")
+        raw_val_data = await load_raw_data_for_split(self.config.val_path, "val") if self.config.val_path else []
 
-            p, c = rec["prompt"], rec["completion"]
-
-            if _looks_garbage(p) or _looks_garbage(c):
-                continue
-
-            if self.config.dataset_filter_keywords and (
-                _contains_keywords(p, self.config.dataset_filter_keywords)
-                or _contains_keywords(c, self.config.dataset_filter_keywords)
-            ):
-                continue
-
-            rows.append(rec)
-
-        logger.info(
-            f"Loaded {split} split from {path} with {len(rows)} usable samples."
-        )
-        return Dataset.from_list(rows)
-
-    def _prepare_batch(self, raw_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Takes a list of raw data dictionaries and prepares them for the trainer.
-        Includes chat templating, tokenization, and metadata extraction.
-        """
-        if self.tokenizer is None:
-            raise TrainingRuntimeError(
-                "Tokenizer must be set before preparing batches."
-            )
-
-        input_ids_list: List[mx.array] = []
-        (
-            raw_prompts,
-            raw_completions,
-            raw_test_cases,
-            is_invalid_sample_flags,
-            meta_data,
-        ) = ([], [], [], [], [])
-
-        for record in raw_batch:
-            # 1. Apply Chat Template
-            system_prompt_to_use = record.get("system") or getattr(
-                self.config, "system_prompt", THINK_STYLE_PROMPT_LITERAL
-            )
-            formatted_prompt = apply_chat_template_wrapper(
-                self.tokenizer, record["prompt"], system_prompt_to_use
-            )
-
-            # 2. Tokenize and Truncate Prompt
-            encoded_ids = self.tokenizer.encode(
-                formatted_prompt, add_special_tokens=True
-            )
-            if len(encoded_ids) > self.config.max_prompt_len:
-                encoded_ids = encoded_ids[: self.config.max_prompt_len]
-
-            input_ids_list.append(mx.array(encoded_ids, dtype=mx.int32))
-
-            # 3. Collect Raw Data
-            raw_prompts.append(record["prompt"])
-            raw_completions.append(record["completion"])
-            raw_test_cases.append(record.get("test_cases", []))
-            is_invalid_sample_flags.append(record.get("is_invalid_sample", False))
-            meta_data.append(record.get("meta", {}))
-
-        return {
-            "input_ids": input_ids_list,
-            "raw_prompts": raw_prompts,
-            "raw_completions": raw_completions,
-            "raw_test_cases": raw_test_cases,
-            "is_invalid_sample_flags": is_invalid_sample_flags,
-            "meta_data": meta_data,
-        }
+        self._train_dataset = self._process_raw_to_dataset(raw_train_data, "train")
+        self._val_dataset = self._process_raw_to_dataset(raw_val_data, "val") if raw_val_data else None
+        self._is_loaded = True
+        logger.info(f"Datasets loaded. Train: {len(self._train_dataset)}, Val: {len(self._val_dataset) if self._val_dataset else 0}")
+    
+    def _process_raw_to_dataset(self, raw_data: List[Dict[str, Any]], split_name: str) -> Dataset:
+        normalized_records = []
+        for obj in raw_data:
+            rec = _normalize_record(obj, self.config.dataset_prompt_key, self.config.dataset_answer_key, self.system_prompt)
+            if rec and not _looks_garbage(rec["prompt"]) and not _looks_garbage(rec["completion"]):
+                if not self.config.dataset_filter_keywords or not (_contains_keywords(rec["prompt"], self.config.dataset_filter_keywords) or _contains_keywords(rec["completion"], self.config.dataset_filter_keywords)):
+                    normalized_records.append(rec)
+        if not normalized_records:
+            logger.warning(f"No valid records found for {split_name}.")
+            return Dataset.from_list([])
+        return Dataset.from_list(normalized_records)
 
     def get_dataloader(self, split: str, batch_size: int) -> Iterator[Dict[str, Any]]:
-        """
-        Returns an iterator that yields batched data dictionaries for one epoch.
-        Uses a generator for memory efficiency.
-        """
-        dataset = self._train_dataset if split == "train" else self._val_dataset
-
-        if dataset is None or len(dataset) == 0:
-            logger.warning(f"Attempted to get dataloader for empty split: {split}.")
-            return iter([])
-
+        dataset = self._train_dataset if split == 'train' else self._val_dataset
+        if not dataset or len(dataset) == 0:
+            logger.warning(f"Dataloader for '{split}' is empty."); return iter([])
         indices = list(range(len(dataset)))
-        if self.config.shuffle_data and split == "train":
-            random.shuffle(indices)
+        if self.config.shuffle_data and split == 'train': random.shuffle(indices)
 
-        # Generator function uses an anonymous inner function for clear iterator definition
-        def batch_generator() -> Generator[Dict[str, Any], None, None]:
+        def batch_generator():
             for i in range(0, len(indices), batch_size):
-                batch_indices = indices[i : i + batch_size]
-
-                raw_batch_list = dataset.select(batch_indices).to_list()
-
-                if not raw_batch_list:
-                    return
-
-                try:
-                    prepared_batch = self._prepare_batch(raw_batch_list)
-                    yield prepared_batch
-                except Exception as e:
-                    logger.error(
-                        f"Error preparing batch {i//batch_size}: {e}. Skipping batch.",
-                        exc_info=True,
-                    )
-                    continue
-
+                batch_indices = indices[i:i + batch_size]
+                if not batch_indices: continue
+                
+                prompts_data, prompts_mx, _ = build_rollout_batch(self._tokenizer, dataset, batch_indices, self.config)
+                
+                if prompts_mx.size > 0:
+                    yield {
+                        'prompts_data': prompts_data,
+                        'prompts_mx': prompts_mx,
+                    }
         return batch_generator()

@@ -37,6 +37,7 @@ src/mlx_rl_trainer/generation/__init__.py
 src/mlx_rl_trainer/generation/async_server.py
 src/mlx_rl_trainer/generation/caching.py
 src/mlx_rl_trainer/generation/generator.py
+src/mlx_rl_trainer/generation/sampler_utils.py
 src/mlx_rl_trainer/generation/processors/__init__.py
 src/mlx_rl_trainer/generation/samplers/__init__.py
 src/mlx_rl_trainer/monitoring/__init__.py
