@@ -111,5 +111,5 @@ __all__ = [
     "log_softmax",
     # distributed
     "DistributedUtil",
-    '_is_metal_intedef'
+    "_is_metal_intedef",
 ]

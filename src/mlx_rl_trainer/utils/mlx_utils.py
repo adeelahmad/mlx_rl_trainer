@@ -13,7 +13,7 @@ from mlx_rl_trainer.core.config import (
     GenerationConfig,
     ExperimentConfig,
 )  # Import GenerationConfig for tags
-
+import mlx.optimizers as optim
 logger = logging.getLogger(__name__)
 
 
@@ -948,8 +948,9 @@ def make_dynamic_tag_bias_processor(
             # Add this check
             if max_hist_len <= 0:
                 return mx.full((B,), -1, dtype=mx.int32)
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1).astype(mx.int32)
-
+            return mx.where(
+                mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1
+            ).astype(mx.int32)
 
         last_ts, last_te, last_as, last_ae = (
             find_last_pos_mx(t) for t in (ts, te, as_id, ae)
@@ -1048,3 +1049,311 @@ def _mask_after_answer(
     )
     return initial_mask * end_mask.astype(mx.float32)
 
+
+# --- MLX-Specific Errors and Recovery (Unchanged) ---
+def _is_metal_internal_error(err: BaseException) -> bool:
+    s = str(err)
+    return (
+        "Command buffer execution failed" in s
+        or "[METAL]" in s in s
+        or "Internal Error" in s
+    )
+
+
+def metal_recover(stage: str):
+    logger.warning(f"[METAL] Recovering after error at stage: {stage}")
+    try:
+        mx.synchronize()
+    except Exception:
+        pass
+    mx.clear_cache()
+    gc.collect()
+
+
+def metal_safe_apply_gradients(
+    optimizer: optim.Optimizer, grads: Dict[str, mx.array], params: Dict[str, mx.array]
+):
+    try:
+        # NOTE: apply_gradients handles the update of both params and optimizer.state
+        return optimizer.apply_gradients(grads, params)
+    except Exception as e:
+        if _is_metal_internal_error(e):
+            metal_recover("apply_gradients")
+            return None
+        raise
+    finally:
+        mx.clear_cache()
+        gc.collect()
+
+
+# --- Gradient Manipulation ---
+_LAYER_PAT = re.compile(r"(?:^|[^a-zA-Z0-9_])layers\.(\d+)(?:[^0-9_]|$)")
+_HEAD_PAT = re.compile(r"\blm_head\b", re.I)
+
+
+def _find_layer_index(name: str) -> Optional[int]:
+    m = _LAYER_PAT.search(name)
+    if m:
+        return int(m.group(1))
+    parts = re.split(r"[\.\/]", name)
+    for i, p in enumerate(parts):
+        if p == "layers" and i + 1 < len(parts):
+            try:
+                return int(parts[i + 1])
+            except Exception:
+                pass
+    return None
+
+
+def _band_for_name(
+    name: str,
+    low_band: Tuple[int, int],
+    mid_band: Tuple[int, int],
+    top_band: Tuple[int, int],
+) -> str:
+    li = _find_layer_index(name)
+
+    def _in_range(li: int, band_range: Optional[Tuple[int, int]]) -> bool:
+        if band_range is None:
+            return False
+        try:
+            s, e = band_range
+            return (s is None or li >= int(s)) and (e is None or li <= int(e))
+        except Exception:
+            return False
+
+    if li is not None:
+        if _in_range(li, low_band):
+            return "low"
+        if _in_range(li, mid_band):
+            return "mid"
+        if _in_range(li, top_band):
+            return "top"
+    if _HEAD_PAT.search(name):
+        return "head"
+    return "other"
+
+
+def scale_grads_by_band(
+    grads_tree: Dict[str, mx.array], config: ExperimentConfig
+) -> Dict[str, mx.array]:
+    low_band, mid_band, top_band = (
+        config.trainer.low_band,
+        config.trainer.mid_band,
+        config.trainer.top_band,
+    )
+    low_mul, mid_mul, top_mul, head_mul = (
+        config.trainer.low_mul,
+        config.trainer.mid_mul,
+        config.trainer.top_mul,
+        config.trainer.head_mul,
+    )
+    g_flat = tree_flatten(grads_tree)
+    out = []
+    for name, g in g_flat:
+        if not isinstance(g, mx.array):
+            out.append((name, g))
+            continue
+        band = _band_for_name(
+            name,
+            low_band,
+            mid_band,
+            top_band,
+        )
+        mul = {"low": low_mul, "mid": mid_mul, "top": top_mul, "head": head_mul}.get(
+            band, 1.0
+        )
+        out.append((name, g * mul))
+    return tree_unflatten(out)
+
+
+def mask_grads_to_layer_band(
+    grads_tree: Dict[str, mx.array],
+    start: Optional[int],
+    end: Optional[int],
+    *,
+    include_embed: bool = True,
+    include_head: bool = True,
+    include_final_norm: bool = True,
+) -> Dict[str, mx.array]:
+    flat = tree_flatten(grads_tree)
+    kept = []
+    for name, g in flat:
+        if not isinstance(g, mx.array):
+            kept.append((name, g))
+            continue
+        li = _find_layer_index(name)
+        keep = False
+        if li is not None:
+            keep = (start is None or li >= start) and (end is None or li <= end)
+        else:
+            lname = name.lower()
+            if (
+                "embed" in lname
+                or "token_embedding" in lname
+                or "word_embedding" in lname
+            ):
+                keep = include_embed
+            elif (
+                "final_norm" in lname
+                or "norm_out" in lname
+                or "ln_f" in lname
+                or "final_layer_norm" in lname
+            ):
+                keep = include_final_norm
+            elif (
+                "lm_head" in lname
+                or "output" in lname
+                and "head" in lname
+                or "logits" in lname
+            ):
+                keep = include_head
+        kept.append((name, g if keep else mx.zeros_like(g)))
+    return tree_unflatten(kept)
+
+
+def mask_grads_to_specific_layers(
+    grads_tree: Dict[str, mx.array], layer_indices: Set[int]
+) -> Dict[str, mx.array]:
+    flat = tree_flatten(grads_tree)
+    kept = []
+    for name, g in flat:
+        if not isinstance(g, mx.array):
+            kept.append((name, g))
+            continue
+        if (
+            layer_idx := _find_layer_index(name)
+        ) is not None and layer_idx in layer_indices:
+            kept.append((name, g))
+        else:
+            kept.append((name, mx.zeros_like(g)))
+    return tree_unflatten(kept)
+
+
+# --- Attention Masking ---
+
+
+def _create_4d_attention_mask(
+    tokens: mx.array, pad_token_id: int, dtype: mx.Dtype = TARGET_FLOAT_DTYPE
+) -> mx.array:
+    if tokens.ndim != 2:
+        raise ValueError(f"tokens must be 2D, got {tokens.shape}")
+    B, T = tokens.shape
+    causal_mask = nn.MultiHeadAttention.create_additive_causal_mask(T, dtype=dtype)
+    padding_mask = (tokens == pad_token_id)[:, None, None, :]
+    neg_inf = mx.array(
+        -1e9, dtype=dtype
+    )  # Use large negative number instead of bfloat16 limit for wider compatibility
+    if dtype == mx.bfloat16:
+        neg_inf = mx.array(-65504.0, dtype=dtype)
+
+    combined = mx.minimum(causal_mask, mx.where(padding_mask, neg_inf, 0.0))
+    return combined
+
+
+# --- Sampling ---
+
+
+def safe_make_sampler(config: Any, temp: float) -> Callable:
+    """Creates a sampler safely, handling differing mlx-lm API versions."""
+    top_p = float(getattr(config, "sampling_top_p", 0.9))
+    top_k = int(getattr(config, "sampling_top_k", 0))
+    min_p_val = float(getattr(config, "sampling_min_p", 0.0))
+
+    # Ensure temp is not below 0 or ridiculously high
+    temp = max(1e-5, temp)
+
+    # Note: MLX sampling functions evolve. Try the most complete signature first.
+    try:
+        return make_sampler(temp=temp, top_p=top_p, min_p=min_p_val, top_k=top_k)
+    except TypeError:
+        try:
+            # Older signature: no top_k or min_p
+            return make_sampler(temp=temp, top_p=top_p)
+        except Exception as e:
+            logger.error(f"Failed to create sampler: {e}. Falling back to greedy.")
+            return make_sampler(temp=1e-6, top_p=1.0)  # Near greedy
+
+
+# --- Logit Processors Helper Functions ---
+
+_TOOL_LIKE_MARKERS = [
+    "<tool_code>",
+    "</tool_code>",
+    "<json_output>",
+    "</json_output>",
+    "<img_base64>",
+    "</img_base64>",
+    "<ocr_text>",
+    "</ocr_text>",
+]
+
+
+def _first_token_ids_for_lexemes(
+    tokenizer: TokenizerWrapper, lexemes: Sequence[str]
+) -> List[int]:
+    ids: List[int] = []
+    for lx in lexemes:
+        # Check raw token
+        if (
+            (t := tokenizer.encode(lx, add_special_tokens=False))
+            and t
+            and t[0] not in ids
+        ):
+            ids.append(t[0])
+        # Check token with leading space
+        if (
+            (t_space := tokenizer.encode(" " + lx, add_special_tokens=False))
+            and t_space
+            and t_space[0] not in ids
+        ):
+            ids.append(t_space[0])
+    return ids
+
+
+def _letter_token_ids(
+    tokenizer: TokenizerWrapper, letters: Sequence[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+) -> Dict[str, List[int]]:
+    out = {}
+    for L in letters:
+        cand = []
+        if (ids := tokenizer.encode(L, add_special_tokens=False)) and len(ids) == 1:
+            cand.append(ids[0])
+        if (
+            (ids := tokenizer.encode(" " + L, add_special_tokens=False))
+            and len(ids) == 1
+            and ids[0] not in cand
+        ):
+            cand.append(ids[0])
+        # Include common suffix tokenizations
+        for suf in [")", ".", " )", " ."]:
+            if (
+                (ids := tokenizer.encode(L + suf, add_special_tokens=False))
+                and len(ids) == 1
+                and ids[0] not in cand
+            ):
+                cand.append(ids[0])
+        out[L] = cand
+    return out
+
+
+def _resolve_tag_ids(
+    tokenizer: TokenizerWrapper, config: ExperimentConfig
+) -> Dict[str, Optional[int]]:
+    def _one_id(tok_str):
+        if not tok_str:
+            return None
+        try:
+            ids = tokenizer.encode(tok_str, add_special_tokens=False)
+            return ids[0] if len(ids) == 1 else None
+        except Exception:
+            return None
+
+    tags = config.generation
+    return {
+        "think_start": _one_id(tags.think_start_tag),
+        "think_end": _one_id(tags.think_end_tag),
+        "answer_start": _one_id(tags.answer_start_tag),
+        "answer_end": _one_id(tags.answer_end_tag),
+        "eos": tokenizer.eos_token_id,
+    }
