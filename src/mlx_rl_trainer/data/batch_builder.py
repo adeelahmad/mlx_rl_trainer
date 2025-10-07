@@ -16,11 +16,11 @@ def _compose_prompt_from_sample(sample: Dict[str, Any]) -> Tuple[str, Optional[s
 
     prompt_text = sample.get('prompt', sample.get('question', ''))
     completion = sample.get('completion', sample.get('answer', ''))
-    
+
     if isinstance(completion, str):
         ref_think = extract_think_region(completion, gen_config)
         ref_ans = extract_answer_region(completion, gen_config) or completion.strip()
-    
+
     return prompt_text, ref_ans, ref_think
 
 def build_rollout_batch(
@@ -29,7 +29,7 @@ def build_rollout_batch(
     indices: List[int],
     config: ExperimentConfig, # Expects the full ExperimentConfig
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
-    
+
     prompts_data: List[Dict[str, Any]] = []
     max_len_in_batch = 0
     pad_id = tokenizer.pad_token_id
@@ -38,12 +38,14 @@ def build_rollout_batch(
         try:
             raw = dataset[i]
             prompt_text, ref_ans, ref_think = _compose_prompt_from_sample(raw)
-            
-            mcq_meta = _mcq_meta_from_sample({'prompt': prompt_text, 'completion': ref_ans, 'meta': raw.get('meta', {})})
-            
-            formatted_prompt = apply_chat_template_wrapper(tokenizer, prompt_text, config.system_prompt)
-            p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=True)
 
+            mcq_meta = _mcq_meta_from_sample({'prompt': prompt_text, 'completion': ref_ans, 'meta': raw.get('meta', {})})
+
+            formatted_prompt = apply_chat_template_wrapper(tokenizer, prompt_text, "")
+            p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=True)
+            logging.debug(config)
+            import os
+            os._exit(0)
             # CORRECTED: Access max_prompt_len via config.data
             if len(p_tokens) > config.data.max_prompt_len:
                 p_tokens = p_tokens[-config.data.max_prompt_len:]
