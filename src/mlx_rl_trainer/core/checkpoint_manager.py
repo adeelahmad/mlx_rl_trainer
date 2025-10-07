@@ -235,9 +235,13 @@ class CheckpointManager:
             rng_state = metadata.get("rng_state", {})
             if rng_state:
                 if "python" in rng_state:
-                    random.setstate(tuple(rng_state["python"]))
+                    # JSON serialization converts tuples to lists, so we need to convert the inner list back to a tuple
+                    python_rng_state = rng_state["python"]
+                    random.setstate((python_rng_state[0], tuple(python_rng_state[1]), None))\
+
                 if "numpy" in rng_state:
-                    np.random.set_state(tuple(rng_state["numpy"]))
+                    np_rng_state = rng_state["numpy"]
+                    np.random.set_state((np_rng_state[0], np.array(np_rng_state[1], dtype=np.uint32), np_rng_state[2], np_rng_state[3], np_rng_state[4]))
                 # For MLX, we set the global key (if it's a simple seed or a list)
                 if "mlx_key_full_array" in rng_state and isinstance(
                     rng_state["mlx_key_full_array"], list

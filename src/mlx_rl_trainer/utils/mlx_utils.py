@@ -117,15 +117,14 @@ def _band_for_name(
 
 
 def scale_grads_by_band(
-    grads_tree: Dict[str, mx.array],
-    params_tree: Dict[str, mx.array],
-    config: ExperimentConfig,
+    grads_tree: Dict[str, mx.array], config: ExperimentConfig
 ) -> Dict[str, mx.array]:
-    low_mul = float(config.trainer.low_mul)
-    mid_mul = float(config.trainer.mid_mul)
-    top_mul = float(config.trainer.top_mul)
-    head_mul = float(config.trainer.head_mul)
-    other_mul = 1.0
+    low_mul, mid_mul, top_mul, head_mul = (
+        config.trainer.low_mul,
+        config.trainer.mid_mul,
+        config.trainer.top_mul,
+        config.trainer.head_mul,
+    )
     g_flat = tree_flatten(grads_tree)
     out = []
     for name, g in g_flat:
@@ -139,10 +138,37 @@ def scale_grads_by_band(
             config.trainer.top_band,
         )
         mul = {"low": low_mul, "mid": mid_mul, "top": top_mul, "head": head_mul}.get(
-            band, other_mul
+            band, 1.0
         )
         out.append((name, g * mul))
     return tree_unflatten(out)
+
+
+# def mask_grads_to_layer_band(grads_tree: Dict[str, mx.array], start: Optional[int], end: Optional[int], *, include_embed: bool = True, include_head: bool = True, include_final_norm: bool = True) -> Dict[str, mx.array]:
+#     flat = tree_flatten(grads_tree)
+#     kept = []
+#     for name, g in flat:
+#         if not isinstance(g, mx.array): kept.append((name, g)); continue
+#         li = _find_layer_index(name)
+#         keep = False
+#         if li is not None:
+#             keep = (start is None or li >= start) and (end is None or li <= end)
+#         else:
+#             lname = name.lower()
+#             if "embed" in lname or "token_embedding" in lname or "word_embedding" in lname: keep = include_embed
+#             elif "final_norm" in lname or "norm_out" in lname or "ln_f" in lname or "final_layer_norm" in lname: keep = include_final_norm
+#             elif "lm_head" in lname or ("output" in lname and "head" in lname) or "logits" in lname: keep = include_head
+#         kept.append((name, g if keep else mx.zeros_like(g)))
+#     return tree_unflatten(kept)
+
+# def mask_grads_to_specific_layers(grads_tree: Dict[str, mx.array], layer_indices: Set[int]) -> Dict[str, mx.array]:
+#     flat = tree_flatten(grads_tree)
+#     kept = []
+#     for name, g in flat:
+#         if not isinstance(g, mx.array): kept.append((name, g)); continue
+#         if (layer_idx := _find_layer_index(name)) is not None and layer_idx in layer_indices: kept.append((name, g))
+#         else: kept.append((name, mx.zeros_like(g)))
+#     return tree_unflatten(kept)
 
 
 def mask_grads_to_layer_band(
@@ -327,50 +353,40 @@ def _resolve_tag_ids(
 def make_dynamic_tag_bias_processor(
     tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
 ) -> Callable:
-    """
-    Creates a dynamic logit processor that applies tag-based biases (positive/negative)
-    and handles MCQ hard masking based on the current state (inside <think>, inside <answer>, etc.).
-    """
     tag_ids = _resolve_tag_ids(tokenizer, config)
-
     letter_map = _letter_token_ids(tokenizer, letters=LETTER_ALPH)
     mcq_letter_ids = sorted(set(sum(letter_map.values(), [])))
-
-    # Use GenerationConfig for these parameters
     gen_cfg = config.generation
     ban_ids = _first_token_ids_for_lexemes(tokenizer, gen_cfg.ban_phrases_for_bias)
     encourage_ids = _first_token_ids_for_lexemes(
         tokenizer, gen_cfg.encourage_phrases_for_bias
     )
     tool_ids = _first_token_ids_for_lexemes(tokenizer, _TOOL_LIKE_MARKERS)
-
     te, ts, as_id, ae, eos_tok = (
         tag_ids.get(k)
         for k in ("think_end", "think_start", "answer_start", "answer_end", "eos")
     )
 
-    B_CLOSE = gen_cfg.bias_close_think
-    B_AS = gen_cfg.bias_answer_start
-    P_REOPEN_THINK = gen_cfg.punish_reopen_think
-    P_EXTRA_TE = gen_cfg.punish_extra_think_end
-    P_REOPEN_ANS = gen_cfg.punish_reopen_answer
-    B_EOS_ANS = gen_cfg.bias_eos_after_answer
-    MIN_ANS = gen_cfg.min_answer_tokens
-    MIN_ANS_MCQ = gen_cfg.min_answer_tokens_mcq
-    HARD_MASK = gen_cfg.hard_mask_mcq_first_token
-    LIFT_MCQ = gen_cfg.mcq_letter_lift
-    BAN_MCQ = gen_cfg.mcq_ban_first_bias
-    BAN_NONMCQ = gen_cfg.nonmcq_ban_first_bias
-    MCQ_CLOSE_K = gen_cfg.mcq_close_after_k
-    B_MCQ_CLOSE = gen_cfg.mcq_answer_end_bias
-    MIN_THINK = gen_cfg.min_think_tokens
-    B_END_EARLY = gen_cfg.think_end_early_bias
+    # Extract biases from GenerationConfig
+    B_CLOSE, B_AS = gen_cfg.bias_close_think, gen_cfg.bias_answer_start
+    P_REOPEN_THINK, P_EXTRA_TE = (
+        gen_cfg.punish_reopen_think,
+        gen_cfg.punish_extra_think_end,
+    )
+    P_REOPEN_ANS, B_EOS_ANS = (
+        gen_cfg.punish_reopen_answer,
+        gen_cfg.bias_eos_after_answer,
+    )
+    MIN_ANS, MIN_ANS_MCQ = gen_cfg.min_answer_tokens, gen_cfg.min_answer_tokens_mcq
+    HARD_MASK, LIFT_MCQ = gen_cfg.hard_mask_mcq_first_token, gen_cfg.mcq_letter_lift
+    BAN_MCQ, BAN_NONMCQ = gen_cfg.mcq_ban_first_bias, gen_cfg.nonmcq_ban_first_bias
+    MCQ_CLOSE_K, B_MCQ_CLOSE = gen_cfg.mcq_close_after_k, gen_cfg.mcq_answer_end_bias
+    MIN_THINK, B_END_EARLY = gen_cfg.min_think_tokens, gen_cfg.think_end_early_bias
     B_AS_MIN_THINK = gen_cfg.bias_answer_start_after_min_think
     B_ENCOURAGE = gen_cfg.encourage_think_bias
     P_TOOL = gen_cfg.tool_call_penalty * -100
 
     def _proc_vectorized(hist_list: List[List[int]], logits: mx.array) -> mx.array:
-        """Vectorized logit processor function applied during generation."""
         if logits is None or logits.ndim != 2:
             return logits
         B, V = logits.shape
@@ -385,7 +401,6 @@ def make_dynamic_tag_bias_processor(
             [row + [pad_id] * (max_hist_len - len(row)) for row in hist_list],
             dtype=mx.int32,
         )
-
         if tool_ids:
             logits[:, tool_ids] += P_TOOL
 
@@ -405,15 +420,12 @@ def make_dynamic_tag_bias_processor(
             find_last_pos_mx(as_id),
             find_last_pos_mx(ae),
         )
-
         history_len_mx = mx.array([len(row) for row in hist_list], dtype=mx.int32)
         inside_think = (last_ts != -1) & (last_te < last_ts) & (last_as < last_ts)
         inside_answer = (last_as != -1) & (last_ae < last_as)
         ae_seen = last_ae != -1
-
         k_think = mx.where(inside_think, history_len_mx - (last_ts + 1), 0)
         k_answer = mx.where(inside_answer, history_len_mx - (last_as + 1), 0)
-
         is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
 
         if ts is not None and te is not None:
@@ -429,11 +441,13 @@ def make_dynamic_tag_bias_processor(
             can_start_answer = mx.logical_and(
                 (last_te > last_as), mx.logical_not(inside_answer)
             )
-            # FIX: Use mx.logical_or and mx.logical_not for boolean array logic
-            if B_AS_MIN_THINK:
-                can_start_answer = mx.logical_and(
-                    can_start_answer, (k_think >= MIN_THINK)
-                )
+            # FIX: Use mx.logical_or and mx.logical_not for boolean array logic.
+            if not B_AS_MIN_THINK:
+                # If the flag is false, the min_think_ok condition is ignored (always true)
+                min_think_ok = mx.full_like(can_start_answer, True)
+            else:
+                min_think_ok = k_think >= MIN_THINK
+            can_start_answer = mx.logical_and(can_start_answer, min_think_ok)
 
             if as_id is not None:
                 logits[:, as_id] += mx.where(can_start_answer, B_AS, 0.0)

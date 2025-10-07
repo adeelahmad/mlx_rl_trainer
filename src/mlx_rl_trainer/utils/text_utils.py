@@ -7,13 +7,19 @@
 import logging
 import re
 import string
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Callable
 from functools import lru_cache  # For caching static config
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
+import mlx.nn as nn
+
 # Use a custom name here to prevent naming conflict with local uses of 'RewardConfig'
-from mlx_rl_trainer.core.config import RewardConfig as StaticRewardConfig
+from mlx_rl_trainer.core.config import (
+    RewardConfig as StaticRewardConfig,
+    ExperimentConfig,
+)
+import mlx.core as mx
 
 logger = logging.getLogger(__name__)
 
@@ -894,3 +900,145 @@ def _extract_predicted_letters(
             ]  # Convert indices to letters
 
     return []
+
+
+def _first_token_ids_for_lexemes(
+    tokenizer: TokenizerWrapper, lexemes: Sequence[str]
+) -> List[int]:
+    """Finds the first token ID for a list of lexemes."""
+    ids: List[int] = []
+    for lx in lexemes:
+        for prefix in ["", " "]:
+            t = tokenizer.encode(prefix + lx, add_special_tokens=False)
+            if t and t[0] not in ids:
+                ids.append(t[0])
+    return ids
+
+
+def _letter_token_ids(tokenizer: TokenizerWrapper) -> Dict[str, List[int]]:
+    """Finds token IDs for single letter options."""
+    out = {}
+    for L in LETTER_ALPH:
+        cand = []
+        for suf in ["", " ", ")", ".", " )", " ."]:
+            ids = tokenizer.encode(L + suf, add_special_tokens=False)
+            if len(ids) == 1 and ids[0] not in cand:
+                cand.append(ids[0])
+        out[L] = cand
+    return out
+
+
+def _resolve_tag_ids(
+    tokenizer: TokenizerWrapper, config: ExperimentConfig
+) -> Dict[str, Optional[int]]:
+    """Converts critical tag strings into their single token IDs."""
+
+    def _one_id(tok_str):
+        ids = tokenizer.encode(tok_str, add_special_tokens=False)
+        return ids[0] if len(ids) == 1 else None
+
+    fmt_cfg = next((r for r in config.rewards if r.name == "format_structure"), None)
+    return {
+        "think_start": _one_id(fmt_cfg.think_start_tag if fmt_cfg else "<think>"),
+        "think_end": _one_id(fmt_cfg.think_end_tag if fmt_cfg else "</think>"),
+        "answer_start": _one_id(fmt_cfg.answer_start_tag if fmt_cfg else "<answer>"),
+        "answer_end": _one_id(fmt_cfg.answer_end_tag if fmt_cfg else "</answer>"),
+        "eos": tokenizer.eos_token_id,
+    }
+
+
+def make_dynamic_tag_bias_processor(
+    tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
+) -> Callable:
+    """Creates a dynamic logit processor for tag-based biases and MCQ masking."""
+    tag_ids = _resolve_tag_ids(tokenizer, config)
+    mcq_letter_ids = sorted(set(sum(_letter_token_ids(tokenizer).values(), [])))
+    ban_ids = _first_token_ids_for_lexemes(
+        tokenizer, getattr(config.trainer, "ban_phrases_for_bias", [])
+    )
+    te, ts, as_id, ae = (
+        tag_ids.get(k)
+        for k in ("think_end", "think_start", "answer_start", "answer_end")
+    )
+
+    def _proc_vectorized(hist_list: List[List[int]], logits: mx.array) -> mx.array:
+        if logits.ndim != 2:
+            return logits
+        B, V = logits.shape
+        max_hist_len = max(len(row) for row in hist_list) if hist_list else 0
+        if max_hist_len == 0:
+            return logits
+
+        pad_id = getattr(tokenizer, "pad_token_id", 0)
+        history_mx = mx.array(
+            [row + [pad_id] * (max_hist_len - len(row)) for row in hist_list],
+            dtype=mx.int32,
+        )
+
+        def find_last_pos_mx(tag_id):
+            if tag_id is None:
+                return mx.full((B,), -1, dtype=mx.int32)
+            matches = history_mx == tag_id
+
+            # FIX: Use slicing `[:, ::-1]` instead of `mx.flip(..., axis=1)` for backward compatibility.
+            rev_indices = mx.argmax(matches[:, ::-1], axis=1)
+
+            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+
+        last_ts, last_te, last_as, last_ae = (
+            find_last_pos_mx(t) for t in [ts, te, as_id, ae]
+        )
+        inside_answer = (last_as != -1) & (last_ae < last_as)
+        k_answer = mx.where(
+            inside_answer, mx.array([len(h) for h in hist_list]) - (last_as + 1), 0
+        )
+
+        is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
+        mcq_first_token_mask = is_mcq_mask & inside_answer & (k_answer == 0)
+
+        if mx.any(mcq_first_token_mask).item() and getattr(
+            config.trainer, "hard_mask_mcq_first_token", False
+        ):
+            mcq_allowed_logits = mx.full((V,), -1e9, dtype=logits.dtype)
+            mcq_allowed_logits[mcq_letter_ids] = getattr(
+                config.trainer, "mcq_letter_lift", 8.0
+            )
+            if ban_ids:
+                mcq_allowed_logits[ban_ids] = getattr(
+                    config.trainer, "mcq_ban_first_bias", -14.0
+                )
+            logits = mx.where(
+                mcq_first_token_mask[:, None], mcq_allowed_logits[None, :], logits
+            )
+        return logits
+
+    return _proc_vectorized
+
+
+def _mask_after_answer(
+    responses_mx: mx.array,
+    initial_mask: mx.array,
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+) -> mx.array:
+    if responses_mx.ndim != 2:
+        return initial_mask
+    B, L_gen = responses_mx.shape
+    initial_mask = initial_mask.astype(mx.float32)
+    answer_end_id = _resolve_tag_ids(tokenizer, config).get("answer_end")
+    if answer_end_id is None:
+        return initial_mask
+
+    indices = mx.arange(L_gen)
+    is_answer_end = responses_mx == answer_end_id
+    first_end_indices = mx.argmin(mx.where(is_answer_end, indices, L_gen + 1), axis=1)
+    end_mask = indices[None, :] < (first_end_indices + 1)[:, None]
+    return initial_mask * end_mask.astype(mx.float32)
+
+
+class ContentAlignBridge(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, x):
+        return x

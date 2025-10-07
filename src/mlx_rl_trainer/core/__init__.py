@@ -1,7 +1,7 @@
 # file_path: mlx_rl_trainer/src/mlx_rl_trainer/core/__init__.py
-# revision_no: 001
-# goals_of_writing_code_block: Core __init__.py for MLX RL Trainer project.
-# type_of_code_response: add new code
+# revision_no: 002
+# goals_of_writing_code_block: Remove obsolete imports of get_dataset and filter_and_prepare_dataset from dataset_manager to resolve ImportError.
+# type_of_code_response: change existing
 """Core training infrastructure."""
 from .config import (
     ExperimentConfig,
@@ -23,7 +23,7 @@ from .trainer import (
     TrainingRuntimeError,
 )
 from .model_manager import ModelManager
-from .dataset_manager import get_dataset, filter_and_prepare_dataset
+from .dataset_manager import DatasetManager  # Import only the class
 
 __all__ = [
     "ExperimentConfig",
@@ -42,7 +42,6 @@ __all__ = [
     "CheckpointError",
     "TrainingRuntimeError",
     "ModelManager",
-    "get_dataset",
-    "filter_and_prepare_dataset",
+    "DatasetManager",
     "CheckpointManager",
 ]
