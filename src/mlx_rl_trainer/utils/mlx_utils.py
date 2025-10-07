@@ -541,11 +541,21 @@ def make_dynamic_tag_bias_processor(
 
         if eos_tok is not None:
             logits = logits.at[:, eos_tok].add(mx.where(ae_seen, B_EOS_ANS, 0.0))
+        # if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
+        #     # --- FIX START ---
+        #     # Do not use .tolist() for boolean indexing. Use the MLX tensor directly.
+        #     logits = logits.at[inside_think, encourage_ids].add(B_ENCOURAGE)
+        #     # --- FIX END ---
+        #
         if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
-            # --- FIX START ---
-            # Do not use .tolist() for boolean indexing. Use the MLX tensor directly.
-            logits = logits.at[inside_think, encourage_ids].add(B_ENCOURAGE)
-            # --- FIX END ---
+            # Create a bias array for the encourage_ids columns
+            encourage_bias = mx.zeros_like(logits)
+            # Set bias for encourage_ids columns across all rows
+            encourage_bias = encourage_bias.at[:, encourage_ids].set(B_ENCOURAGE)
+            # Apply only to rows where inside_think is True by broadcasting the mask
+            encourage_bias = encourage_bias * inside_think[:, None]
+            # Add the bias to logits
+            logits = logits + encourage_bias
 
         mcq_first_token_mask = mx.logical_and(
             is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
