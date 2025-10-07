@@ -1,5 +1,12 @@
 """Text processing utility functions."""
 
+import gc
+import re
+import random
+import string
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from pathlib import Path
+
 import logging
 import re
 import string
@@ -29,6 +36,13 @@ from mlx_rl_trainer.core.config import GenerationConfig
 
 logger = logging.getLogger(__name__)
 
+LETTER_ALPH = string.ascii_uppercase
+
+
+# --- MLX Global Config & Constants ---
+TARGET_FLOAT_DTYPE = mx.bfloat16
+MIN_REQUIRED_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
+SAVE_ON_EXIT_FLAG_PATH = Path(".save_on_exit_request")
 LETTER_ALPH = string.ascii_uppercase
 
 
