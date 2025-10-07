@@ -6,7 +6,7 @@ import logging, time, gc
 import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
 import numpy as np
 from tqdm import trange
-from mlx.utils import tree_flatten # Import tree_flatten
+from mlx.utils import tree_flatten
 
 from .config import ExperimentConfig
 from .model_manager import ModelManager
@@ -16,7 +16,7 @@ from ..monitoring.metrics_logger import MetricsLogger
 from .exceptions import (
     TrainingRuntimeError,
     CheckpointError,
-)  # Import from the new module
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,7 @@ class BaseTrainer(ABC):
             leave=True,
         )
 
-        train_data_iterator = iter([]) # Start with an empty iterator
+        train_data_iterator = iter([])
 
         with pbar:
             while self.global_step < self.config.trainer.num_training_steps:
@@ -223,21 +223,19 @@ class BaseTrainer(ABC):
                     gc.collect()
 
                 if accum_grads and self.optimizer:
-                    # --- FIX START ---
-                    # Correctly iterate over the values (v) of the flattened gradient tree.
-                    # The original code was iterating over (key, value) tuples.
                     grad_norm = np.linalg.norm(
                         [
-                            np.linalg.norm(v.flatten())
+                            np.linalg.norm(np.array(v.flatten().astype(mx.float32)))
                             for _, v in tree_flatten(accum_grads)
                             if isinstance(v, mx.array)
                         ]
                     )
+
+                    # --- FIX START ---
+                    # To update the learning rate in MLX, assign it directly to the attribute.
+                    self.optimizer.learning_rate = self.lr_scheduler(self.global_step)
                     # --- FIX END ---
 
-                    self.optimizer.set_learning_rate(
-                        mx.array(float(self.lr_scheduler(self.global_step)))
-                    )
                     self.optimizer.apply_gradients(
                         accum_grads, self.actor_model.trainable_parameters()
                     )
@@ -245,7 +243,8 @@ class BaseTrainer(ABC):
 
                     avg_loss = np.mean([m.loss for m in accumulated_metrics_list])
                     avg_reward_mean = np.mean(avg_rewards_list)
-                    avg_lr = self.lr_scheduler(self.global_step)
+                    avg_lr = self.optimizer.learning_rate # Get the current LR from the optimizer
+
                     aggregated_raw_rewards = (
                         {
                             k: np.mean(
@@ -266,7 +265,7 @@ class BaseTrainer(ABC):
                                 "train/loss": avg_loss,
                                 "train/reward_mean": avg_reward_mean,
                                 "train/grad_norm": grad_norm,
-                                "train/learning_rate": avg_lr,
+                                "train/learning_rate": float(avg_lr),
                                 "train/kl_divergence": np.mean(
                                     [m.kl_divergence for m in accumulated_metrics_list]
                                 ),
@@ -284,7 +283,7 @@ class BaseTrainer(ABC):
                         {
                             "Loss": f"{avg_loss:.4f}",
                             "Rew": f"{avg_reward_mean:.3f}",
-                            "LR": f"{avg_lr:.1e}",
+                            "LR": f"{float(avg_lr):.1e}",
                             "GradN": f"{grad_norm:.3f}",
                         }
                     )
