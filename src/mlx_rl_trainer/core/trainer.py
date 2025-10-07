@@ -6,7 +6,7 @@ import logging, time, gc
 import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
 import numpy as np
 from tqdm import trange
-from mlx.utils import tree_flatten
+
 
 from .config import ExperimentConfig
 from .model_manager import ModelManager
@@ -17,6 +17,8 @@ from .exceptions import (
     TrainingRuntimeError,
     CheckpointError,
 )
+
+from mlx.utils import tree_map, tree_flatten
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +217,7 @@ class BaseTrainer(ABC):
 
                     if grads_mb:
                         accum_grads = (
-                            mx.utils.tree_map(mx.add, accum_grads, grads_mb)
+                            tree_map(mx.add, accum_grads, grads_mb)
                             if accum_grads
                             else grads_mb
                         )
