@@ -1,6 +1,6 @@
 """HumanEval benchmark evaluator implementation."""
 import logging, random, json, concurrent.futures
-from multiprocessing import get_context, Queue, Process
+from multiprocessing import get_context
 from typing import Dict, Any, List, Optional
 from datasets import Dataset
 from mlx_lm.tokenizer_utils import TokenizerWrapper
@@ -79,32 +79,22 @@ class HumanEvalEvaluator(BaseEvaluator):
                     model, tokenizer, problem_prompt, max_k_required
                 )
 
-                futures_with_queues = []
-                for solution_text in generated_solutions:
-                    result_queue = mp_context.Queue(1)
-                    future = executor.submit(
+                futures = [
+                    executor.submit(
                         _execute_code_in_isolated_process_wrapper,
                         solution_text,
                         json.dumps(problem_test_cases),
                         self.code_execution_config_json,
-                        result_queue,
                     )
-                    futures_with_queues.append((future, result_queue))
+                    for solution_text in generated_solutions
+                ]
 
                 solution_pass_scores = []
-                for _, result_queue in futures_with_queues:
+                for future in concurrent.futures.as_completed(futures):
                     try:
-                        solution_pass_scores.append(
-                            result_queue.get(timeout=self.timeout + 2)
-                        )
+                        solution_pass_scores.append(future.result(timeout=self.timeout + 2))
                     except Exception:
                         solution_pass_scores.append(0.0)
-                    finally:
-                        if result_queue:
-                            try:
-                                result_queue.close()
-                            except Exception:
-                                pass
 
                 solution_pass_statuses = [
                     score > 0.99 for score in solution_pass_scores

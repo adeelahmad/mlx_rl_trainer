@@ -56,7 +56,8 @@ venv.bak/
 *.safetensors
 *.gguf
 *.npz
-wanddb
+wandb
+wandb/*
 *.json
 *.jsonl
 
