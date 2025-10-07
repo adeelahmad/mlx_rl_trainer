@@ -31,6 +31,7 @@ data:
   max_gen_len: 384
   loader_type: "jsonl"
   shuffle_data: true
+  system_prompt: ""
 
 rewards:
   - name: "code_execution"

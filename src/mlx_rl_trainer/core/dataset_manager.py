@@ -42,8 +42,7 @@ def _normalize_record(obj: Dict[str, Any], prompt_key: str, completion_key: str,
     final_meta.update({k: v for k, v in meta.items() if k not in final_meta})
 
     test_cases = obj.get('test_cases', [])
-    if not isinstance(test_cases, list):
-        test_cases = [test_cases] if test_cases is not None else []
+    if not isinstance(test_cases, list): test_cases = [test_cases] if test_cases is not None else []
     test_cases_str = [json.dumps(tc) if isinstance(tc, dict) else str(tc) for tc in test_cases]
 
     if not prompt.strip() and not completion_cleaned.strip() and not system.strip(): return None
@@ -51,19 +50,17 @@ def _normalize_record(obj: Dict[str, Any], prompt_key: str, completion_key: str,
     return {'prompt': prompt, 'completion': completion_cleaned, 'system': system, 'test_cases': test_cases_str, 'is_invalid_sample': obj.get('is_invalid_sample', False), 'meta': final_meta}
 
 class DatasetManager:
-    def __init__(self, config: DataConfig, tokenizer: Optional[TokenizerWrapper]):
-        self.config = config
-        self._tokenizer = tokenizer
+    def __init__(self, config: ExperimentConfig): # Takes full ExperimentConfig now
+        self.exp_config = config
+        self.config = config.data
+        self._tokenizer: Optional[TokenizerWrapper] = None
         self._train_dataset: Optional[Dataset] = None
         self._val_dataset: Optional[Dataset] = None
         self._is_loaded = False
-        self.system_prompt: str = ""
         logger.debug("DatasetManager initialized.")
 
     def set_tokenizer(self, tokenizer: TokenizerWrapper):
         self._tokenizer = tokenizer
-    def set_system_prompt(self, system_prompt: str):
-        self.system_prompt = system_prompt
 
     async def _async_read_jsonl(self, path: Path) -> List[Dict[str, Any]]:
         if not path.is_file(): raise FileNotFoundError(f"Data file not found: {path}")
@@ -101,7 +98,7 @@ class DatasetManager:
     def _process_raw_to_dataset(self, raw_data: List[Dict[str, Any]], split_name: str) -> Dataset:
         normalized_records = []
         for obj in raw_data:
-            rec = _normalize_record(obj, self.config.dataset_prompt_key, self.config.dataset_answer_key, self.system_prompt)
+            rec = _normalize_record(obj, self.config.dataset_prompt_key, self.config.dataset_answer_key, self.exp_config.system_prompt)
             if rec and not _looks_garbage(rec["prompt"]) and not _looks_garbage(rec["completion"]):
                 if not self.config.dataset_filter_keywords or not (_contains_keywords(rec["prompt"], self.config.dataset_filter_keywords) or _contains_keywords(rec["completion"], self.config.dataset_filter_keywords)):
                     normalized_records.append(rec)
@@ -129,25 +126,16 @@ class DatasetManager:
         dataset = self._train_dataset if split == 'train' else self._val_dataset
         if not dataset or len(dataset) == 0:
             logger.warning(f"Dataloader for '{split}' is empty."); return iter([])
-
         indices = list(range(len(dataset)))
         if self.config.shuffle_data and split == 'train': random.shuffle(indices)
-
-        # Create a dummy ExperimentConfig to pass to build_rollout_batch,
-        # as it expects the top-level config.
-        dummy_exp_config = ExperimentConfig(
-            trainer={'algorithm': 'grpo', 'output_dir': Path('./'), 'num_training_steps':1, 'learning_rate':1e-5, 'ppo_batch_size':1, 'num_rollout_samples':1, 'grad_accum_steps':1},
-            model={'model_path': Path('./')},
-            data=self.config
-        )
-        dummy_exp_config.system_prompt = self.system_prompt
 
         def batch_generator():
             for i in range(0, len(indices), batch_size):
                 batch_indices = indices[i:i + batch_size]
                 if not batch_indices: continue
                 
-                prompts_data, prompts_mx, _ = build_rollout_batch(self._tokenizer, dataset, batch_indices, dummy_exp_config)
+                # Pass the full ExperimentConfig to the batch builder
+                prompts_data, prompts_mx, _ = build_rollout_batch(self._tokenizer, dataset, batch_indices, self.exp_config)
                 
                 if prompts_mx.size > 0:
                     yield {

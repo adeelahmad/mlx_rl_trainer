@@ -1,1 +1,80 @@
 outputs
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Installation
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a parent folder of pyproject.toml,
+#  but in case your project builds executable files from this directory
+*.manifest
+*.spec
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project-specific Output & Logs
+/outputs/
+/eval_outputs/
+/wandb/
+/data/dummy_*.jsonl # Ignore dummy data files
+/models/mock_model/ # Ignore mock model files
+*.log
+*.csv
+*.jsonl
+
+# Checkpoints & Saved Models
+# (It's often good practice to ignore large model files from git)
+/checkpoints/
+/model_dir/
+*.safetensors
+*.gguf
+*.npz
+wanddb
+*.json
+*.jsonl
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy, pytest and coverage
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/

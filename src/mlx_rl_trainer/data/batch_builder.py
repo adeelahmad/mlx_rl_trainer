@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def _compose_prompt_from_sample(sample: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
     ref_ans, ref_think = None, None
-    gen_config = GenerationConfig()
+    gen_config = GenerationConfig() # Use default GenerationConfig for extraction
 
     prompt_text = sample.get('prompt', sample.get('question', ''))
     completion = sample.get('completion', sample.get('answer', ''))
@@ -27,7 +27,7 @@ def build_rollout_batch(
     tokenizer: TokenizerWrapper,
     dataset: Dataset,
     indices: List[int],
-    config: ExperimentConfig,
+    config: ExperimentConfig, # Expects the full ExperimentConfig
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
     
     prompts_data: List[Dict[str, Any]] = []
@@ -58,7 +58,7 @@ def build_rollout_batch(
                 'ref_answer_str': ref_ans,
                 'ref_think_str': ref_think,
                 'is_invalid_sample': raw.get('is_invalid_sample', False),
-                'meta': raw.get('meta', {}) # Pass original meta along for reward context
+                'meta': raw.get('meta', {})
             }
             entry['meta'].update(mcq_meta)
             prompts_data.append(entry)
