@@ -14,6 +14,7 @@ import mlx.nn as nn
 import gc
 from mlx.utils import tree_flatten, tree_unflatten
 import mlx
+import uuid
 from .config import ExperimentConfig  # Use new ExperimentConfig
 
 
@@ -223,7 +224,7 @@ class BaseTrainer(ABC):
                         rollout_data,
                         avg_reward_from_rollouts,
                         raw_rewards_breakdown,
-                    ) = self.generate_rollouts([prompts_batch], self.global_step)
+                    ) = self.generate_rollouts(prompts_batch, self.global_step)
                     metrics = self.train_step([prompts_batch], self.global_step)
                     accumulated_metrics.append(metrics)
 
@@ -256,7 +257,7 @@ class BaseTrainer(ABC):
                 )
                 is_save_step = (
                     update_step > 0
-                    and update_step % self.config.trainer.save_every == 0
+                    and update_step % self.config.checkpointing.save_every == 0
                 )
 
                 eval_metric_for_checkpoint = -float("inf")
@@ -320,7 +321,7 @@ class BaseTrainer(ABC):
             logging.info("Training process finalized. Saving final state.")
             # FIX: Safely access pbar.postfix to prevent crash on early exit
             final_metric = 0.0
-            if hasattr(pbar, "postfix") and pbar.postfix is not None:
+            if hasattr(pbar, "postfix") and isinstance(pbar.postfix, dict) and pbar.postfix is not None:
                 try:
                     # Attempt to parse the reward string, e.g., "0.876"
                     reward_str = pbar.postfix.get("Reward")

@@ -254,14 +254,10 @@ def _create_4d_attention_mask(
 
 
 def safe_make_sampler(config: ExperimentConfig, temp: float) -> Callable:
-    top_p = float(config.generation.top_p)
-    # Corrected attribute access
-    min_p_val = (
-        getattr(config.generation, "min_p", 0.0)
-        if hasattr(config.generation, "min_p")
-        else 0.0
-    )
-    top_k_val = int(config.generation.top_k)
+    top_p = float(config.get("top_p", 0.9))
+    temp = float(config.get("temperature", 0.7))
+    top_k = int(config.get("top_k", 0))
+    min_p_val = float(config.get("min_p", 0.05))
 
     try:
         return make_sampler(temp=temp, top_p=top_p, min_p=min_p_val, top_k=top_k_val)

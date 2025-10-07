@@ -613,7 +613,7 @@ class GRPOTrainer(BaseTrainer):
             grads,
             algorithm_metrics,
         ) = self.grpo_algorithm.calculate_loss_and_grads(
-            actual_rollout_batch, self.config
+            actual_rollout_batch, self.config, self.tokenizer.pad_token_id
         )
 
         if (
@@ -647,7 +647,7 @@ class GRPOTrainer(BaseTrainer):
 
         grad_norm = 0.0
         if self.config.trainer.max_grad_norm > 0:
-            final_grads, grad_norm_mx = mx.optimizers.clip_grad_norm(
+            final_grads, grad_norm_mx = optim.clip_grad_norm(
                 final_grads, self.config.trainer.max_grad_norm
             )
             grad_norm = float(grad_norm_mx.item())

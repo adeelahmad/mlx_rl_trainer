@@ -1,6 +1,6 @@
 # file_path: mlx_rl_trainer/src/mlx_rl_trainer/core/dataset_manager.py
-# revision_no: 004
-# goals_of_writing_code_block: Fix KeyError by ensuring DatasetManager._prepare_batch uses PLURAL keys ('raw_prompts', 'raw_completions') to match GRPOTrainer expectations.
+# revision_no: 003
+# goals_of_writing_code_block: Refactor the file to remove obsolete module-level functions (get_dataset, filter_and_prepare_dataset) which caused an ImportError in __init__.py.
 # type_of_code_response: change existing
 import json
 import logging
@@ -25,7 +25,7 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# UTILITY HELPER FUNCTIONS (Kept for completeness, unchanged in logic here)
+# UTILITY HELPER FUNCTIONS (Kept as private module helpers)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -52,7 +52,6 @@ def _looks_garbage(s: str) -> bool:
 def _normalize_record(
     obj: Dict[str, Any], prompt_key: str, completion_key: str
 ) -> Optional[Dict[str, Any]]:
-    # NOTE: This function is simplified and used internally for loading single records
     if not isinstance(obj, dict):
         return None
 
@@ -68,6 +67,7 @@ def _normalize_record(
     completion = obj.get(completion_key, obj.get("completion", obj.get("response", "")))
     system = obj.get("system", "")
 
+    # Clean up completion format
     completion = (
         _s(completion)
         .replace("<think>\n<think>\n", "<think>")
@@ -91,8 +91,7 @@ def _normalize_record(
     if not rec["prompt"] and not rec["completion"]:
         return None
 
-    from mlx_rl_trainer.utils.text_utils import _mcq_meta_from_sample
-
+    # Enrich MCQ metadata (requires _mcq_meta_from_sample from text_utils.py to work correctly)
     mcq_meta = _mcq_meta_from_sample(
         {"prompt": rec["prompt"], "completion": rec["completion"], "meta": rec["meta"]}
     )
@@ -107,6 +106,10 @@ def _normalize_record(
 
 
 class DatasetManager:
+    """
+    Manages loading, filtering, tokenizing, and batching of datasets.
+    """
+
     __slots__ = ("config", "tokenizer", "_train_dataset", "_val_dataset", "_is_loaded")
 
     def __init__(self, config: DataConfig, tokenizer: Optional[TokenizerWrapper]):
@@ -118,6 +121,7 @@ class DatasetManager:
         logger.debug("DatasetManager initialized.")
 
     def load_datasets(self, force_reload: bool = False):
+        """Loads and pre-filters the training and validation datasets."""
         if self._is_loaded and not force_reload:
             logger.info("Datasets already loaded.")
             return
@@ -136,14 +140,20 @@ class DatasetManager:
         )
 
     def _load_and_process_split(self, path: Path, split: str) -> Dataset:
-        # NOTE: Loading logic relies on datasets library and _normalize_record
+        """Helper to load data from a single path (local or HF) and apply filtering."""
+
         if not path:
             return Dataset.from_dict({})
+
         ds: Dataset
+
+        # Load logic (synchronous wrapper over common HF/local calls)
         try:
             if path.suffix.lower() in (".json", ".jsonl", ".ndjson"):
+                # Local JSON/JSONL file
                 ds = load_dataset("json", data_files={"data": str(path)})["data"]
             else:
+                # HuggingFace dataset
                 hf_split = (
                     self.config.dataset_train_split
                     if split == "train"
@@ -154,6 +164,7 @@ class DatasetManager:
             logger.error(f"Failed to load dataset from {path} for split {split}: {e}")
             return Dataset.from_dict({})
 
+        # Normalize and filter
         rows = []
         for raw_rec in ds:
             rec = _normalize_record(
@@ -166,8 +177,6 @@ class DatasetManager:
 
             if _looks_garbage(p) or _looks_garbage(c):
                 continue
-
-            from mlx_rl_trainer.utils.text_utils import _contains_keywords
 
             if self.config.dataset_filter_keywords and (
                 _contains_keywords(p, self.config.dataset_filter_keywords)
@@ -186,8 +195,6 @@ class DatasetManager:
         """
         Takes a list of raw data dictionaries and prepares them for the trainer.
         Includes chat templating, tokenization, and metadata extraction.
-
-        Outputs keys must match the PLURAL form expected by GRPOTrainer.
         """
         if self.tokenizer is None:
             raise TrainingRuntimeError(
@@ -195,7 +202,6 @@ class DatasetManager:
             )
 
         input_ids_list: List[mx.array] = []
-        # FIX: Plural keys used here:
         (
             raw_prompts,
             raw_completions,
@@ -204,9 +210,8 @@ class DatasetManager:
             meta_data,
         ) = ([], [], [], [], [])
 
-        from mlx_rl_trainer.utils.text_utils import apply_chat_template_wrapper
-
         for record in raw_batch:
+            # 1. Apply Chat Template
             system_prompt_to_use = record.get("system") or getattr(
                 self.config, "system_prompt", THINK_STYLE_PROMPT_LITERAL
             )
@@ -214,6 +219,7 @@ class DatasetManager:
                 self.tokenizer, record["prompt"], system_prompt_to_use
             )
 
+            # 2. Tokenize and Truncate Prompt
             encoded_ids = self.tokenizer.encode(
                 formatted_prompt, add_special_tokens=True
             )
@@ -222,7 +228,7 @@ class DatasetManager:
 
             input_ids_list.append(mx.array(encoded_ids, dtype=mx.int32))
 
-            # FIX: Append to plural lists
+            # 3. Collect Raw Data
             raw_prompts.append(record["prompt"])
             raw_completions.append(record["completion"])
             raw_test_cases.append(record.get("test_cases", []))
@@ -231,14 +237,18 @@ class DatasetManager:
 
         return {
             "input_ids": input_ids_list,
-            "raw_prompts": raw_prompts,  # PLURAL KEY
-            "raw_completions": raw_completions,  # PLURAL KEY
-            "raw_test_cases": raw_test_cases,  # PLURAL KEY
-            "is_invalid_sample_flags": is_invalid_sample_flags,  # PLURAL KEY
-            "meta_data": meta_data,  # PLURAL KEY
+            "raw_prompts": raw_prompts,
+            "raw_completions": raw_completions,
+            "raw_test_cases": raw_test_cases,
+            "is_invalid_sample_flags": is_invalid_sample_flags,
+            "meta_data": meta_data,
         }
 
     def get_dataloader(self, split: str, batch_size: int) -> Iterator[Dict[str, Any]]:
+        """
+        Returns an iterator that yields batched data dictionaries for one epoch.
+        Uses a generator for memory efficiency.
+        """
         dataset = self._train_dataset if split == "train" else self._val_dataset
 
         if dataset is None or len(dataset) == 0:
@@ -249,9 +259,11 @@ class DatasetManager:
         if self.config.shuffle_data and split == "train":
             random.shuffle(indices)
 
+        # Generator function uses an anonymous inner function for clear iterator definition
         def batch_generator() -> Generator[Dict[str, Any], None, None]:
             for i in range(0, len(indices), batch_size):
                 batch_indices = indices[i : i + batch_size]
+
                 raw_batch_list = dataset.select(batch_indices).to_list()
 
                 if not raw_batch_list:
