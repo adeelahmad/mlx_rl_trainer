@@ -241,14 +241,25 @@ class CheckpointManager:
                 if "python" in rng_state:
                     # JSON serialization converts tuples to lists, so we need to convert the inner list back to a tuple
                     python_rng_state = rng_state["python"]
-                    random.setstate((python_rng_state[0], tuple(python_rng_state[1]), None))\
-
+                    random.setstate(
+                        (python_rng_state[0], tuple(python_rng_state[1]), None)
+                    )
                 if "numpy" in rng_state:
                     np_rng_state = rng_state["numpy"]
                     # Parse the string representation of the array back into a list of integers
-                    array_str = np_rng_state[1].replace('[', '').replace(']', '').strip()
+                    array_str = (
+                        np_rng_state[1].replace("[", "").replace("]", "").strip()
+                    )
                     array_elements = [int(x) for x in array_str.split() if x]
-                    np.random.set_state((np_rng_state[0], np.array(array_elements, dtype=np.uint32), int(np_rng_state[2]), int(np_rng_state[3]), float(np_rng_state[4])))
+                    np.random.set_state(
+                        (
+                            np_rng_state[0],
+                            np.array(array_elements, dtype=np.uint32),
+                            int(np_rng_state[2]),
+                            int(np_rng_state[3]),
+                            float(np_rng_state[4]),
+                        )
+                    )
                 # For MLX, we set the global key (if it's a simple seed or a list)
                 if "mlx_key_seed" in rng_state and isinstance(
                     rng_state["mlx_key_seed"], int

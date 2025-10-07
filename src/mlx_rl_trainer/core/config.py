@@ -547,6 +547,14 @@ class TrainerParams(BaseModel):
         "grpo",
         description="The Reinforcement Learning algorithm to use (e.g., 'grpo', 'ppo').",
     )
+
+    batch_size: int = Field(..., gt=0)
+    gradient_accumulation_steps: int = Field(1, gt=0)
+    learning_rate: float = Field(..., gt=0.0)
+    max_epochs: int = Field(..., gt=0)
+    warmup_steps: int = Field(0, ge=0)
+    max_grad_norm: float = Field(1.0, gt=0.0)
+
     output_dir: Path = Field(
         Path("./outputs"),
         description="Base directory for all training outputs (checkpoints, logs, plots).",

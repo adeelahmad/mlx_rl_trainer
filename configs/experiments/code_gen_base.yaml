@@ -131,7 +131,7 @@ rewards:
     weight: 0.80
     config:
       timeout: 3 # seconds
-  - name: "content_similarity"
+  - name: "semantic_similarity"
     weight: 0.20
     config:
       method: "tfidf"
