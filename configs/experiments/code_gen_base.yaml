@@ -1,5 +1,5 @@
 # file_path: mlx_rl_trainer/configs/experiments/code_gen_base.yaml
-# revision_no: 002
+# revision_no = 002
 # goals_of_writing_code_block: Define a Pydantic-validated configuration for a code generation RL training task, adding num_rollout_samples.
 # type_of_code_response: change existing
 # Production-ready configuration for a code generation task using GRPO.
@@ -8,123 +8,29 @@
 trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_001"
-  num_training_steps: 10000
+  num_training_steps: 1000
   learning_rate: 2.0e-6
-  ppo_batch_size: 2 # Number of unique prompts per micro-batch
-  num_rollout_samples: 2 # Number of responses to generate per prompt
+  ppo_batch_size: 2       # Number of unique prompts per micro-batch
+  num_rollout_samples: 2  # Number of responses to generate per prompt
   grad_accum_steps: 4
   save_every: 250
   eval_every: 100
   grpo_beta: 0.05
   seed: 42
 
-  # Gradient Scaling/Masking defaults (from TrainingArgs)
-  low_band: [0, 15]
-  mid_band: [16, 23]
-  top_band: [24, 35]
-  low_mul: 0.10
-  mid_mul: 0.95
-  top_mul: 1.5
-  head_mul: 1.2
-  train_layer_start: 26
-  train_layer_end: 35
-  max_grad_norm: 0.5 # Example value
-
-  # Dynamic Bias Controls defaults
-  min_think_tokens: 32
-  think_end_early_bias: -12.0
-  bias_answer_start_after_min_think: true
-  bias_close_think: 9.0
-  bias_answer_start: 6.0
-  punish_extra_think_end: -12.0
-  punish_reopen_think: -10.0
-  punish_reopen_answer: -9.0
-  bias_eos_after_answer: 3.0
-
-  # MCQ Specific Biases defaults
-  hard_mask_mcq_first_token: true
-  mcq_letter_lift: 8.0
-  mcq_ban_first_bias: -14.0
-  nonmcq_ban_first_bias: -12.0
-  mcq_close_after_k: 1
-  min_answer_tokens: 8
-  min_answer_tokens_mcq: 1
-  mcq_answer_end_bias: 9.0
-
-  # Penalties defaults
-  non_ascii_penalty: 1.0
-  off_topic_jaccard_threshold: 0.05
-  off_topic_penalty: 1.0
-  ban_penalty: 3.0
-
-  # Verbosity Biasing for Rollouts defaults
-  ban_phrases_for_bias: ["I think", "Let me try"]
-  encourage_phrases_for_bias: ["chk", "calc", "∴"]
-  encourage_think_bias: 4.5
-  ban_think_bias: -3.0
-
-  # Tool Use Configuration defaults
-  allow_tool_calls: true
-  tool_call_penalty: 0.0
-
-  # Think Length Penalty/Reward defaults
-  think_length_target_min: 32
-  think_length_target_max: 128
-  think_length_penalty_strength: 0.15
-  think_length_penalty_type: "quadratic"
-  enable_think_length_penalty: true
-
-  # Custom Invalid Sample Handling defaults
-  use_custom_batch_builder: false
-  invalid_sample_layers: "33,34,35" # Example layers
-  invalid_sample_frequency: 2
-  # W&B Configuration defaults
-  use_wandb: false # Set to true to enable wandb
-  wandb_project: "mlx-rl-trainer"
-  wandb_run_name: "code_gen_run"
-  log_samples_every: 10
-  max_logged_samples: 5
-  log_prompts: true
-
-  # Schedule (from TrainingArgs)
-  lr_schedule_config: # Will be populated by default by Pydantic
-    name: "cosine_decay"
-    arguments: [2.0e-6, 9500, 2.0e-7] # Example: total_steps - warmup_steps
-    warmup: 50
-    warmup_init: 2.0e-7
-
-  # Monitoring defaults
-  reward_smoothing_window: 20
-
 model:
-  model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
-  ref_model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
+  model_path: "./models/mock_model"
+  ref_model_path: "./models/mock_model"
   use_lora: false
   lora_rank: 16
-  lora_alpha: 16.0
-  lora_dropout: 0.0
-  lora_scale_by_rank: true
-  lora_target_modules:
-    [
-      "q_proj",
-      "k_proj",
-      "v_proj",
-      "o_proj",
-      "gate_proj",
-      "up_proj",
-      "down_proj",
-    ]
 
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/Untitled 3.jsonl"
-  val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
+  train_path: "./data/dummy_train.jsonl"
+  val_path: "./data/dummy_val.jsonl"
   max_prompt_len: 512
   max_gen_len: 384
   loader_type: "jsonl"
   shuffle_data: true
-  dataset_prompt_key: "prompt"
-  dataset_answer_key: "completion"
-  dataset_filter_keywords: ["http", "qwen"]
 
 rewards:
   - name: "code_execution"
@@ -134,33 +40,10 @@ rewards:
   - name: "semantic_similarity"
     weight: 0.20
     config:
-      method: "tfidf"
+      method: "jaccard"
 
 evaluation:
   - name: "human_eval"
     config:
-      k_values: [1, 2] # Calculate pass@1 and pass@2
-      num_samples: 1 # Reduce for mock speed
-      max_gen_len: 128 # Max tokens for eval generation
-      temperature: 0.0 # Greedy for eval
-      top_p: 1.0
-      top_k: 0
-      num_workers: 1 # For multiprocessing
-  - name: "gsm8k"
-    config:
-      num_samples: 1 # Reduce for mock speed
-      max_gen_len: 128
-      temperature: 0.0
-      top_p: 1.0
-      top_k: 0
-  - name: "perplexity"
-    config:
-      max_seq_len: 256
-      batch_size: 2
-
-# Global config parameters (from ExperimentConfig)
-max_kv_size: 1536
-use_paged_kv_cache: false # Set to true to enable paged cache
-kv_cache_block_size: 16
-kv_cache_num_blocks: 2048
-system_prompt: ""
+      k_values: [1, 2]   # Calculate pass@1 and pass@2
+      num_samples: 10    # Number of problems to evaluate

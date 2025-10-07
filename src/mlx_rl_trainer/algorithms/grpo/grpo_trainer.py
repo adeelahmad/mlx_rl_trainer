@@ -1,670 +1,126 @@
-"""
-Concrete GRPO Trainer implementation.
-"""
-
-import uuid
-import logging
-import time
-import json
-import gc
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple, Callable, Union
-
-import mlx.core as mx
-import mlx.nn as nn
-import mlx.optimizers as optim
+import logging, time, gc
+from typing import Dict, Any, List, Optional, Tuple, Callable
+import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
 import numpy as np
-from rich import print as rprint
 from mlx_lm.tuner.utils import build_schedule
-from mlx.utils import tree_flatten, tree_map
-
-from ...core.trainer import (
-    BaseTrainer,
-    TrainingMetrics,
-    EvaluationMetrics,
-    TrainingRuntimeError,
-)
-from ...core.config import ExperimentConfig
-from ...core.model_manager import ModelManager
-from ...core.dataset_manager import DatasetManager
-from ...core.checkpoint_manager import CheckpointManager
-from ...rewards.base_reward import RewardComposer
-from ...evaluation.registry import EvaluatorRegistry
+from mlx_lm.sample_utils import make_logits_processors
+from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics
+from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler, make_dynamic_tag_bias_processor, _mask_after_answer
+from mlx_rl_trainer.monitoring.metrics_logger import _maybe_log_samples
 from .grpo_algorithm import GRPOAlgorithm
 
 logger = logging.getLogger(__name__)
 
-
 class GRPOTrainer(BaseTrainer):
-    """
-    Concrete implementation of the GRPO (Group Relative Policy Optimization) Trainer.
-
-    This class orchestrates the entire GRPO training loop, including model setup,
-    rollout generation, loss calculation, optimization, evaluation, and checkpointing.
-    """
-
-    def __init__(
-        self,
-        config: ExperimentConfig,
-        model_manager: ModelManager,
-        data_manager: DatasetManager,
-        checkpoint_manager: CheckpointManager,
-        reward_composer: RewardComposer,
-        paged_kv_cache: Optional[Any] = None,
-    ):
-        super().__init__(config, model_manager, data_manager, checkpoint_manager)
-
-        self.reward_composer = reward_composer
-        self.grpo_algorithm: Optional[GRPOAlgorithm] = None
-        self.paged_kv_cache = paged_kv_cache
-
-        self.tokenizer: Any = None
-        self.actor_model: Optional[nn.Module] = None
-        self.ref_model: Optional[nn.Module] = None
-        self.optimizer: Optional[optim.Optimizer] = None
-        self.lr_scheduler: Optional[Callable[[int], float]] = None
-
-        self._current_update_step: int = 0
-        self._current_epoch: int = 0
-        self._run_id: str = str(uuid.uuid4())
-
-        self._cooldown_steps_remaining: int = 0
-        self._last_avg_reward: float = 0.0
-        self._reward_history_for_smoothing: List[float] = []
-
-        logger.info(f"GRPOTrainer initialized for run ID: {self._run_id}.")
-
     def _setup(self) -> Tuple[int, int]:
-        """
-        Performs all necessary setup: loads models, initializes tokenizer,
-        sets up optimizer and LR scheduler, and resumes from a checkpoint if specified.
-
-        Returns:
-            A tuple of (start_update_step, start_epoch).
-        """
-        rprint("[bold blue]Setting up GRPO training components...[/bold blue]")
-
-        # Setup actor model
-        if (
-            self.config.model.model_path.exists()
-            and self.config.model.model_path.is_dir()
-        ):
-            actor_path = self.config.model.model_path
-        else:
-            actor_path = Path("./models/mock_model")
-            actor_path.mkdir(parents=True, exist_ok=True)
-            if not (actor_path / "config.json").exists():
-                with open(actor_path / "config.json", "w") as f:
-                    json.dump(
-                        {
-                            "config": {
-                                "vocab_size": 32000,
-                                "embed_dim": 128,
-                                "num_layers": 4,
-                                "num_kv_heads": 2,
-                                "hidden_size": 128,
-                                "num_attention_heads": 4,
-                            }
-                        },
-                        f,
-                    )
-            logger.warning(
-                f"Actor model path invalid. Using mock model at '{actor_path}'."
-            )
-
-        # Build LoRA config properly for mlx-lm
-        lora_config = None
-        if self.config.model.use_lora:
-            lora_config = {
-                "num_lora_layers": getattr(self.config.model, "num_lora_layers", -1),  # -1 = all layers
-                "rank": self.config.model.lora_rank,
-                "scale": self.config.model.lora_alpha / self.config.model.lora_rank,  # alpha / rank
-                "dropout": getattr(self.config.model, "lora_dropout", 0.0),
-                "keys": getattr(self.config.model, "lora_target_modules", None),  # Optional
-                "use_dora": getattr(self.config.model, "use_dora", False),
-            }
-
-        self.actor_model, self.tokenizer = self.model_manager.load_model(
-            actor_path,
-            "actor",
-            is_trainable=True,
-            apply_lora=self.config.model.use_lora,
-            lora_config=lora_config,
-        )
-
-        # Setup reference model
-        ref_model_path = self.config.model.ref_model_path
-        if (
-            not ref_model_path
-            or not ref_model_path.exists()
-            or not ref_model_path.is_dir()
-        ):
-            ref_model_path = actor_path  # Use same as actor if not specified
-
-        self.ref_model, _ = self.model_manager.load_model(
-            ref_model_path, "reference", is_trainable=False
-        )
-
+        self.actor_model, self.tokenizer = self.model_manager.load_model(self.config.model.model_path, "actor", is_trainable=True, apply_lora=self.config.model.use_lora, lora_config=self.config.model.model_dump())
+        self.ref_model, _ = self.model_manager.load_model(self.config.model.ref_model_path, "reference", is_trainable=False)
         self.data_manager.tokenizer = self.tokenizer
-
-        rprint(
-            f"Loaded actor model: [green]{self.actor_model.__class__.__name__}[/green], "
-            f"ref model: [green]{self.ref_model.__class__.__name__}[/green]."
-        )
-
-        # Initialize GRPO algorithm
-        self.grpo_algorithm = GRPOAlgorithm(
-            self.config, self.actor_model, self.ref_model
-        )
-
-        # Setup optimizer
-        self.optimizer = optim.AdamW(
-            learning_rate=self.config.trainer.learning_rate,
-            betas=(
-                self.config.trainer.optimizer_beta1,
-                self.config.trainer.optimizer_beta2,
-            ),
-            weight_decay=self.config.trainer.optimizer_weight_decay,
-        )
-
-        # Setup learning rate scheduler
+        
+        self.grpo_algorithm = GRPOAlgorithm(self.config, self.actor_model, self.ref_model)
+        self.optimizer = optim.AdamW(learning_rate=self.config.trainer.learning_rate, betas=(self.config.trainer.optimizer_beta1, self.config.trainer.optimizer_beta2), weight_decay=self.config.trainer.optimizer_weight_decay)
         self.lr_scheduler = build_schedule(self.config.trainer.lr_schedule_config)
-
-        rprint(
-            f"Optimizer: [cyan]{self.optimizer.__class__.__name__}[/cyan], "
-            f"Learning Rate: [cyan]{self.config.trainer.learning_rate:.2e}[/cyan]."
-        )
-
-        # Load checkpoint if available
-        start_update_step, metadata = self.checkpoint_manager.load_latest_state(
-            self.actor_model, self.optimizer
-        )
-        self.global_step = start_update_step
-        self.current_epoch = metadata.get("epoch", 0)
-
-        self._cooldown_steps_remaining = metadata.get("cooldown_steps_remaining", 0)
-        self._last_avg_reward = metadata.get("last_avg_reward", 0.0)
-        self._reward_history_for_smoothing = metadata.get(
-            "reward_history_for_smoothing", []
-        )
-
-        rprint(
-            f"[bold green]Trainer setup complete.[/bold green] "
-            f"Resuming from update step [bold magenta]{self.global_step}[/bold magenta], "
-            f"epoch [bold magenta]{self.current_epoch}[/bold magenta]."
-        )
-        return self.global_step, self.current_epoch
-
-    def generate_rollouts(
-        self,
-        batch_prompts_data: Union[List[Dict], Dict],
-        update_step: int
-    ) -> Tuple[Dict[str, mx.array], float, Dict[str, float]]:
-        """
-        Generate rollouts and prepare the rollout batch for training.
-
-        Args:
-            batch_prompts_data: Batch data from dataset (can be list or dict)
-            update_step: Current training step number
-
-        Returns:
-            rollout_batch: Dict with keys ['tokens', 'response_mask', 'advantages', 'ref_log_probs']
-            avg_reward: Average reward across all samples
-            raw_rewards_breakdown: Detailed reward breakdown
-        """
-        # Debug: Log what we received
-        logger.debug(f"generate_rollouts received type: {type(batch_prompts_data)}")
-
-        # Handle different input formats
-        if isinstance(batch_prompts_data, dict):
-            # Direct dict input
-            batch_data = batch_prompts_data
-        elif isinstance(batch_prompts_data, list):
-            if len(batch_prompts_data) == 0:
-                logger.warning("Empty list in batch_prompts_data")
-                return {}, 0.0, {}
-            batch_data = batch_prompts_data[0] if isinstance(batch_prompts_data[0], dict) else {}
-        else:
-            logger.error(f"Unexpected batch_prompts_data type: {type(batch_prompts_data)}")
-            return {}, 0.0, {}
-
-        if not batch_data:
-            logger.warning("Empty batch_data after unwrapping")
-            return {}, 0.0, {}
-
-        logger.debug(f"Batch data keys: {list(batch_data.keys())}")
-
-        # Log a sample of the actual batch data for debugging
-        for key in list(batch_data.keys())[:5]:  # Show first 5 keys
-            value = batch_data[key]
-            if isinstance(value, list) and len(value) > 0:
-                logger.debug(f"  {key}: list with {len(value)} items, first item type: {type(value[0])}")
-                if isinstance(value[0], str):
-                    logger.debug(f"    First item preview: {value[0][:100]}")
-            else:
-                logger.debug(f"  {key}: {type(value)}")
-
-        # Extract prompts - try multiple possible keys
-        prompts_text = None
-        for key in ["raw_prompt", "prompt", "text", "input", "question", "instruction"]:
-            if key in batch_data:
-                prompts_text = batch_data[key]
-                logger.debug(f"Found prompts using key: '{key}'")
-                break
-
-        if prompts_text is None:
-            logger.error(
-                f"No prompts found in batch_data. Available keys: {list(batch_data.keys())}"
-            )
-            return {}, 0.0, {}
-
-        # Ensure prompts_text is a list
-        if not isinstance(prompts_text, list):
-            prompts_text = [prompts_text]
-
-        if len(prompts_text) == 0:
-            logger.warning("Empty prompts_text list")
-            return {}, 0.0, {}
-
-        logger.info(f"Processing {len(prompts_text)} prompts for rollout generation")
-
-        # Log first prompt for debugging
-        if prompts_text:
-            first_prompt = str(prompts_text[0])
-            logger.debug(f"First prompt (first 200 chars): {first_prompt[:200]}")
-            logger.debug(f"First prompt length: {len(first_prompt)}")
-
-        try:
-            # Tokenize prompts
-            prompts_tokens = []
-            for i, prompt in enumerate(prompts_text):
-                try:
-                    # Ensure prompt is not empty
-                    prompt_str = str(prompt).strip()
-                    if not prompt_str:
-                        logger.warning(f"Prompt {i} is empty, using placeholder")
-                        prompt_str = "Hello"
-
-                    tokens = self.tokenizer.encode(prompt_str, add_special_tokens=True)
-
-                    # Validate tokens are not empty
-                    if not tokens or len(tokens) == 0:
-                        logger.error(f"Tokenization of prompt {i} returned empty tokens")
-                        logger.error(f"Prompt was: {prompt_str[:100]}")
-                        # Use a minimal valid token sequence
-                        tokens = [self.tokenizer.bos_token_id if hasattr(self.tokenizer, 'bos_token_id') else 1]
-
-                    prompts_tokens.append(tokens)
-                    logger.debug(f"Prompt {i} tokenized: {len(tokens)} tokens")
-                except Exception as e:
-                    logger.error(f"Error tokenizing prompt {i}: {e}")
-                    logger.error(f"Prompt text: {str(prompt)[:200]}")
-                    raise
-
-            if not prompts_tokens:
-                logger.error("No prompts were successfully tokenized")
-                return {}, 0.0, {}
-
-            # Validate all token lists have content
-            prompts_tokens = [t for t in prompts_tokens if len(t) > 0]
-            if not prompts_tokens:
-                logger.error("All tokenized prompts are empty")
-                return {}, 0.0, {}
-
-            # Pad prompts to same length
-            max_prompt_len = max(len(t) for t in prompts_tokens)
-            if max_prompt_len == 0:
-                logger.error("Maximum prompt length is 0")
-                return {}, 0.0, {}
-
-            prompts_padded = []
-            for tokens in prompts_tokens:
-                if len(tokens) < max_prompt_len:
-                    # Pad on the left (prepend padding)
-                    padding = [self.tokenizer.pad_token_id] * (max_prompt_len - len(tokens))
-                    prompts_padded.append(padding + tokens)
-                else:
-                    prompts_padded.append(tokens)
-
-            # Create mx.array and validate shape
-            prompts_mx = mx.array(prompts_padded, dtype=mx.int32)
-            logger.debug(f"Prompts tokenized and padded: shape={prompts_mx.shape}")
-
-            # Validate shape is not empty
-            if prompts_mx.size == 0 or prompts_mx.shape[0] == 0 or prompts_mx.shape[1] == 0:
-                logger.error(f"Invalid prompts array shape: {prompts_mx.shape}")
-                logger.error(f"prompts_padded length: {len(prompts_padded)}")
-                if prompts_padded:
-                    logger.error(f"First padded prompt length: {len(prompts_padded[0])}")
-                return {}, 0.0, {}
-
-            # Generate responses using actor model
-            logger.debug("Generating responses with actor model...")
-            logger.debug(f"About to call generate_with_logprobs with prompts shape: {prompts_mx.shape}")
-            logger.debug(f"Prompts array stats - size: {prompts_mx.size}, dtype: {prompts_mx.dtype}")
-            logger.debug(f"First few tokens: {prompts_mx[0, :min(10, prompts_mx.shape[1])].tolist() if prompts_mx.shape[0] > 0 else 'empty'}")
-
-            responses_mx, actor_log_probs = self.model_manager.generate_with_logprobs(
-                model=self.actor_model,
-                prompts=prompts_mx,
-                tokenizer=self.tokenizer,
-                temp=self._get_temperature(),
-                max_tokens=self._get_max_gen_len()
-            )
-            logger.debug(f"Generated responses: shape={responses_mx.shape}")
-
-            # Get reference log probs
-            logger.debug("Computing reference log probs...")
-            ref_log_probs = self.model_manager.get_logprobs_for_sequence(
-                model=self.ref_model,
-                prompts=prompts_mx,
-                responses=responses_mx
-            )
-            logger.debug(f"Reference log probs: shape={ref_log_probs.shape}")
-
-            # Decode responses for reward calculation
-            responses_text = self.tokenizer.batch_decode(
-                responses_mx.tolist(),
-                skip_special_tokens=True
-            )
-            logger.debug(f"Decoded {len(responses_text)} responses")
-
-            # Calculate rewards
-            logger.debug("Computing rewards...")
-            rewards_list = []
-            for i, (prompt, response) in enumerate(zip(prompts_text, responses_text)):
-                try:
-                    # RewardComposer has a compute() method
-                    # From dir() we can see: 'compute', 'rewards'
-                    reward_dict = self.reward_composer.compute(
-                        generated=str(response),
-                        reference="",
-                        metadata={"prompt": str(prompt)}
-                    )
-
-                    reward_value = reward_dict.get("total", 0.0) if isinstance(reward_dict, dict) else float(reward_dict)
-                    rewards_list.append(reward_value)
-                    logger.debug(f"Sample {i}: reward={reward_value:.4f}")
-                except Exception as e:
-                    logger.error(f"Error computing reward for sample {i}: {e}")
-                    logger.error(f"Trying to inspect reward_composer.compute signature...")
-                    import inspect
-                    try:
-                        sig = inspect.signature(self.reward_composer.compute)
-                        logger.error(f"compute() signature: {sig}")
-                    except:
-                        pass
-                    rewards_list.append(0.0)
-
-            rewards_mx = mx.array(rewards_list, dtype=mx.float32)
-            logger.debug(
-                f"Rewards computed: shape={rewards_mx.shape}, "
-                f"mean={float(mx.mean(rewards_mx).item()):.4f}"
-            )
-
-            # Compute advantages using GRPO algorithm
-            logger.debug("Computing advantages...")
-            advantages = self.grpo_algorithm.compute_advantages(
-                rewards_flat=rewards_mx,
-                samples_per_prompt=1
-            )
-            logger.debug(f"Advantages computed: shape={advantages.shape}")
-
-            # Create response mask (1 for real tokens, 0 for padding)
-            response_mask = mx.array(
-                [[1.0 if token != self.tokenizer.pad_token_id else 0.0 for token in row]
-                 for row in responses_mx.tolist()],
-                dtype=mx.float32
-            )
-            logger.debug(f"Response mask created: shape={response_mask.shape}")
-
-            # Concatenate prompts and responses for full sequence
-            full_tokens = mx.concatenate([prompts_mx, responses_mx], axis=1)
-            logger.debug(f"Full tokens created: shape={full_tokens.shape}")
-
-            # Prepare rollout_batch with correct keys
-            rollout_batch = {
-                "tokens": full_tokens,
-                "response_mask": response_mask,
-                "advantages": advantages,
-                "ref_log_probs": ref_log_probs,
-                "actor_log_probs": actor_log_probs,  # Include for GRPO calculation
-            }
-
-            avg_reward = float(mx.mean(rewards_mx).item())
-            raw_rewards_breakdown = {
-                "total": avg_reward,
-                "min": float(mx.min(rewards_mx).item()),
-                "max": float(mx.max(rewards_mx).item()),
-                "std": float(mx.std(rewards_mx).item())
-            }
-
-            logger.info(
-                f"Rollout generation complete. Avg reward: {avg_reward:.4f}, "
-                f"Batch size: {len(prompts_text)}"
-            )
-
-            return rollout_batch, avg_reward, raw_rewards_breakdown
-
-        except Exception as e:
-            logger.error(f"Error in generate_rollouts: {e}", exc_info=True)
-            return {}, 0.0, {}
-
-    def train_step(
-        self,
-        rollout_batch: Union[Dict[str, mx.array], List[Dict]],
-        update_step: int
-    ) -> TrainingMetrics:
-        """
-        Perform a single training step using the rollout batch.
-
-        Args:
-            rollout_batch: Either a dict with rollout data or list containing the dict
-            update_step: Current training step number
-
-        Returns:
-            TrainingMetrics with all required fields
-        """
-        step_start_time = time.time()
-
-        # Handle list input (unwrap if needed)
-        if isinstance(rollout_batch, list):
-            if len(rollout_batch) == 0:
-                logger.error("Empty rollout batch list in train_step")
-                return self._create_empty_metrics(update_step, step_start_time)
-            rollout_batch = rollout_batch[0]
-
-        # Validate rollout_batch is a dict
-        if not isinstance(rollout_batch, dict):
-            logger.error(f"rollout_batch is not a dict, got: {type(rollout_batch)}")
-            return self._create_empty_metrics(update_step, step_start_time)
-
-        # Validate required keys
-        required_keys = {'tokens', 'response_mask', 'advantages', 'ref_log_probs'}
-        missing_keys = required_keys - set(rollout_batch.keys())
-
-        if missing_keys:
-            logger.error(
-                f"Rollout batch missing required keys: {missing_keys}. "
-                f"Has: {list(rollout_batch.keys())}"
-            )
-            return self._create_empty_metrics(update_step, step_start_time)
-
-        logger.debug(
-            f"train_step: Processing batch with tokens.shape={rollout_batch['tokens'].shape}"
-        )
-
-        try:
-            # Calculate loss and gradients using GRPO algorithm
-            loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(
-                rollout_batch=rollout_batch,
-                full_config=self.config,
-                pad_token_id=self.tokenizer.pad_token_id
-            )
-
-            # Compute gradient norm
-            grad_norm = 0.0
-            if grads:
-                # Compute norm from nested gradient structure
-                flat_grads = tree_flatten(grads)
-                grad_norm = float(
-                    mx.sqrt(sum(mx.sum(g * g) for _, g in flat_grads)).item()
-                )
-                logger.debug(f"Gradient norm: {grad_norm:.6f}")
-
-                # Apply gradients
-                # Filter grads to only include trainable parameters
-                try:
-                    trainable_params = self.actor_model.trainable_parameters()
-
-                    # Recursive function to filter gradients
-                    def filter_grads(grads_dict, params_dict):
-                        filtered = {}
-                        for key in params_dict.keys():
-                            if key in grads_dict:
-                                if isinstance(params_dict[key], dict):
-                                    filtered[key] = filter_grads(grads_dict[key], params_dict[key])
-                                else:
-                                    filtered[key] = grads_dict[key]
-                        return filtered
-
-                    # Filter gradients to match trainable_parameters structure
-                    filtered_grads = filter_grads(grads, trainable_params)
-
-                    # Now apply with matching structures
-                    self.optimizer.apply_gradients(filtered_grads, trainable_params)
-                    mx.eval(self.actor_model.parameters())
-                    logger.debug("Gradients applied successfully")
-
-                except Exception as e:
-                    logger.error(f"Error applying gradients: {e}", exc_info=True)
-                    logger.error(f"Grad keys (first 5): {list(tree_flatten(grads))[:5]}")
-                    logger.error(f"Trainable keys (first 5): {list(tree_flatten(trainable_params))[:5]}")
-            else:
-                logger.warning("No gradients to apply in train_step")
-
-            # Extract reward statistics from advantages
-            advantages = rollout_batch.get("advantages", mx.array([0.0]))
-            reward_mean = float(mx.mean(advantages).item())
-            reward_std = float(mx.std(advantages).item())
-
-            # Calculate tokens processed
-            tokens = rollout_batch.get("tokens", mx.array([]))
-            total_tokens = tokens.size if tokens.size > 0 else 0
-
-            # Calculate step time and throughput
-            step_time = time.time() - step_start_time
-            tokens_per_sec = total_tokens / step_time if step_time > 0 else 0.0
-
-            logger.debug(
-                f"train_step complete: loss={float(loss.item()):.6f}, "
-                f"kl={metrics.get('kl_divergence', 0.0):.6f}, "
-                f"time={step_time:.3f}s, tokens/s={tokens_per_sec:.1f}"
-            )
-
-            return TrainingMetrics(
-                loss=float(loss.item()),
-                reward_mean=reward_mean,
-                reward_std=reward_std,
-                kl_divergence=metrics.get("kl_divergence", 0.0),
-                grad_norm=grad_norm,
-                learning_rate=self._get_learning_rate(),
-                epoch=self.current_epoch,
-                step=update_step,
-                step_time_s=step_time,
-                tokens_per_sec=tokens_per_sec
-            )
-
-        except Exception as e:
-            logger.error(f"Error in train_step: {e}", exc_info=True)
-            return self._create_empty_metrics(update_step, step_start_time)
-
-    def _create_empty_metrics(
-        self,
-        update_step: int,
-        start_time: float
-    ) -> TrainingMetrics:
-        """Create empty metrics for error cases."""
+        
+        start_step, metadata = self.checkpoint_manager.load_latest_state(self.actor_model, self.optimizer)
+        return start_step, metadata.get("epoch", 0)
+
+    def generate_rollouts(self, batch_prompts: List[Dict], update_step: int) -> Tuple[Dict, float, Dict]:
+        self.actor_model.eval()
+        prompts_mx_list = [d['input_ids'] for d in batch_prompts]
+        max_prompt_len = max(p.shape[0] for p in prompts_mx_list) if prompts_mx_list else 0
+        
+        pad_id = self.tokenizer.pad_token_id
+        prompts_padded = [mx.pad(p, ((max_prompt_len - p.shape[0], 0)), constant_values=pad_id) for p in prompts_mx_list]
+        prompts_mx = mx.stack(prompts_padded, axis=0)
+        
+        prompts_replicated = mx.repeat(prompts_mx, repeats=self.config.trainer.num_rollout_samples, axis=0)
+        batch_size = prompts_replicated.shape[0]
+
+        mcq_flags = [p['meta_data'].get('is_mcq', False) for p in batch_prompts] * self.config.trainer.num_rollout_samples
+
+        # Generation loop
+        y, log_probs_list = [], []
+        logits, cache = self.actor_model(prompts_replicated, cache=self.model_manager.make_prompt_cache(self.actor_model))
+        
+        sampler = safe_make_sampler(self.config, self.config.generation.think_temperature)
+        logit_processor = make_dynamic_tag_bias_processor(self.tokenizer, self.config, mcq_flags)
+
+        hist = prompts_replicated.tolist()
+        
+        for i in range(self.config.data.max_gen_len):
+            logits = logit_processor(hist, logits[:, -1, :])
+            next_toks = sampler(logits)
+            
+            log_probs = nn.log_softmax(logits, axis=-1)
+            next_log_probs = mx.take_along_axis(log_probs, next_toks[:, None], axis=-1).squeeze(-1)
+            
+            y.append(next_toks)
+            log_probs_list.append(next_log_probs)
+            
+            [h.append(t) for h, t in zip(hist, next_toks.tolist())]
+            
+            logits, cache = self.actor_model(next_toks[:, None], cache=cache)
+
+        responses_mx = mx.stack(y, axis=1) if y else mx.zeros((batch_size, 0), dtype=mx.int32)
+        actor_log_probs = mx.stack(log_probs_list, axis=1) if log_probs_list else mx.zeros((batch_size, 0))
+
+        ref_log_probs = self.model_manager.get_logprobs_for_sequence(self.ref_model, prompts_replicated, responses_mx)
+        
+        decoded = self.tokenizer.batch_decode(responses_mx.tolist(), skip_special_tokens=True)
+        
+        # Rewards
+        rewards_total, rewards_breakdown = [], {}
+        prompts_data_replicated = [p for p in batch_prompts for _ in range(self.config.trainer.num_rollout_samples)]
+
+        contexts = [self.reward_composer.context_cls(
+            generated_text=decoded[i], prompt_text=prompts_data_replicated[i]['raw_prompts'],
+            reference_completion=prompts_data_replicated[i]['raw_completions'],
+            test_cases=prompts_data_replicated[i]['raw_test_cases'],
+            metadata=prompts_data_replicated[i]['meta_data'],
+        ) for i in range(batch_size)]
+        
+        batch_rewards = self.reward_composer.batch_compute(contexts)
+        
+        # Unpack rewards
+        rewards_total = [r['total'] for r in batch_rewards]
+        for key in batch_rewards[0]:
+            rewards_breakdown[key] = [r[key] for r in batch_rewards]
+            
+        advantages = self.grpo_algorithm.compute_advantages(mx.array(rewards_total), self.config.trainer.num_rollout_samples)
+        
+        response_mask = (responses_mx != pad_id).astype(mx.float32)
+        response_mask = _mask_after_answer(responses_mx, response_mask, self.tokenizer, self.config)
+        
+        _maybe_log_samples(self.config, update_step, prompts_data_replicated, decoded, rewards_breakdown, "n/a", self.run_id, False)
+
+        rollout_batch = {
+            "tokens": mx.concatenate([prompts_replicated, responses_mx], axis=1),
+            "response_mask": response_mask,
+            "advantages": advantages,
+            "ref_log_probs": ref_log_probs,
+            "actor_log_probs": actor_log_probs
+        }
+        self.actor_model.train()
+        return rollout_batch, np.mean(rewards_total), {k: np.mean(v) for k, v in rewards_breakdown.items()}
+
+    def train_step(self, rollout_batch: Dict[str, mx.array], update_step: int) -> TrainingMetrics:
+        start_time = time.time()
+        loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(rollout_batch, self.config, self.tokenizer.pad_token_id)
+        
+        self.optimizer.learning_rate = self.lr_scheduler(update_step)
+        self.optimizer.apply_gradients(grads, self.actor_model.trainable_parameters())
+        mx.eval(self.actor_model.parameters(), self.optimizer.state)
+        
+        grad_norm = np.linalg.norm([np.linalg.norm(v.astype(np.float32).flatten()) for v in tree_flatten(grads)[1]])
+        
         return TrainingMetrics(
-            loss=0.0,
-            reward_mean=0.0,
-            reward_std=0.0,
-            kl_divergence=0.0,
-            grad_norm=0.0,
-            learning_rate=self._get_learning_rate(),
-            epoch=self.current_epoch,
-            step=update_step,
-            step_time_s=time.time() - start_time,
-            tokens_per_sec=0.0
+            loss=loss.item(), reward_mean=mx.mean(rollout_batch['advantages']).item(),
+            grad_norm=grad_norm, learning_rate=self.optimizer.learning_rate,
+            step_time_s=time.time() - start_time, kl_divergence=metrics.get('kl_divergence', 0.0),
+            epoch=self.current_epoch, step=update_step
         )
 
-    def _get_learning_rate(self) -> float:
-        """Helper to safely extract learning rate from optimizer."""
-        try:
-            lr = self.optimizer.learning_rate
-            if hasattr(lr, 'item'):
-                return float(lr.item())
-            return float(lr)
-        except Exception as e:
-            logger.warning(f"Error getting learning rate: {e}")
-            return 0.0
-
-    def _get_temperature(self) -> float:
-        """Helper to safely get temperature from config."""
-        temperature = getattr(self.config.trainer, 'temperature', None)
-        if temperature is None:
-            temperature = getattr(self.config.generation, 'temperature', None) if hasattr(self.config, 'generation') else None
-        if temperature is None:
-            temperature = 0.7  # Default temperature
-        return temperature
-
-    def _get_max_gen_len(self) -> int:
-        """Helper to safely get max generation length from config."""
-        max_gen_len = getattr(self.config.data, 'max_gen_len', None)
-        if max_gen_len is None:
-            max_gen_len = getattr(self.config.generation, 'max_tokens', None) if hasattr(self.config, 'generation') else None
-        if max_gen_len is None:
-            max_gen_len = 128  # Default max generation length
-        return max_gen_len
-
-    def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
-        """
-        Runs registered evaluators against the validation dataset.
-
-        Args:
-            update_step: The current training update step.
-
-        Returns:
-            A list of EvaluationMetrics objects.
-        """
-        results: List[EvaluationMetrics] = []
-        val_dataset = self.data_manager._val_dataset
-
-        if val_dataset is None or len(val_dataset) == 0:
-            logger.warning("Validation skipped: no validation dataset available.")
-            return []
-
-        eval_gen_config = self.config.generation.model_dump() if hasattr(self.config, 'generation') else {}
-        eval_gen_config.update(
-            {
-                "system_prompt": getattr(self.config, 'system_prompt', ""),
-                "max_kv_size": getattr(self.config, 'max_kv_size', None),
-                "max_gen_len": self._get_max_gen_len(),
-            }
-        )
-
-        for eval_cfg in self.config.evaluation:
-            try:
-                merged_eval_config = eval_cfg.config.copy()
-                merged_eval_config.update(eval_gen_config)
-
-                evaluator = EvaluatorRegistry.create(eval_cfg.name, merged_eval_config)
-                eval_output = evaluator.evaluate(
-                    self.actor_model, self.tokenizer, val_dataset
-                )
-                results.append(eval_output)
-            except Exception as e:
-                logger.error(
-                    f"Error during evaluation '{eval_cfg.name}': {e}", exc_info=True
-                )
-        return results
+    def evaluate(self, update_step: int) -> List[Any]:
+        # Placeholder for full evaluation logic
+        logger.info(f"Evaluation at step {update_step} is a placeholder.")
+        return []
