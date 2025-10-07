@@ -6,9 +6,7 @@ import logging, time, gc
 import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
 import numpy as np
 from tqdm import trange
-
-from mlx.utils import tree_flatten, tree_map, tree_unflatten
-
+from mlx.utils import tree_flatten # Import tree_flatten
 
 from .config import ExperimentConfig
 from .model_manager import ModelManager
@@ -155,7 +153,6 @@ class BaseTrainer(ABC):
 
         if self.tokenizer:
             self.data_manager.set_tokenizer(self.tokenizer)
-            self.data_manager.set_system_prompt(self.config.system_prompt)
 
         await self.data_manager.load_datasets()
 
@@ -167,11 +164,8 @@ class BaseTrainer(ABC):
             unit="update",
             leave=True,
         )
-        train_data_iterator = iter(
-            self.data_manager.get_dataloader(
-                "train", self.config.trainer.ppo_batch_size
-            )
-        )
+
+        train_data_iterator = iter([]) # Start with an empty iterator
 
         with pbar:
             while self.global_step < self.config.trainer.num_training_steps:
@@ -180,11 +174,7 @@ class BaseTrainer(ABC):
                     self.save_final_checkpoint(reason="signal")
                     break
 
-                (
-                    accumulated_metrics_list,
-                    avg_rewards_list,
-                    raw_reward_components_list,
-                ) = ([], [], [])
+                accumulated_metrics_list, avg_rewards_list, raw_reward_components_list = [], [], []
                 accum_grads = None
 
                 for _ in range(self.config.trainer.grad_accum_steps):
@@ -193,15 +183,11 @@ class BaseTrainer(ABC):
                     except StopIteration:
                         self.current_epoch += 1
                         logger.info(f"Starting Epoch {self.current_epoch}")
-                        train_data_iterator = iter(
-                            self.data_manager.get_dataloader(
-                                "train", self.config.trainer.ppo_batch_size
-                            )
-                        )
+                        train_data_iterator = iter(self.data_manager.get_dataloader("train", self.config.trainer.ppo_batch_size))
                         try:
                             batch_data = next(train_data_iterator)
                         except StopIteration:
-                            raise TrainingRuntimeError("Dataset exhausted.")
+                            raise TrainingRuntimeError("Dataset is empty or has been completely filtered out. Cannot fetch any batches.")
 
                     (
                         rollout_batch,
@@ -229,7 +215,7 @@ class BaseTrainer(ABC):
 
                     if grads_mb:
                         accum_grads = (
-                            mlx.tree_map(mx.add, accum_grads, grads_mb)
+                            mx.utils.tree_map(mx.add, accum_grads, grads_mb)
                             if accum_grads
                             else grads_mb
                         )
@@ -237,12 +223,17 @@ class BaseTrainer(ABC):
                     gc.collect()
 
                 if accum_grads and self.optimizer:
+                    # --- FIX START ---
+                    # Correctly iterate over the values (v) of the flattened gradient tree.
+                    # The original code was iterating over (key, value) tuples.
                     grad_norm = np.linalg.norm(
                         [
                             np.linalg.norm(v.flatten())
-                            for v in tree_flatten(accum_grads)[1]
+                            for _, v in tree_flatten(accum_grads)
+                            if isinstance(v, mx.array)
                         ]
                     )
+                    # --- FIX END ---
 
                     self.optimizer.set_learning_rate(
                         mx.array(float(self.lr_scheduler(self.global_step)))
@@ -342,6 +333,6 @@ class BaseTrainer(ABC):
 
                 self.global_step += 1
 
-            self.save_final_checkpoint(
-                reason="completed" if not should_shutdown() else "interrupted"
-            )
+        self.save_final_checkpoint(
+            reason="completed" if not should_shutdown() else "interrupted"
+        )
