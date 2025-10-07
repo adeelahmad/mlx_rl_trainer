@@ -944,11 +944,12 @@ def make_dynamic_tag_bias_processor(
             if tag_id is None:
                 return mx.full((B,), -1, dtype=mx.int32)
             matches = history_mx == tag_id
-            # --- FIX START ---
-            # Cast argmax result to int32 to prevent overflow with -1
             rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
-            # --- FIX END ---
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+            # Add this check
+            if max_hist_len <= 0:
+                return mx.full((B,), -1, dtype=mx.int32)
+            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1).astype(mx.int32)
+
 
         last_ts, last_te, last_as, last_ae = (
             find_last_pos_mx(t) for t in (ts, te, as_id, ae)

@@ -1,440 +1,883 @@
-"""MLX-specific utility functions."""
+"""Text processing utility functions."""
 
 import logging
-import mlx.core as mx
-import mlx.nn as nn
-import mlx.optimizers as optim
-import gc
 import re
 import string
-import random
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
-from pathlib import Path
+import json
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Callable, Union
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
-from mlx_lm.sample_utils import make_sampler, make_logits_processors
-from mlx.utils import tree_flatten, tree_map, tree_unflatten
-
-from mlx_rl_trainer.core.config import ExperimentConfig, GenerationConfig
-from mlx_rl_trainer.core.exceptions import CheckpointError
-
-try:
-    from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
-except ImportError:
-
-    class MLXLoRALinear:
-        pass
-
+import mlx.core as mx
+import mlx.nn as nn
+from mlx_rl_trainer.core.config import (
+    GenerationConfig,
+    ExperimentConfig,
+)  # Import GenerationConfig for tags
 
 logger = logging.getLogger(__name__)
 
-TARGET_FLOAT_DTYPE = mx.bfloat16
+
+import logging
+import re
+import string
+import json
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Callable, Union
+
+from mlx_lm.tokenizer_utils import TokenizerWrapper
+import mlx.nn as nn
+from mlx_rl_trainer.core.config import GenerationConfig
+
+logger = logging.getLogger(__name__)
+
 LETTER_ALPH = string.ascii_uppercase
-_TOOL_LIKE_MARKERS = [
-    "<tool_call",
-    "</tool_call",
-    "<tool>",
-    "</tool>",
-    "<tool_",
-    "<function",
-    "</function",
-    "<json",
-    "</json",
-    "<scratchpad",
-    "</scratchpad",
-]
 
 
-def _is_metal_internal_error(err: BaseException) -> bool:
-    s = str(err)
-    return (
-        "Command buffer execution failed" in s
-        or "[METAL]" in s
-        or "Internal Error" in s
-    )
+def _preview(s: str, n: int = 600) -> str:
+    if s is None:
+        return ""
+    s = s.replace("\r\n", "\n")
+    s = s[:n] + ("..." if len(s) > n else "")
+    return s.replace("\n", "\\n")
 
 
-def metal_recover(stage: str):
-    logging.warning(f"[METAL] Recovering after error at stage: {stage}")
-    try:
-        mx.synchronize()
-    except Exception:
-        pass
-    mx.clear_cache()
-    gc.collect()
+_MD_HEADER = re.compile(r"^\s{0,3}#{1,6}\s+.*$", re.M)
+_CODE_FENCE = re.compile(r"```.*?```", re.S)
+_INLINE_CODE = re.compile(r"`[^`]+`")
+_HTML_TAGS = re.compile(r"<[^>]+>")
 
 
-def metal_safe_apply_gradients(
-    optimizer: optim.Optimizer, grads: Dict[str, mx.array], params: Dict[str, mx.array]
-):
-    try:
-        optimizer.apply_gradients(grads, params)
-    except Exception as e:
-        if _is_metal_internal_error(e):
-            metal_recover("apply_gradients")
-            return
-        raise
-    finally:
-        mx.clear_cache()
-        gc.collect()
+def _strip_markup(s: str) -> str:
+    if not s:
+        return ""
+    s = str(s)
+    s = _CODE_FENCE.sub(" ", s)
+    s = _INLINE_CODE.sub(" ", s)
+    s = _MD_HEADER.sub(" ", s)
+    s = _HTML_TAGS.sub(" ", s)
+    s = re.sub(r"(^|\n)\s*[-*•]\s+", r"\1", s)
+    s = re.sub(r"(^|\n)\s*\d+\.\s+", r"\1", s)
+    s = s.replace("\u2026", " ")
+    s = re.sub(r"[^\w\s/:%\-.]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
 
 
-def _find_embedding_layer(root: nn.Module) -> Tuple[str, nn.Module]:
-    for name, mod in root.named_modules():
-        if isinstance(mod, (nn.Embedding, nn.QuantizedEmbedding)):
-            return name, mod
-    raise RuntimeError("No nn.Embedding layer found.")
+def _count_words(txt: str) -> int:
+    return len(re.findall(r"\w+", txt or ""))
 
 
-def _freeze_module(module: nn.Module):
-    if module:
-        for p in module.parameters():
-            p.flags.train = False
+def _tokenize_set(s: str) -> Set[str]:
+    s = (s or "").lower().translate(str.maketrans("", "", string.punctuation))
+    return set(w for w in s.split() if w)
 
 
-class ContentAlignBridge(nn.Module):
-    def __init__(
-        self,
-        teacher_model: nn.Module,
-        student_model: nn.Module,
-        teacher_tokenizer: TokenizerWrapper,
-        student_tokenizer: TokenizerWrapper,
-        bridge_path: str,
-        pool: str = "mean",
-        scale: float = 1.0,
-        gen_cfg: Optional[GenerationConfig] = None,
-    ):
-        super().__init__()
-        from mlx_rl_trainer.utils.text_utils import (
-            extract_answer_region,
-        )  # Local import
-
-        self.tok_t, self.tok_s, self.pool, self.scale = (
-            teacher_tokenizer,
-            student_tokenizer,
-            pool,
-            float(scale),
-        )
-        self.gen_cfg = gen_cfg or GenerationConfig()
-        _, self.t_emb = _find_embedding_layer(teacher_model)
-        _, self.s_emb = _find_embedding_layer(student_model)
-        t_dim, s_dim = int(self.t_emb.weight.shape[1]), int(self.s_emb.weight.shape[1])
-        hidden = max(t_dim, s_dim)
-        self.bridge = nn.Sequential(
-            nn.Linear(t_dim, hidden, bias=False),
-            nn.ReLU(),
-            nn.Linear(hidden, s_dim, bias=False),
-        )
-        try:
-            w = mx.load(str(bridge_path))
-            self.bridge.update(tree_unflatten(list(w.items())))
-        except Exception as e:
-            logger.warning(f"Could not load align bridge weights: {e}")
-        self.bridge.eval()
-        _freeze_module(self.t_emb)
-        _freeze_module(self.s_emb)
-        self.bridge.freeze()
-
-    @staticmethod
-    def _pool_vec(tok_emb: mx.array, pool: str) -> mx.array:
-        if tok_emb.size == 0:
-            return mx.zeros((tok_emb.shape[-1],), dtype=tok_emb.dtype)
-        return tok_emb[-1] if pool == "last" else tok_emb.mean(axis=0)
-
-    def __call__(self, texts: List[str]) -> List[float]:
-        from mlx_rl_trainer.utils.text_utils import extract_answer_region
-
-        scores: List[float] = []
-        for s in texts:
-            ans = extract_answer_region(s or "", self.gen_cfg)
-            if not ans.strip():
-                scores.append(0.0)
-                continue
-            t_ids, s_ids = (
-                self.tok_t.encode(ans, add_special_tokens=False) or [],
-                self.tok_s.encode(ans, add_special_tokens=False) or [],
-            )
-            if not t_ids or not s_ids:
-                scores.append(0.0)
-                continue
-            t_vec = self._pool_vec(
-                self.t_emb(mx.array(t_ids, dtype=mx.int32)), self.pool
-            )
-            s_vec = self._pool_vec(
-                self.s_emb(mx.array(s_ids, dtype=mx.int32)), self.pool
-            )
-            mapped = self.bridge(t_vec)
-            a = mapped / (mx.norm(mapped) + 1e-8)
-            b = s_vec / (mx.norm(s_vec) + 1e-8)
-            cos = mx.sum(a * b)
-            score = 0.5 * (1.0 + cos)
-            scores.append(
-                max(0.0, min(1.0, float(mx.clip(score, 0.0, 1.0).item()) * self.scale))
-            )
-        return scores
+def _jaccard_similarity(a: str, b: str) -> float:
+    A, B = _tokenize_set(a), _tokenize_set(b)
+    if not A or not B:
+        return 0.0
+    return float(len(A & B) / len(A | B))
 
 
-_LAYER_PAT = re.compile(r"(?:^|[^a-zA-Z0-9_])layers\.(\d+)(?:[^0-9_]|$)")
-_HEAD_PAT = re.compile(r"\blm_head\b", re.I)
+def _normalize_ans_for_match(s: str) -> str:
+    s = (s or "").lower()
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip(" .;:")
+    return s
 
 
-def _find_layer_index(name: str) -> Optional[int]:
-    m = _LAYER_PAT.search(name)
+def _contains_keywords(haystack: str, keywords: Sequence[str]) -> bool:
+    if not haystack or not keywords:
+        return False
+    s_low = haystack.lower()
+    return any(k.lower() in s_low for k in keywords)
+
+
+def _contains_phrase(haystack: str, needle: str) -> bool:
+    if not haystack or not needle:
+        return False
+    haystack_lower = haystack.lower()
+    needle_lower = needle.lower()
+    if needle_lower in haystack_lower:
+        return True
+    toks = [t for t in needle_lower.split() if len(t) >= 3]
+    if len(toks) >= 2:
+        return " ".join(toks[:2]) in haystack_lower
+    return False
+
+
+def _has_non_ascii(s: str) -> bool:
+    return any(ord(ch) > 127 for ch in s or "")
+
+
+def _extract_action_phrases(s: str, min_len: int = 3) -> List[str]:
+    if not s:
+        return []
+    bullets = re.findall(r"(^|\n)\s*(?:[-*•]|\d+\.)\s+(.*?)(?:\n|$)", s, re.S | re.M)
+    items = [b[1].strip() for b in bullets if b[1].strip()]
+    if not items:
+        items = [it for it in re.split(r"[;.\n]+", s) if _count_words(it) >= 3]
+
+    out = [
+        _strip_markup(it)
+        for it in items
+        if _strip_markup(it) and _count_words(_strip_markup(it)) >= min_len
+    ]
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def _extract_python_code(text: str) -> str:
+    matches = re.findall(r"```(?:python)?\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
+    if matches:
+        return matches[0].strip()
+    matches = re.findall(r"```\s*\n(.*?)\n```", text, re.DOTALL)
+    if matches:
+        return matches[0].strip()
+    return ""
+
+
+def _extract_final_numeric(s: str) -> Optional[str]:
+    if not s:
+        return None
+    m = re.search(r"####\s*([-+]?\d+(?:\.\d+)?)\s*$", s.strip())
     if m:
-        return int(m.group(1))
-    parts = re.split(r"[\.\/]", name)
-    for i, p in enumerate(parts):
-        if p == "layers" and i + 1 < len(parts):
-            try:
-                return int(parts[i + 1])
-            except Exception:
-                pass
+        return m.group(1)
+    m = re.findall(r"[-+]?\d+(?:\.\d+)?", s)
+    return m[-1] if m else None
+
+
+def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
+    if not text or not gen_config.think_start_tag or not gen_config.think_end_tag:
+        return ""
+    m = re.search(
+        re.escape(gen_config.think_start_tag)
+        + r"\s*(.*?)\s*"
+        + re.escape(gen_config.think_end_tag),
+        text,
+        flags=re.I | re.S,
+    )
+    return (m.group(1).strip() if m else "")[:8000]
+
+
+def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
+    tl = text or ""
+    tend = gen_config.think_end_tag
+    if tend and tend.lower() in tl.lower():
+        idx = tl.lower().rfind(tend.lower())
+        return tl[idx + len(tend) :].strip()[:2000]
+    return tl.strip()[:2000]
+
+
+def _extract_think_answer_lengths(
+    text: str, gen_config: GenerationConfig
+) -> Tuple[int, int]:
+    try:
+        think_content = extract_think_region(text, gen_config)
+        answer_content = extract_answer_region(text, gen_config)
+        return len(think_content.strip()), len(answer_content.strip())
+    except Exception as e:
+        logger.debug(f"Failed to extract think/answer lengths: {e}")
+        return 0, 0
+
+
+def _indices_to_letters(indices: List[int]) -> str:
+    letters = [LETTER_ALPH[idx] for idx in indices if 0 <= idx < len(LETTER_ALPH)]
+    seen, out = set(), []
+    for L in sorted(letters):
+        if L not in seen:
+            seen.add(L)
+            out.append(L)
+    return ",".join(out)
+
+
+def _letters_to_canonical(letter_str: str) -> str:
+    parts = []
+    for p in (letter_str or "").split(","):
+        p = p.strip().upper()
+        if len(p) == 1 and p in LETTER_ALPH:
+            parts.append(p)
+    seen, out = set(), []
+    for L in sorted(parts):
+        if L not in seen:
+            seen.add(L)
+            out.append(L)
+    return ",".join(out)
+
+
+def _match_ref_to_option_index(ref_text: str, options: List[str]) -> Optional[int]:
+    if not (ref_text and options):
+        return None
+    ref_n = _normalize_ans_for_match(ref_text)
+    for idx, opt in enumerate(options):
+        if _normalize_ans_for_match(opt) == ref_n:
+            return idx
     return None
 
 
-def _band_for_name(
-    name: str,
-    low_band: Tuple[int, int],
-    mid_band: Tuple[int, int],
-    top_band: Tuple[int, int],
+def _extract_mcq_options(prompt_text: str) -> List[str]:
+    if not isinstance(prompt_text, str):
+        return []
+    m = re.search(r"choices\s*:?(.*)$", prompt_text, flags=re.I | re.S)
+    block = m.group(1) if m else prompt_text
+    opts = []
+    for ln in block.splitlines():
+        ln_stripped = ln.strip()
+        if re.match(r"^\s*[-•]\s+", ln_stripped):
+            opts.append(re.sub(r"^\s*[-•]\s+", "", ln_stripped).strip())
+            continue
+        m2 = re.match(r"^\s*([A-Za-z])\s*[\)\.\-:]\s*(.+)$", ln_stripped)
+        if m2:
+            opts.append(m2.group(2).strip())
+            continue
+        m3 = re.match(r"^\s*\d+\s*[\)\.\-:]\s*(.+)$", ln_stripped)
+        if m3:
+            opts.append(m3.group(1).strip())
+            continue
+    return [o for o in opts if o.strip()][: len(LETTER_ALPH)]
+
+
+def _infer_mcq_ref_letters(sample: Dict[str, Any]) -> str:
+    meta = sample.get("meta", {})
+    options = sample.get("mcq_options", [])
+    ref_ans_text = sample.get("ref_answer_str", "") or sample.get("completion", "")
+
+    for key in ("correct_letters", "correct_letter"):
+        if (val := meta.get(key)) and isinstance(val, str):
+            return _letters_to_canonical(val)
+
+    indices = []
+    if (val := meta.get("correct_indices")) and isinstance(val, list):
+        try:
+            indices = [int(x) for x in val if isinstance(x, (int, float))]
+        except (ValueError, TypeError):
+            pass
+    elif (val := meta.get("correct_index")) is not None:
+        try:
+            indices = [int(val)]
+        except (ValueError, TypeError):
+            pass
+    if indices:
+        return _indices_to_letters(indices)
+
+    if ref_ans_text and options:
+        idx = _match_ref_to_option_index(ref_ans_text, options)
+        if idx is not None:
+            return _indices_to_letters([idx])
+    return ""
+
+
+def _mcq_meta_from_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+    prompt_text = sample.get("prompt", "") or sample.get("text", "")
+    completion_text = sample.get("completion", "")
+    meta = sample.get("meta", {}) if isinstance(sample.get("meta"), dict) else {}
+    options_from_meta = meta.get("options")
+    options = (
+        options_from_meta
+        if isinstance(options_from_meta, list)
+        else _extract_mcq_options(prompt_text)
+    )
+    options = [str(o).strip() for o in options if str(o).strip()][: len(LETTER_ALPH)]
+    is_mcq = (meta.get("type", "").lower() == "mcq") or (
+        isinstance(options, list) and len(options) >= 2
+    )
+    if not is_mcq:
+        return {"is_mcq": False, "mcq_options": options, "mcq_correct_letters": ""}
+    temp_sample = {
+        **sample,
+        "meta": meta,
+        "mcq_options": options,
+        "ref_answer_str": completion_text,
+    }
+    correct_letters = _infer_mcq_ref_letters(temp_sample)
+    correct_indices = [
+        LETTER_ALPH.index(L) for L in correct_letters.split(",") if L in LETTER_ALPH
+    ]
+    multi_select = len(correct_indices) > 1 or bool(meta.get("multi_select", False))
+    return {
+        "is_mcq": True,
+        "mcq_options": options,
+        "mcq_multi_select": multi_select,
+        "mcq_correct_indices": correct_indices,
+        "mcq_correct_letters": correct_letters,
+    }
+
+
+def apply_chat_template_wrapper(
+    tokenizer: TokenizerWrapper, prompt: str, system_prompt: Optional[str]
 ) -> str:
-    li = _find_layer_index(name)
-
-    def _in_range(layer_idx, band_range):
-        if band_range is None or layer_idx is None:
-            return False
-        s, e = band_range
-        return (s is None or layer_idx >= s) and (e is None or layer_idx <= e)
-
-    if li is not None:
-        if _in_range(li, low_band):
-            return "low"
-        if _in_range(li, mid_band):
-            return "mid"
-        if _in_range(li, top_band):
-            return "top"
-    if _HEAD_PAT.search(name):
-        return "head"
-    return "other"
-
-
-def scale_grads_by_band(
-    grads_tree: Dict[str, mx.array], config: ExperimentConfig
-) -> Dict[str, mx.array]:
-    t_cfg = config.trainer
-    g_flat = tree_flatten(grads_tree)
-    out = []
-    for name, g in g_flat:
-        if not isinstance(g, mx.array):
-            out.append((name, g))
-            continue
-        band = _band_for_name(name, t_cfg.low_band, t_cfg.mid_band, t_cfg.top_band)
-        mul = {
-            "low": t_cfg.low_mul,
-            "mid": t_cfg.mid_mul,
-            "top": t_cfg.top_mul,
-            "head": t_cfg.head_mul,
-        }.get(band, 1.0)
-        out.append((name, g * mul))
-    return tree_unflatten(out)
-
-
-def mask_grads_to_layer_band(
-    grads_tree,
-    start,
-    end,
-    *,
-    include_embed=True,
-    include_head=True,
-    include_final_norm=True,
-):
-    flat = tree_flatten(grads_tree)
-    kept = []
-    for name, g in flat:
-        if not isinstance(g, mx.array):
-            kept.append((name, g))
-            continue
-        li = _find_layer_index(name)
-        keep = False
-        if li is not None:
-            keep = (start is None or li >= start) and (end is None or li <= end)
-        else:
-            lname = name.lower()
-            if "embed" in lname or "embedding" in lname:
-                keep = include_embed
-            elif "norm" in lname:
-                keep = include_final_norm
-            elif "head" in lname:
-                keep = include_head
-        kept.append((name, g if keep else mx.zeros_like(g)))
-    return tree_unflatten(kept)
-
-
-def mask_grads_to_specific_layers(
-    grads_tree: Dict[str, mx.array], layer_indices: Set[int]
-) -> Dict[str, mx.array]:
-    flat = tree_flatten(grads_tree)
-    kept = []
-    for name, g in flat:
-        if not isinstance(g, mx.array):
-            kept.append((name, g))
-            continue
-        if (
-            layer_idx := _find_layer_index(name)
-        ) is not None and layer_idx in layer_indices:
-            kept.append((name, g))
-        else:
-            kept.append((name, mx.zeros_like(g)))
-    return tree_unflatten(kept)
-
-
-def _global_grad_norm(grads: Dict[str, mx.array]) -> float:
+    messages = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt.strip()})
+    messages.append({"role": "user", "content": prompt.strip()})
     try:
-        flat = [g for _, g in tree_flatten(grads) if isinstance(g, mx.array)]
-        if not flat:
-            return 0.0
-        sq_sum = sum(mx.sum(g.astype(mx.float32) ** 2) for g in flat)
-        total = mx.sqrt(sq_sum)
-        mx.eval(total)
-        return float(total.item())
-    except Exception:
-        return 0.0
-
-
-def _maybe_clip_grad_norm(
-    grads_tree: Dict[str, mx.array], max_norm: Optional[float]
-) -> Tuple[Dict[str, mx.array], float]:
-    if max_norm is None or max_norm <= 0:
-        grad_norm = _global_grad_norm(grads_tree)
-        return grads_tree, grad_norm
-    try:
-        clipped_grads, grad_norm_mx = optim.clip_grad_norm(grads_tree, float(max_norm))
-        mx.eval(clipped_grads, grad_norm_mx)
-        return clipped_grads, float(grad_norm_mx.item())
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
     except Exception as e:
         logger.warning(
-            f"mlx.optim.clip_grad_norm failed: {e}. Falling back to manual clipping."
+            f"apply_chat_template failed: {e}. Falling back to manual formatting."
         )
-        grad_norm = _global_grad_norm(grads_tree)
-        if grad_norm > max_norm:
-            scale = max_norm / (grad_norm + 1e-8)
-            clipped_grads = tree_map(lambda g: g.astype(mx.float32) * scale, grads_tree)
-            return clipped_grads, grad_norm
-        return grads_tree, grad_norm
+        prefix = f"System: {system_prompt.strip()}\n\n" if system_prompt else ""
+        return f"{prefix}User: {prompt.strip()}\n\nAssistant:"
 
 
-def metal_before_update(num_updates: int, config: ExperimentConfig):
-    if not hasattr(config.generation, "_orig_max_gen_len"):
-        setattr(config.generation, "_orig_max_gen_len", config.data.max_gen_len)
-        setattr(config, "_orig_max_kv_size", config.max_kv_size)
-        setattr(
-            config.trainer,
-            "_orig_num_rollout_samples",
-            config.trainer.num_rollout_samples,
-        )
-    if num_updates < 32:
-        config.data.max_gen_len = min(config.generation._orig_max_gen_len, 160)
-        config.max_kv_size = min(config._orig_max_kv_size, 768)
-        config.trainer.num_rollout_samples = min(
-            config.trainer._orig_num_rollout_samples, 4
-        )
-    else:
-        config.data.max_gen_len = config.generation._orig_max_gen_len
-        config.max_kv_size = config._orig_max_kv_size
-        config.trainer.num_rollout_samples = config.trainer._orig_num_rollout_samples
-    if num_updates % 5 == 0:
-        try:
-            mx.synchronize()
-        except Exception:
-            pass
-        mx.clear_cache()
-        gc.collect()
-
-
-def _create_4d_attention_mask(
-    tokens: mx.array, pad_token_id: int, dtype: mx.Dtype = TARGET_FLOAT_DTYPE
-) -> mx.array:
-    if tokens.ndim != 2:
-        raise ValueError(f"tokens must be 2D, got {tokens.shape}")
-    B, T = tokens.shape
-    causal_mask = nn.MultiHeadAttention.create_additive_causal_mask(T, dtype=dtype)
-    padding_mask = (tokens == pad_token_id)[:, None, None, :]
-    neg_inf = mx.array(-1e9, dtype=dtype)
-    return mx.minimum(causal_mask, mx.where(padding_mask, neg_inf, 0.0))
-
-
-def safe_make_sampler(
-    config_or_args: Union[ExperimentConfig, GenerationConfig], temp: float
-) -> Callable:
-    gen_cfg = (
-        config_or_args.generation
-        if isinstance(config_or_args, ExperimentConfig)
-        else config_or_args
-    )
+def _tfidf_cosine(a: str, b: str) -> float:
     try:
-        return make_sampler(
-            temp=temp,
-            top_p=gen_cfg.sampling_top_p,
-            min_p=gen_cfg.sampling_min_p,
-            top_k=gen_cfg.sampling_top_k,
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        vec = TfidfVectorizer(
+            min_df=1, max_df=0.9, ngram_range=(1, 2), stop_words="english"
         )
-    except TypeError:
-        return make_sampler(temp=temp, top_p=gen_cfg.sampling_top_p)
+        X = vec.fit_transform([_strip_markup(a), _strip_markup(b)])
+        sim = float(cosine_similarity(X[0:1], X[1:2])[0, 0])
+        return max(0.0, min(1.0, sim))
+    except Exception:
+        A, B = _tokenize_set(a), _tokenize_set(b)
+        if not A and not B:
+            return 1.0
+        if not A or not B:
+            return 0.0
+        return len(A & B) / max(1, len(A | B))
 
 
-def _first_token_ids_for_lexemes(
-    tokenizer: TokenizerWrapper, lexemes: Sequence[str]
-) -> List[int]:
-    ids: List[int] = []
-    for lx in lexemes:
-        if (
-            (t := tokenizer.encode(lx, add_special_tokens=False))
-            and t
-            and t[0] not in ids
-        ):
-            ids.append(t[0])
-        if (
-            (t_space := tokenizer.encode(" " + lx, add_special_tokens=False))
-            and t_space
-            and t_space[0] not in ids
-        ):
-            ids.append(t_space[0])
-    return ids
+def _ascii_ratio(s: str) -> float:
+    if not s:
+        return 1.0
+    return sum(1 for ch in s if 32 <= ord(ch) <= 126 or ch in "\n\r\t") / max(1, len(s))
 
 
-def _letter_token_ids(
-    tokenizer: TokenizerWrapper, letters: Sequence[str] = LETTER_ALPH
-) -> Dict[str, List[int]]:
-    out = {}
-    for L in letters:
-        cand = []
-        for suf in ["", " ", ")", ".", " )", " ."]:
-            ids = tokenizer.encode(L + suf, add_special_tokens=False)
-            if len(ids) == 1 and ids[0] not in cand:
-                cand.append(ids[0])
-        out[L] = cand
-    return out
+def _looks_garbage(s: str) -> bool:
+    if not s or len(s.strip()) < 3 or len(s) > 20000 or _ascii_ratio(s) < 0.75:
+        return True
+    bad = re.findall(r"[^\w\s\-\.\,\:\;\(\)\[\]\/\+\=\&\<\>]", s)
+    return (len(bad) / max(1, len(s))) > 0.15
 
 
-def _resolve_tag_ids(
-    tokenizer: TokenizerWrapper, gen_config: GenerationConfig
-) -> Dict[str, Optional[int]]:
-    def _one_id(tok_str):
-        if not tok_str:
-            return None
+LETTER_ALPH = string.ascii_uppercase
+
+
+def _preview(s: str, n: int = 600) -> str:
+    """Shortens text for logs and escapes newlines."""
+    if s is None:
+        return ""
+    s = s.replace("\r\n", "\n")
+    s = s[:n] + ("..." if len(s) > n else "")
+    return s.replace("\n", "\\n")
+
+
+_MD_HEADER = re.compile(r"^\s{0,3}#{1,6}\s+.*$", re.M)
+_CODE_FENCE = re.compile(r"```.*?```", re.S)
+_INLINE_CODE = re.compile(r"`[^`]+`")
+_HTML_TAGS = re.compile(r"<[^>]+>")
+
+
+def _strip_markup(s: str) -> str:
+    """Removes common markdown, code fences, and HTML tags for cleaner text analysis."""
+    if not s:
+        return ""
+    s = str(s)
+    s = _CODE_FENCE.sub(" ", s)
+    s = _INLINE_CODE.sub(" ", s)
+    s = _MD_HEADER.sub(" ", s)
+    s = _HTML_TAGS.sub(" ", s)
+    s = re.sub(r"(^|\n)\s*[-*•]\s+", r"\1", s)
+    s = re.sub(r"(^|\n)\s*\d+\.\s+", r"\1", s)
+    s = s.replace("\u2026", " ")
+    s = re.sub(r"[^\w\s/:%\-.]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+
+def _count_words(txt: str) -> int:
+    """Counts non-whitespace tokens (approximates word count)."""
+    return len(re.findall(r"\w+", txt or ""))
+
+
+def _tokenize_set(s: str) -> Set[str]:
+    """Convert string to set of lowercase tokens without punctuation"""
+    s = (s or "").lower()
+    s = s.translate(str.maketrans("", "", string.punctuation))
+    return set(w for w in s.split() if w)
+
+
+def _normalize_ans_for_match(s: str) -> str:
+    """Normalizes an answer string for case-insensitive, whitespace-insensitive comparison."""
+    s = (s or "").lower()
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip(" .;:")
+    return s
+
+
+def _contains_keywords(haystack: str, keywords: Sequence[str]) -> bool:
+    """Return True if any keyword occurs in s (case-insensitive)"""
+    if not haystack or not keywords:
+        return False
+    s_low = haystack.lower()
+    return any(k.lower() in s_low for k in keywords)
+
+
+def _contains_phrase(haystack: str, needle: str) -> bool:
+    """Check if needle phrase appears in haystack with some tolerance."""
+    if not haystack or not needle:
+        return False
+    haystack_lower = haystack.lower()
+    needle_lower = needle.lower()
+    if needle_lower in haystack_lower:
+        return True
+    toks = [t for t in needle_lower.split() if len(t) >= 3]
+    if len(toks) >= 2:
+        return " ".join(toks[:2]) in haystack_lower
+    return False
+
+
+def _has_non_ascii(s: str) -> bool:
+    """Checks if a string contains any non-ASCII characters."""
+    return any(ord(ch) > 127 for ch in s or "")
+
+
+def _extract_action_phrases(s: str, min_len: int = 3) -> List[str]:
+    """Identifies potential steps/actionable phrases from text, usually from structured lists."""
+    if not s:
+        return []
+    # Identify bulleted/numbered lists
+    bullets = re.findall(r"(^|\n)\s*(?:[-*•]|\d+\.)\s+(.*?)(?:\n|$)", s, re.S | re.M)
+    items = [b[1].strip() for b in bullets if b[1].strip()]
+    if not items:
+        # Fallback to splitting by common separators if no list formatting found
+        items = [it for it in re.split(r"[;.\n]+", s) if _count_words(it) >= 3]
+
+    out = [
+        _strip_markup(it)
+        for it in items
+        if _strip_markup(it) and _count_words(_strip_markup(it)) >= min_len
+    ]
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def _extract_python_code(text: str) -> str:
+    """Extracts Python code from a markdown code block or assumes plain code."""
+    # Look for python block first
+    matches = re.findall(r"```python\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
+    if matches:
+        return matches[0].strip()
+
+    # Look for generic code block
+    matches = re.findall(r"```\s*\n(.*?)\n```", text, re.DOTALL)
+    if matches:
+        return matches[0].strip()
+
+    return ""
+
+
+def _extract_final_numeric(s: str) -> Optional[str]:
+    """Extracts the last numeric value (int or float) from a string, supporting `####` format."""
+    if not s:
+        return None
+    m = re.search(r"####\s*([-+]?\d+(?:\.\d+)?)\s*$", s.strip())
+    if m:
+        return m.group(1)
+    m = re.findall(r"[-+]?\d+(?:\.\d+)?", s)
+    return m[-1] if m else None
+
+
+# Helper functions for tags, using GenerationConfig
+def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
+    """Extracts content between think_start_tag and think_end_tag."""
+    if not text or not gen_config.think_start_tag or not gen_config.think_end_tag:
+        return ""
+    m = re.search(
+        re.escape(gen_config.think_start_tag)
+        + r"\s*(.*?)\s*"
+        + re.escape(gen_config.think_end_tag),
+        text,
+        flags=re.I | re.S,
+    )
+    return (m.group(1).strip() if m else "")[:8000]
+
+
+def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
+    """Extracts answer region: everything AFTER the last </think> tag. If no </think> tag, returns full text."""
+    tl = text or ""
+    tend = gen_config.think_end_tag
+    if tend and tend.lower() in tl.lower():
+        idx = tl.lower().rfind(tend.lower())
+
+        answer_part = tl[idx + len(tend) :].strip()
+        # Optionally look for explicit answer tags if defined, but usually content after </think> is the answer.
+        # This implementation aligns with the goal of pulling everything *after* the thinking phase.
+
+        return answer_part[:2000]
+    return tl.strip()[:2000]
+
+
+def _extract_think_answer_lengths(
+    text: str, gen_config: GenerationConfig
+) -> Tuple[int, int]:
+    """Extracts character lengths of thinking and answer sections from text using GenerationConfig tags."""
+    try:
+        think_content = extract_think_region(text, gen_config)
+        answer_content = extract_answer_region(text, gen_config)
+        return len(think_content.strip()), len(answer_content.strip())
+    except Exception as e:
+        logger.debug(f"Failed to extract think/answer lengths: {e}")
+        return 0, 0
+
+
+# --- MCQ Helpers ---
+def _indices_to_letters(indices: List[int]) -> str:
+    """Converts a list of 0-based indices to comma-separated letters (e.g., [0, 2] -> 'A,C')."""
+    letters = [LETTER_ALPH[idx] for idx in indices if 0 <= idx < len(LETTER_ALPH)]
+    seen, out = set(), []
+    for L in sorted(letters):
+        if L not in seen:
+            seen.add(L)
+            out.append(L)
+    return ",".join(out)
+
+
+def _letters_to_canonical(letter_str: str) -> str:
+    """Converts a string of letters (e.g., 'a, B ,d') to canonical uppercase form ('A,B,D')."""
+    parts = []
+    for p in (letter_str or "").split(","):
+        p = p.strip().upper()
+        if len(p) == 1 and p in LETTER_ALPH:
+            parts.append(p)
+    seen, out = set(), []
+    for L in sorted(parts):
+        if L not in seen:
+            seen.add(L)
+            out.append(L)
+    return ",".join(out)
+
+
+def _match_ref_to_option_index(ref_text: str, options: List[str]) -> Optional[int]:
+    """Tries to match a reference answer string to one of the provided options."""
+    if not (ref_text and options):
+        return None
+    ref_n = _normalize_ans_for_match(ref_text)
+    for idx, opt in enumerate(options):
+        if _normalize_ans_for_match(opt) == ref_n:
+            return idx
+    return None
+
+
+def _extract_mcq_options(prompt_text: str) -> List[str]:
+    """Tries to extract numbered or bulleted MCQ options from a prompt."""
+    if not isinstance(prompt_text, str):
+        return []
+    m = re.search(r"choices\s*:?(.*)$", prompt_text, flags=re.I | re.S)
+    block = m.group(1) if m else prompt_text
+    opts = []
+    for ln in block.splitlines():
+        ln_stripped = ln.strip()
+        if re.match(r"^\s*[-•]\s+", ln_stripped):
+            opts.append(re.sub(r"^\s*[-•]\s+", "", ln_stripped).strip())
+            continue
+        m2 = re.match(r"^\s*([A-Za-z])\s*[\)\.\-:]\s*(.+)$", ln_stripped)
+        if m2:
+            opts.append(m2.group(2).strip())
+            continue
+        m3 = re.match(r"^\s*\d+\s*[\)\.\-:]\s*(.+)$", ln_stripped)
+        if m3:
+            opts.append(m3.group(1).strip())
+            continue
+    return [o for o in opts if o.strip()][: len(LETTER_ALPH)]
+
+
+def _infer_mcq_ref_letters(sample: Dict[str, Any]) -> str:
+    """Infers the canonical correct MCQ letters from various metadata fields or text matching."""
+    meta = sample.get("meta", {})
+    options = sample.get("mcq_options", [])
+    ref_ans_text = sample.get("ref_answer_str", "") or sample.get("completion", "")
+
+    for key in ("correct_letters", "correct_letter"):
+        if (val := meta.get(key)) and isinstance(val, str):
+            return _letters_to_canonical(val)
+
+    indices = []
+    if (val := meta.get("correct_indices")) and isinstance(val, list):
         try:
-            ids = tokenizer.encode(tok_str, add_special_tokens=False)
-            return int(ids[0]) if len(ids) == 1 else None
-        except Exception:
-            return None
+            indices = [int(x) for x in val if isinstance(x, (int, float))]
+        except (ValueError, TypeError):
+            pass
+    elif (val := meta.get("correct_index")) is not None:
+        try:
+            indices = [int(val)]
+        except (ValueError, TypeError):
+            pass
+    if indices:
+        return _indices_to_letters(indices)
+
+    if ref_ans_text and options:
+        idx = _match_ref_to_option_index(ref_ans_text, options)
+        if idx is not None:
+            return _indices_to_letters([idx])
+    return ""
+
+
+def _extract_predicted_letters(
+    generated_text: str, options: Optional[List[str]], cfg: GenerationConfig
+) -> str:
+    """Extracts the predicted MCQ letter(s) from the answer region."""
+    ans = extract_answer_region(generated_text or "", cfg)
+
+    # 1. Look for first capital letter followed by separator/space
+    m = re.match(r"^\s*([A-Z])(?:[\)\.\:\-]\s*|\s+|$)", ans)
+    if m:
+        pred_char = m.group(1).upper()
+        if not options or LETTER_ALPH.index(pred_char) < len(options):
+            return pred_char
+
+    return ""  # Return empty if no clear prediction found
+
+
+def _mcq_meta_from_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """Generates comprehensive MCQ metadata for a sample."""
+    prompt_text = sample.get("prompt", "") or sample.get("text", "")
+    completion_text = sample.get("completion", "")
+    meta = sample.get("meta", {}) if isinstance(sample.get("meta"), dict) else {}
+
+    options_from_meta = meta.get("options")
+    if isinstance(options_from_meta, list):
+        options = options_from_meta
+    else:
+        options = _extract_mcq_options(prompt_text)
+    options = [str(o).strip() for o in options if str(o).strip()][: len(LETTER_ALPH)]
+
+    is_mcq = (meta.get("type", "").lower() == "mcq") or (
+        isinstance(options, list) and len(options) >= 2
+    )
+    if not is_mcq:
+        return {"is_mcq": False, "mcq_options": options, "mcq_correct_letters": ""}
+
+    temp_sample = {
+        **sample,
+        "meta": meta,
+        "mcq_options": options,
+        "ref_answer_str": completion_text,
+    }
+    correct_letters = _infer_mcq_ref_letters(temp_sample)
+
+    correct_indices = [
+        LETTER_ALPH.index(L) for L in correct_letters.split(",") if L in LETTER_ALPH
+    ]
+    multi_select = len(correct_indices) > 1 or bool(meta.get("multi_select", False))
 
     return {
-        "think_start": _one_id(gen_config.think_start_tag),
-        "think_end": _one_id(gen_config.think_end_tag),
-        "answer_start": _one_id(gen_config.answer_start_tag),
-        "answer_end": _one_id(gen_config.answer_end_tag),
-        "eos": tokenizer.eos_token_id,
+        "is_mcq": True,
+        "mcq_options": options,
+        "mcq_multi_select": multi_select,
+        "mcq_correct_indices": correct_indices,
+        "mcq_correct_letters": correct_letters,
     }
+
+
+def apply_chat_template_wrapper(
+    tokenizer: TokenizerWrapper, prompt: str, system_prompt: Optional[str]
+) -> str:
+    """Applies a chat template to a prompt, handling potential errors gracefully."""
+    messages = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt.strip()})
+    messages.append({"role": "user", "content": prompt.strip()})
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    except Exception as e:
+        logger.warning(
+            f"apply_chat_template failed: {e}. Falling back to manual formatting."
+        )
+        prefix = f"System: {system_prompt.strip()}\n\n" if system_prompt else ""
+        return f"{prefix}User: {prompt.strip()}\n\nAssistant:"
+
+
+def _tfidf_cosine(a: str, b: str) -> float:
+    """Compute TF-IDF cosine similarity, fallback to Jaccard."""
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        vec = TfidfVectorizer(
+            min_df=1, max_df=0.9, ngram_range=(1, 2), stop_words="english"
+        )
+        X = vec.fit_transform([_strip_markup(a), _strip_markup(b)])
+        sim = float(cosine_similarity(X[0:1], X[1:2])[0, 0])
+        return max(0.0, min(1.0, sim))
+    except Exception:
+        A, B = _tokenize_set(a), _tokenize_set(b)
+        if not A and not B:
+            return 1.0
+        if not A or not B:
+            return 0.0
+        return len(A & B) / max(1, len(A | B))
+
+
+class TwoBlockFormatter:
+    """Utility class used in BEFORE_STATE for coercing and scoring text format."""
+
+    def __init__(
+        self,
+        think_start: str,
+        think_end: str,
+        answer_start: str,
+        answer_end: str,
+        validate_json: bool = False,
+    ):
+        self.ts, self.te, self.as_, self.ae = (
+            think_start,
+            think_end,
+            answer_start,
+            answer_end,
+        )
+        self.validate_json = validate_json
+        self._re_think = (
+            re.compile(re.escape(self.ts) + r"(.*?)" + re.escape(self.te), re.DOTALL)
+            if self.ts and self.te
+            else None
+        )
+        self._re_answer = (
+            re.compile(re.escape(self.as_) + r"(.*?)" + re.escape(self.ae), re.DOTALL)
+            if self.as_ and self.ae
+            else None
+        )
+
+    def _extract_json_from_text(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            first_newline = text.find("\n")
+            if first_newline != -1:
+                text = text[first_newline + 1 :]
+            else:
+                text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+
+    def _looks_like_json(self, text: str) -> bool:
+        text = self._extract_json_from_text(text.strip())
+        return text.startswith("{") or text.startswith("[")
+
+    def _validate_json_content(self, content: str) -> float:
+        if not content or content == "Insufficient information.":
+            return 0.0
+        try:
+            json.loads(self._extract_json_from_text(content))
+            return 0.5
+        except (json.JSONDecodeError, ValueError):
+            return 0.0
+
+    def _coerce_one(self, s: str) -> str:
+        s = (s or "").strip()
+        if not s:
+            return f"{self.ts}…{self.te}\n{self.as_}Insufficient information.{self.ae}"
+
+        i_ts = s.find(self.ts) if self.ts else -1
+        if i_ts == -1:  # No <think> tag
+            ans = _strip_specials(s or "Insufficient information.")
+            if self.te:
+                ans = ans.replace(self.te, "")
+            return f"{self.ts}…{self.te}\n{self.as_}{ans}{self.ae}"
+
+        s = s[i_ts:]
+        i_te = s.find(self.te, len(self.ts)) if self.te else -1
+        if i_te == -1:
+            s += self.te
+            i_te = len(s) - len(self.te)
+
+        think_body = _strip_specials(s[len(self.ts) : i_te].strip() or "…")
+        remainder = s[i_te + len(self.te) :].strip()
+
+        answer_body = remainder
+        if self.as_ and self.ae:  # If explicit answer tags defined
+            i_as = remainder.find(self.as_)
+            if i_as != -1:
+                answer_body = remainder[i_as + len(self.as_) :]
+                i_ae = answer_body.find(self.ae)
+                if i_ae != -1:
+                    answer_body = answer_body[:i_ae].strip()
+                else:
+                    answer_body = answer_body.strip()
+            else:
+                pass
+        elif self.as_ and not self.ae:  # If only opening answer tag
+            i_as = remainder.find(self.as_)
+            if i_as != -1:
+                answer_body = remainder[i_as + len(self.as_) :].strip()
+
+        answer_body = _strip_specials(answer_body.replace(self.te, ""))
+        if not answer_body:
+            answer_body = "Insufficient information.Way too much overthinking"
+
+        final = f"{self.ts}{think_body}{self.te}\n{self.as_}{answer_body}{self.ae}"
+        if self.ae and (j_ae := final.rfind(self.ae)) != -1:
+            final = final[: j_ae + len(self.ae)]
+        return final
+
+    def _score_one(
+        self, s: str, detailed: bool = False
+    ) -> Union[float, Dict[str, float]]:
+        """Scores based on proper tag usage, aligned with BEFORE_STATE logic."""
+        result = {"reward_format": 0.0, "reward_content": 0.0, "reward_total": 0.0}
+
+        if not s:
+            return result if detailed else 0.0
+        s = s.strip()
+
+        if self._looks_like_json(s):
+            result["reward_format"] = 0.5
+            result["reward_total"] = 0.5
+            if self.validate_json:
+                result["reward_content"] = self._validate_json_content(s)
+            result["reward_total"] = result["reward_format"] * (
+                result["reward_content"] if self.validate_json else 1.0
+            )
+            return result if detailed else result["reward_total"]
+
+        # Check basic think/answer structure (Simplified from BEFORE_STATE's reward calculation)
+        th_s = s.count(self.ts)
+        th_e = s.count(self.te)
+        if th_s == 1 and th_e == 1:
+            think_content = extract_think_region(
+                s, GenerationConfig(think_start_tag=self.ts, think_end_tag=self.te)
+            )
+            answer_content = extract_answer_region(
+                s, GenerationConfig(think_end_tag=self.te)
+            )
+
+            if len(think_content) > 10 and len(answer_content) > 10:
+                result["reward_format"] = 1.0
+            elif len(think_content) > 10 or len(answer_content) > 10:
+                result["reward_format"] = 0.5
+            else:
+                result["reward_format"] = 0.2
+        elif th_s >= 1 and th_e == 0:
+            result["reward_format"] = 0.3
+        elif th_s == 0 and th_e == 0:
+            result["reward_format"] = 0.1 if len(s) > 20 else 0.0
+        else:
+            result["reward_format"] = 0.2
+
+        result["reward_total"] = result["reward_format"]
+        return result if detailed else result["reward_total"]
+
+    def coerce_batch(self, texts: Sequence[str]) -> List[str]:
+        return [self._coerce_one(t) for t in texts]
+
+    def score_batch(
+        self, texts: Sequence[str], detailed: bool = False
+    ) -> Union[List[float], List[Dict[str, float]]]:
+        return [self._score_one(t, detailed=detailed) for t in texts]
 
 
 def make_dynamic_tag_bias_processor(
@@ -501,8 +944,12 @@ def make_dynamic_tag_bias_processor(
             if tag_id is None:
                 return mx.full((B,), -1, dtype=mx.int32)
             matches = history_mx == tag_id
-            rev_indices = mx.argmax(matches[:, ::-1], axis=1)
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+            rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
+            # Add this check
+            if max_hist_len <= 0:
+                return mx.full((B,), -1, dtype=mx.int32)
+            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1).astype(mx.int32)
+
 
         last_ts, last_te, last_as, last_ae = (
             find_last_pos_mx(t) for t in (ts, te, as_id, ae)
@@ -600,3 +1047,4 @@ def _mask_after_answer(
         mx.broadcast_to(indices[None, :], responses_mx.shape) < boundary_index[:, None]
     )
     return initial_mask * end_mask.astype(mx.float32)
+
