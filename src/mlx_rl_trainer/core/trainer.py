@@ -176,7 +176,11 @@ class BaseTrainer(ABC):
                     self.save_final_checkpoint(reason="signal")
                     break
 
-                accumulated_metrics_list, avg_rewards_list, raw_reward_components_list = [], [], []
+                (
+                    accumulated_metrics_list,
+                    avg_rewards_list,
+                    raw_reward_components_list,
+                ) = ([], [], [])
                 accum_grads = None
 
                 for _ in range(self.config.trainer.grad_accum_steps):
@@ -185,11 +189,17 @@ class BaseTrainer(ABC):
                     except StopIteration:
                         self.current_epoch += 1
                         logger.info(f"Starting Epoch {self.current_epoch}")
-                        train_data_iterator = iter(self.data_manager.get_dataloader("train", self.config.trainer.ppo_batch_size))
+                        train_data_iterator = iter(
+                            self.data_manager.get_dataloader(
+                                "train", self.config.trainer.ppo_batch_size
+                            )
+                        )
                         try:
                             batch_data = next(train_data_iterator)
                         except StopIteration:
-                            raise TrainingRuntimeError("Dataset is empty or has been completely filtered out. Cannot fetch any batches.")
+                            raise TrainingRuntimeError(
+                                "Dataset is empty or has been completely filtered out. Cannot fetch any batches."
+                            )
 
                     (
                         rollout_batch,
@@ -245,7 +255,9 @@ class BaseTrainer(ABC):
 
                     avg_loss = np.mean([m.loss for m in accumulated_metrics_list])
                     avg_reward_mean = np.mean(avg_rewards_list)
-                    avg_lr = self.optimizer.learning_rate # Get the current LR from the optimizer
+                    avg_lr = (
+                        self.optimizer.learning_rate
+                    )  # Get the current LR from the optimizer
 
                     aggregated_raw_rewards = (
                         {

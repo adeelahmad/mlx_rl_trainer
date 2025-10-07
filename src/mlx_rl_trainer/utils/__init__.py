@@ -110,5 +110,5 @@ __all__ = [
     "softmax",
     "log_softmax",
     # distributed
-    "DistributedUtil"
+    "DistributedUtil",
 ]

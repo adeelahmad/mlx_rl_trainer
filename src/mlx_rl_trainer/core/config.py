@@ -193,7 +193,9 @@ class CheckpointConfig(BaseModel):
 
 class MonitoringConfig(BaseModel):
     use_wandb: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
-    wandb_project: Optional[str] = Field("mlx-grpo-qwen3-new", description="W&B project name.")
+    wandb_project: Optional[str] = Field(
+        "mlx-grpo-qwen3-new", description="W&B project name."
+    )
     wandb_entity: Optional[str] = Field(
         None, description="Your W&B entity (username or team name)."
     )
@@ -218,7 +220,7 @@ class GenerationConfig(BaseModel):
     # Tags & Format
     think_start_tag: str = Field("<think>")
     think_end_tag: str = Field("</think>")
-    answer_start_tag: str = Field(")
+    answer_start_tag: str = Field("")
     answer_end_tag: str = Field("")
 
     # Sampling parameters
@@ -260,9 +262,7 @@ class GenerationConfig(BaseModel):
             "frustrated",
         ]
     )
-    encourage_phrases_for_bias: List[str] = Field(
-        default_factory=lambda: []
-    )
+    encourage_phrases_for_bias: List[str] = Field(default_factory=lambda: [])
     encourage_think_bias: float = Field(4.5)
     ban_think_bias: float = Field(-3.0)
 
@@ -363,15 +363,7 @@ class ExperimentConfig(BaseModel):
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
 
     max_kv_size: PositiveInt = Field(1536)
-    system_prompt: |
-      You are ReasonableQwen3 . Always respond in this format:
-
-      <think>
-      [Your compressed reasoning - use abbreviated notation]
-      </think>
-      [Your final answer - clear and direct]
-
-      CRITICAL: You MUST include <think></think> tags, then provide answer directly after.
+    system_prompt: str = Field("")
 
     use_paged_kv_cache: bool = Field(True)
     kv_cache_block_size: PositiveInt = Field(16)

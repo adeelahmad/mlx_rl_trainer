@@ -1,3 +1,16 @@
+# import re
+# from typing import Dict, Any
+# import logging
+
+# from mlx_rl_trainer.rewards.base_reward import BaseReward
+# from mlx_rl_trainer.rewards.registry import RewardRegistry
+# from mlx_rl_trainer.rewards.context import RewardContext
+# from mlx_rl_trainer.core.config import RewardConfig
+# from mlx_rl_trainer.utils.text_utils import extract_think_region, extract_answer_region
+
+
+
+
 import re
 from typing import Dict, Any
 import logging
@@ -5,7 +18,7 @@ from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.core.config import GenerationConfig
-from mlx_rl_trainer.utils.text_utils import extract_think_region
+from mlx_rl_trainer.utils.text_utils import extract_think_region  # ← REMOVED extract_answer_region
 
 logger = logging.getLogger(__name__)
 

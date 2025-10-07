@@ -46,7 +46,9 @@ class SemanticSimilarityReward(BaseReward):
 
         # Get generation config for tag extraction
         self.gen_config = GenerationConfig()
-        self.extract_after_tag = config.get("extract_after_tag", self.gen_config.think_end_tag)
+        self.extract_after_tag = config.get(
+            "extract_after_tag", self.gen_config.think_end_tag
+        )
 
         if self.method == "tfidf":
             self.vectorizer = TfidfVectorizer(
@@ -120,9 +122,13 @@ class SemanticSimilarityReward(BaseReward):
                 return 0.0
 
             if self.method == "tfidf":
-                return self._compute_tfidf_similarity(generated_answer, reference_answer)
+                return self._compute_tfidf_similarity(
+                    generated_answer, reference_answer
+                )
             elif self.method == "jaccard":
-                return self._compute_jaccard_similarity(generated_answer, reference_answer)
+                return self._compute_jaccard_similarity(
+                    generated_answer, reference_answer
+                )
             else:
                 return 0.0
 
@@ -194,8 +200,12 @@ class SemanticSimilarityReward(BaseReward):
 
         try:
             # Extract answer portions for all texts
-            generated_answers = [self._extract_answer_text(c.generated_text) for c in contexts]
-            reference_answers = [self._extract_answer_text(c.reference_completion) for c in contexts]
+            generated_answers = [
+                self._extract_answer_text(c.generated_text) for c in contexts
+            ]
+            reference_answers = [
+                self._extract_answer_text(c.reference_completion) for c in contexts
+            ]
 
             # Filter out pairs where either text is too short
             valid_indices = []

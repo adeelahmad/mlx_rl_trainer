@@ -26,6 +26,15 @@ data:
   max_gen_len: 246
   loader_type: "jsonl"
   shuffle_data: true
+  system_prompt: |
+    You are ReasonableQwen3 . Always respond in this format:
+
+    <think>
+    [Your compressed reasoning - use abbreviated notation]
+    </think>
+    [Your final answer - clear and direct]
+
+    CRITICAL: You MUST include <think></think> tags, then provide answer directly after.
 
 # The system_prompt from your ExperimentConfig will be used automatically by the trainer.
 # You don't need to specify it here unless you want to override the default.
