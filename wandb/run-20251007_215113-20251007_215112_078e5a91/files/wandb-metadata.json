@@ -1,0 +1,40 @@
+{
+  "os":  "macOS-15.5-arm64-arm-64bit",
+  "python":  "CPython 3.11.9",
+  "startedAt":  "2025-10-07T10:51:13.256003Z",
+  "args":  [
+    "--config",
+    "configs/experiments/code_gen_base.yaml",
+    "--log-level",
+    "DEBUG"
+  ],
+  "program":  "/opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/mlx-train",
+  "git":  {
+    "remote":  "git@github.com:adeelahmad/mlx_rl_trainer.git",
+    "commit":  "c8f997683770f5fcd9d01f76de5c2cecf3a9d478"
+  },
+  "email":  "adeelahmad99@gmail.com",
+  "root":  "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer",
+  "host":  "AA-MacBook-5.local",
+  "executable":  "/opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/python3.11",
+  "cpu_count":  12,
+  "cpu_count_logical":  12,
+  "disk":  {
+    "/":  {
+      "total":  "994662584320",
+      "used":  "967524810752"
+    }
+  },
+  "memory":  {
+    "total":  "103079215104"
+  },
+  "apple":  {
+    "name":  "Apple M2 Max",
+    "ecpuCores":  4,
+    "pcpuCores":  8,
+    "gpuCores":  38,
+    "memoryGb":  96,
+    "ramTotalBytes":  "103079215104"
+  },
+  "writerId":  "xiaqa8j63s2zlbq54cwj6rcp2pgqn1mv"
+}

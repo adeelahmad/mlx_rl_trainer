@@ -1,0 +1,325 @@
+_wandb:
+    value:
+        cli_version: 0.21.3
+        e:
+            l6dmupbcs5i0numx5lxnj3caxu9vkfn2:
+                apple:
+                    ecpuCores: 4
+                    gpuCores: 38
+                    memoryGb: 96
+                    name: Apple M2 Max
+                    pcpuCores: 8
+                    ramTotalBytes: "103079215104"
+                args:
+                    - --config
+                    - configs/experiments/code_gen_base.yaml
+                    - --log-level
+                    - DEBUG
+                cpu_count: 12
+                cpu_count_logical: 12
+                disk:
+                    /:
+                        total: "994662584320"
+                        used: "967525433344"
+                email: adeelahmad99@gmail.com
+                executable: /opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/python3.11
+                git:
+                    commit: c8f997683770f5fcd9d01f76de5c2cecf3a9d478
+                    remote: git@github.com:adeelahmad/mlx_rl_trainer.git
+                host: AA-MacBook-5.local
+                memory:
+                    total: "103079215104"
+                os: macOS-15.5-arm64-arm-64bit
+                program: /opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/mlx-train
+                python: CPython 3.11.9
+                root: /Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer
+                startedAt: "2025-10-07T10:49:43.317388Z"
+                writerId: l6dmupbcs5i0numx5lxnj3caxu9vkfn2
+        m: []
+        python_version: 3.11.9
+        t:
+            "1":
+                - 1
+                - 5
+                - 11
+                - 49
+                - 51
+                - 53
+                - 71
+                - 105
+            "2":
+                - 1
+                - 5
+                - 11
+                - 49
+                - 51
+                - 53
+                - 71
+                - 105
+            "3":
+                - 2
+                - 13
+                - 14
+                - 16
+            "4": 3.11.9
+            "5": 0.21.3
+            "6": 4.57.0
+            "12": 0.21.3
+            "13": darwin-arm64
+align_after_tag:
+    value: </think>
+align_bridge_path:
+    value: null
+align_bridge_weight:
+    value: 1
+align_pool:
+    value: mean
+allow_cross_arch_ref:
+    value: false
+checkpointing:
+    value:
+        keep_last_n: 3
+        save_dir: ./checkpoints
+        save_every: 10
+        save_optimizer_state: false
+data:
+    value:
+        dataset_answer_key: completion
+        dataset_filter_keywords:
+            - http://
+            - '**other**'
+            - https://
+            - png
+            - jpg
+            - Another way
+            - Adeel
+        dataset_prompt_key: prompt
+        loader_type: jsonl
+        max_gen_len: 384
+        max_prompt_len: 512
+        shuffle_data: true
+        train_path: /Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl
+        val_path: /Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl
+evaluation:
+    value:
+        - config:
+            k_values:
+                - 1
+                - 2
+            num_samples: 10
+          name: human_eval
+generation:
+    value:
+        allow_tool_calls: true
+        answer_end_tag: </answer>
+        answer_start_tag: <answer>
+        answer_temperature: 0.24
+        ban_phrases_for_bias:
+            - I think the answer
+            - I believe that
+            - Confused
+            - stuck
+            - frustrated
+        ban_think_bias: -3
+        bias_answer_start: 6
+        bias_answer_start_after_min_think: true
+        bias_close_think: 9
+        bias_eos_after_answer: 3
+        encourage_phrases_for_bias:
+            - chk
+            - calc
+            - ∴
+            - w/
+        encourage_think_bias: 4.5
+        hard_mask_mcq_first_token: true
+        mcq_answer_end_bias: 9
+        mcq_ban_first_bias: -14
+        mcq_close_after_k: 1
+        mcq_letter_lift: 8
+        min_answer_tokens: 8
+        min_answer_tokens_mcq: 1
+        min_think_tokens: 32
+        nonmcq_ban_first_bias: -12
+        punish_extra_think_end: -12
+        punish_reopen_answer: -9
+        punish_reopen_think: -10
+        repetition_context_size: 20
+        repetition_penalty: 1.15
+        sampling_min_p: 0.02
+        sampling_top_k: 20
+        sampling_top_p: 0.7
+        think_boost_tokens: 32
+        think_end_early_bias: -12
+        think_end_tag: </think>
+        think_length_penalty_strength: 0.15
+        think_length_target_max: 128
+        think_length_target_min: 32
+        think_start_tag: <think>
+        think_temperature: 0.23
+        tool_call_penalty: 0
+kv_cache_block_size:
+    value: 16
+kv_cache_num_blocks:
+    value: 2048
+max_kv_size:
+    value: 1536
+model:
+    value:
+        lora_alpha: 16
+        lora_dropout: 0
+        lora_rank: 16
+        lora_scale_by_rank: true
+        lora_target_modules:
+            - q_proj
+            - k_proj
+            - v_proj
+            - o_proj
+            - gate_proj
+            - up_proj
+            - down_proj
+        model_path: /Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest
+        ref_model_path: /Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest
+        use_lora: false
+monitoring:
+    value:
+        log_prompts: true
+        log_samples_every: 1
+        max_logged_samples: 50
+        sample_log_path: null
+        use_wandb: true
+        wandb_entity: null
+        wandb_project: mlx-grpo
+        wandb_run_name: null
+rewards:
+    value:
+        - config:
+            timeout: 3
+          name: code_execution
+          weight: 0.8
+        - config:
+            method: jaccard
+          name: semantic_similarity
+          weight: 0.2
+run_id:
+    value: 20251007_214942_d910974e
+system_prompt:
+    value: |-
+        THINKING RULES - Use maximally compressed notation:
+
+            ═══ SYMBOLS & NOTATION ═══
+            Math: ∴(therefore) ∵(because) ⇒(implies) ≈(approx) ∈(in) ∀(forall) ∃(exists) ≠ ≤ ≥
+            Logic: ✓(yes) ✗(no) ?(unknown) !(important) ⚠(warning) ∧(and) ∨(or) ¬(not) ⊕(xor)
+            Flow: →(then) ←(from) ↔(bidirect) ⇄(exchange) ▸(next) ◂(prev) ⊃(implies) ⊂(subset)
+            Status: ✓(done) ○(pending) ●(active) ◐(partial) ⊗(blocked) ⊘(invalid)
+
+            ═══ UNIVERSAL ABBREVIATIONS ═══
+            w/(with) w/o(without) b/c(because) re:(regarding) vs(versus) via per thru
+            @(at/location) #(number) &(and) +(plus/also) -(minus/without) /(per/or) |(or/pipe)
+            i.e.(that is) e.g.(example) etc.(and so on) cf(compare) viz(namely) NB(note well)
+
+            ═══ ACTION SHORTHAND ═══
+            chk(check) calc(calculate) eval(evaluate) cmp(compare) est(estimate) approx(approximate)
+            find get set test run init proc(process) upd(update) del(delete) add sub mul div
+            verify confirm validate analyze extract parse transform merge split filter sort
+
+            ═══ DOMAIN-SPECIFIC SHORTHAND ═══
+            - CODE/TECH: func var obj arr str int bool dict list async await req res API DB
+              impl(implement) refactor debug deploy config exec cmd arg param ret val idx len
+
+            - BUSINESS: rev(revenue) exp(expense) proj(projection) KPI ROI Q1/Q2/Q3/Q4 YoY MoM
+              stakeholder cust(customer) mkt(market) comp(competitor) strat(strategy) ops(operations)
+
+            - SCIENCE: exp(experiment) obs(observation) hyp(hypothesis) ctrl(control) var(variable)
+              sig(significant) corr(correlation) data pt(point) meas(measure) temp pres vol mass
+
+            - LOGIC/REASONING: IF/THEN/ELSE WHEN/WHILE FOR/EACH CASE/SWITCH TRY/CATCH
+              premise→conclusion assumption→inference cause→effect condition→result
+
+            ═══ TIME & QUANTITY ═══
+            mins hrs days wks mos yrs NOW ASAP prev next cur(current) hist(historical)
+            approx ~100 <10 >50 ≤5 ≥20 between±5 range[1-10] max min avg sum total count
+
+            ═══ COMPARISON & RELATIONSHIPS ═══
+            better/worse higher/lower more/less same≠diff equal>unequal similar≈different
+            vs opt1/opt2/opt3 pros/cons trade-off cost/benefit risk/reward
+
+            ═══ STRICTLY FORBIDDEN PHRASES ═══
+            ✗ "I think" "I believe" "I feel" "In my opinion" "It seems" "It appears"
+            ✗ "Let me" "I should" "I need to" "I want to" "I'm going to"
+            ✗ "This is interesting" "Looking at" "Considering" "Taking into account"
+            ✗ "First of all" "On the other hand" "In this case" "As we can see"
+            ✗ "It's worth noting" "It's important to" "We should consider"
+            ✗ "Taking into account" "With that in mind" "Given this information" "Based on this"
+            ✗ "Confused" "stuck" "frustrated" "Uncertain" "Unclear" "I'm guessing"
+            ✗ "maybe the answer is" "I'm not sure" "Probably" "Perhaps" "Possibly"
+            ✗ "Circular reasoning" "In some way" "Magically" "For some reason" "Too complicated" "It just works"
+            ✗ "Something is off" "Wait, but" "Wait, maybe" "Wait, actually" "Hold on" "another thought:"
+            ✗ "Alternatively", "Actually", "Or maybe", "Flowery language, hedging, or conversational filler"
+            ✗ "Furthermore", "Moreover", "Nevertheless", "Nonetheless", "Subsequently", "Therefore, it can be concluded", "In conclusion", "To summarize", "As mentioned previously"
+            ✗ Any emoji unless user explicitly requests them
+
+            ═══ REQUIRED FORMAT ═══
+            - Write as compact telegraphic notes, NOT full sentences
+            - Use vertical lists w/ bullets or dashes for multi-items
+            - Group related info with indentation or symbols
+            - One idea per line when possible
+            - Omit articles (a/an/the), auxiliary verbs (is/are/was), obvious subjects
+
+            EXAMPLES:
+            ❌ BAD: "I think we should first check if the value is greater than 10, and if it is, then we need to calculate..."
+            ✓ GOOD: "chk val>10 → calc x²+3 → ∴ result≈42"
+
+            ❌ BAD: "Looking at the data, it seems that the customer retention rate is lower than expected"
+            ✓ GOOD: "data: cust retention<expected (est 65% vs target 80%) → need improve"
+
+            ❌ BAD: "Let me break this down. We have three options here. Option A would cost more but..."
+            ✓ GOOD: "3 opts: A(↑cost ✓quality) B(balanced) C(↓cost ✗quality) → rec: B"
+
+            ═══ WHEN UNCERTAIN ═══ DO NOT guess or assume. Instead: ? = flag uncertainty w/ question mark ASK: "need clarification on X" or "X not specified - options: A/B/C?" CONSTRAINT: "cannot solve b/c: missing info Y" If problem unsolvable → state why concisely, don't elaborate Think like: debugger output, medical chart notes, trading floor shorthand, or military briefing. COMPRESS EVERYTHING. Every word must earn its place.
+trainer:
+    value:
+        algorithm: grpo
+        eval_every: 100
+        grad_accum_steps: 1
+        grad_checkpoint_layers: 0
+        grad_clip_norm: 0.5
+        grpo_beta: 0.05
+        head_mul: 1.2
+        invalid_sample_frequency: 2
+        invalid_sample_layers: 33,34,35
+        learning_rate: 2e-06
+        low_band:
+            - 0
+            - 15
+        low_mul: 0.1
+        lr_schedule_config:
+            arguments:
+                - 2e-06
+                - 500
+                - 2e-07
+            name: cosine_decay
+            warmup: 500
+            warmup_init: 2e-07
+        mid_band:
+            - 16
+            - 23
+        mid_mul: 0.95
+        num_rollout_samples: 3
+        num_training_steps: 1000
+        optimizer_beta1: 0.9
+        optimizer_beta2: 0.95
+        optimizer_weight_decay: 0.01
+        output_dir: outputs/code_gen_run_001/20251007_214942_d910974e
+        ppo_batch_size: 1
+        reward_smoothing_window: 20
+        seed: 42
+        top_band:
+            - 24
+            - 35
+        top_mul: 1.5
+        train_layer_end: 35
+        train_layer_start: 26
+        use_custom_batch_builder: false
+        use_grad_checkpointing: false
+use_paged_kv_cache:
+    value: true
