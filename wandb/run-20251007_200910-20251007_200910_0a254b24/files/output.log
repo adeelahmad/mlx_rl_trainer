@@ -1,0 +1,103 @@
+[2;36m[10/07/25 20:09:12][0m[2;36m [0m[34mINFO    [0m INFO:mlx_rl_trainer.scripts.train:W&B logging initialized: [4;94mhttps://wandb.ai/adeelahmad99/mlx-grpo/runs/20251007_200910_0a254b24[0m                                            ]8;id=481741;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py\[2mtrain.py[0m]8;;\[2m:[0m]8;id=562275;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py#257\[2m257[0m]8;;\
+[2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.rewards.base_reward:Initialized CodeExecutionReward with config: [1m{[0m[32m'timeout'[0m: [1;36m3[0m[1m}[0m                                                                  ]8;id=869693;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/base_reward.py\[2mbase_reward.py[0m]8;;\[2m:[0m]8;id=659176;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/base_reward.py#37\[2m37[0m]8;;\
+[2;36m                   [0m[2;36m [0m[34mINFO    [0m INFO:mlx_rl_trainer.rewards.programming.code_execution:Initialized CodeExecutionReward with timeout: 3s.                                                          ]8;id=738797;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/programming/code_execution.py\[2mcode_execution.py[0m]8;;\[2m:[0m]8;id=72933;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/programming/code_execution.py#125\[2m125[0m]8;;\
+[2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.rewards.registry:Created reward instance: [32m'code_execution'[0m.                                                                                         ]8;id=896865;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/registry.py\[2mregistry.py[0m]8;;\[2m:[0m]8;id=244098;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/registry.py#85\[2m85[0m]8;;\
+[2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.rewards.base_reward:Initialized SemanticSimilarityReward with config: [1m{[0m[32m'method'[0m: [32m'jaccard'[0m[1m}[0m                                                      ]8;id=475435;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/base_reward.py\[2mbase_reward.py[0m]8;;\[2m:[0m]8;id=666563;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/base_reward.py#37\[2m37[0m]8;;\
+[2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.rewards.registry:Created reward instance: [32m'semantic_similarity'[0m.                                                                                    ]8;id=372528;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/registry.py\[2mregistry.py[0m]8;;\[2m:[0m]8;id=219684;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/registry.py#85\[2m85[0m]8;;\
+[2;36m                   [0m[2;36m [0m[34mINFO    [0m INFO:mlx_rl_trainer.rewards.base_reward:Initialized RewardComposer with [1;36m2[0m rewards.                                                                                   ]8;id=679514;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/base_reward.py\[2mbase_reward.py[0m]8;;\[2m:[0m]8;id=74870;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/rewards/base_reward.py#135\[2m135[0m]8;;\
+[2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.data.dataset_manager:DatasetManager initialized.                                                                                             ]8;id=171339;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py\[2mdataset_manager.py[0m]8;;\[2m:[0m]8;id=484714;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py#98\[2m98[0m]8;;\
+Traceback (most recent call last):
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/mlx-train", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py", line 308, in main
+    asyncio.run(_async_main())
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py", line 271, in _async_main
+    checkpoint_manager = CheckpointManager(config.trainer.output_dir / config.checkpointing.save_dir, keep_last_n=config.checkpointing.keep_best_n)
+                                                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/pydantic/main.py", line 991, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'CheckpointConfig' object has no attribute 'keep_best_n'
+[31m╭─[0m[31m──────────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m───────────────────────────────[0m[31m─╮[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/[0m[1mmlx-train[0m:7 in <module>                      [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m4 [0m[94mif[0m [91m__name__[0m == [33m'[0m[33m__main__[0m[33m'[0m:                                                                   [31m│[0m
+[31m│[0m   [2m5 [0m[2m│   [0m[94mif[0m sys.argv[[94m0[0m].endswith([33m'[0m[33m.exe[0m[33m'[0m):                                                         [31m│[0m
+[31m│[0m   [2m6 [0m[2m│   │   [0msys.argv[[94m0[0m] = sys.argv[[94m0[0m][:-[94m4[0m]                                                       [31m│[0m
+[31m│[0m [31m❱ [0m7 [2m│   [0msys.exit([1;4mmain()[0m)                                                                         [31m│[0m
+[31m│[0m   [2m8 [0m                                                                                             [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m: [31m│[0m
+[31m│[0m 308 in main                                                                                      [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m305 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m306 [0m[94mdef[0m[90m [0m[92mmain[0m():                                                                                [31m│[0m
+[31m│[0m   [2m307 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m [31m❱ [0m308 [2m│   [0m[1;4masyncio.run(_async_main())[0m                                                             [31m│[0m
+[31m│[0m   [2m309 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m310 [0m[94mdef[0m[90m [0m[92mcli[0m():                                                                                 [31m│[0m
+[31m│[0m   [2m311 [0m                                                                                           [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/[0m[1mrunners.py[0m:190 in run     [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m187 [0m[2m│   │   │   [0m[33m"[0m[33masyncio.run() cannot be called from a running event loop[0m[33m"[0m)                    [31m│[0m
+[31m│[0m   [2m188 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m189 [0m[2m│   [0m[94mwith[0m Runner(debug=debug) [94mas[0m runner:                                                    [31m│[0m
+[31m│[0m [31m❱ [0m190 [2m│   │   [0m[94mreturn[0m [1;4mrunner.run(main)[0m                                                            [31m│[0m
+[31m│[0m   [2m191 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m192 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m193 [0m[94mdef[0m[90m [0m[92m_cancel_all_tasks[0m(loop):                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/[0m[1mrunners.py[0m:118 in run     [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m115 [0m[2m│   │   [0m                                                                                   [31m│[0m
+[31m│[0m   [2m116 [0m[2m│   │   [0m[96mself[0m._interrupt_count = [94m0[0m                                                          [31m│[0m
+[31m│[0m   [2m117 [0m[2m│   │   [0m[94mtry[0m:                                                                               [31m│[0m
+[31m│[0m [31m❱ [0m118 [2m│   │   │   [0m[94mreturn[0m [96mself[0m._loop.run_until_complete(task)                                     [31m│[0m
+[31m│[0m   [2m119 [0m[2m│   │   [0m[94mexcept[0m exceptions.CancelledError:                                                  [31m│[0m
+[31m│[0m   [2m120 [0m[2m│   │   │   [0m[94mif[0m [96mself[0m._interrupt_count > [94m0[0m:                                                  [31m│[0m
+[31m│[0m   [2m121 [0m[2m│   │   │   │   [0muncancel = [96mgetattr[0m(task, [33m"[0m[33muncancel[0m[33m"[0m, [94mNone[0m)                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/[0m[1mbase_events.py[0m:654 in     [31m│[0m
+[31m│[0m run_until_complete                                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 651 [0m[2m│   │   [0m[94mif[0m [95mnot[0m future.done():                                                             [31m│[0m
+[31m│[0m   [2m 652 [0m[2m│   │   │   [0m[94mraise[0m [96mRuntimeError[0m([33m'[0m[33mEvent loop stopped before Future completed.[0m[33m'[0m)             [31m│[0m
+[31m│[0m   [2m 653 [0m[2m│   │   [0m                                                                                  [31m│[0m
+[31m│[0m [31m❱ [0m 654 [2m│   │   [0m[94mreturn[0m [1;4mfuture.result()[0m                                                            [31m│[0m
+[31m│[0m   [2m 655 [0m[2m│   [0m                                                                                      [31m│[0m
+[31m│[0m   [2m 656 [0m[2m│   [0m[94mdef[0m[90m [0m[92mstop[0m([96mself[0m):                                                                       [31m│[0m
+[31m│[0m   [2m 657 [0m[2;90m│   │   [0m[33m"""Stop running the event loop.[0m                                                   [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m: [31m│[0m
+[31m│[0m 271 in _async_main                                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m268 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m269 [0m[2m│   [0mmodel_manager = ModelManager(config.model)                                             [31m│[0m
+[31m│[0m   [2m270 [0m[2m│   [0mdata_manager = DatasetManager(config.data, tokenizer=[94mNone[0m)                             [31m│[0m
+[31m│[0m [31m❱ [0m271 [2m│   [0mcheckpoint_manager = CheckpointManager(config.trainer.output_dir / config.checkpoint   [31m│[0m
+[31m│[0m   [2m272 [0m[2m│   [0m[94mif[0m args.resume: checkpoint_manager.resume_from_path = Path(args.resume)                [31m│[0m
+[31m│[0m   [2m273 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m274 [0m[2m│   [0mmetrics_logger = MetricsLogger(config, run_id)                                         [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/pydantic/[0m[1mmain.py[0m:99 [31m│[0m
+[31m│[0m 1 in __getattr__                                                                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 988 [0m[2m│   │   │   │   │   │   [0m[94mreturn[0m [96msuper[0m().[92m__getattribute__[0m(item)  [2m# Raises AttributeError i[0m  [31m│[0m
+[31m│[0m   [2m 989 [0m[2m│   │   │   │   │   [0m[94melse[0m:                                                                 [31m│[0m
+[31m│[0m   [2m 990 [0m[2m│   │   │   │   │   │   [0m[2m# this is the current error[0m                                       [31m│[0m
+[31m│[0m [31m❱ [0m 991 [2m│   │   │   │   │   │   [0m[1;4;94mraise[0m[1;4m [0m[1;4;96mAttributeError[0m[1;4m([0m[1;4;33mf[0m[1;4;33m'[0m[1;4;33m{[0m[1;4;96mtype[0m[1;4m([0m[1;4;96mself[0m[1;4m).[0m[1;4;91m__name__[0m[1;4;33m!r}[0m[1;4;33m object has no att[0m  [31m│[0m
+[31m│[0m   [2m 992 [0m[2m│   │   [0m                                                                                  [31m│[0m
+[31m│[0m   [2m 993 [0m[2m│   │   [0m[94mdef[0m[90m [0m[92m__setattr__[0m([96mself[0m, name: [96mstr[0m, value: Any) -> [94mNone[0m:                             [31m│[0m
+[31m│[0m   [2m 994 [0m[2m│   │   │   [0m[94mif[0m (setattr_handler := [96mself[0m.__pydantic_setattr_handlers__.get(name)) [95mis[0m [95mnot[0m   [31m│[0m
+[31m╰──────────────────────────────────────────────────────────────────────────────────────────────────╯[0m
+[1;91mAttributeError: [0m[32m'CheckpointConfig'[0m object has no attribute [32m'keep_best_n'[0m
