@@ -18,3 +18,374 @@ Trainable parameters: 100.000% (4022.468M/4022.468M)
 [33mNo checkpoint found. Starting from scratch.[0m
 [2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.data.dataset_manager:DatasetManager tokenizer updated.                                                                                      ]8;id=588637;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py\[2mdataset_manager.py[0m]8;;\[2m:[0m]8;id=565158;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py#102\[2m102[0m]8;;\
 [2;36m                   [0m[2;36m [0m[32mDEBUG   [0m DEBUG:mlx_rl_trainer.data.dataset_manager:DatasetManager system prompt set.                                                                                      ]8;id=611878;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py\[2mdataset_manager.py[0m]8;;\[2m:[0m]8;id=418801;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py#106\[2m106[0m]8;;\
+[2;36m[10/07/25 20:14:52][0m[2;36m [0m[1;7;31mCRITICAL[0m CRITICAL:mlx_rl_trainer.scripts.train:An unexpected error occurred during training: cannot mix list and non-list, non-null values                                          ]8;id=95325;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py\[2mtrain.py[0m]8;;\[2m:[0m]8;id=792495;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py#134\[2m134[0m]8;;\
+[2;36m                    [0m         [31m╭─[0m[31m─────────────────────────────────────────────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m──────────────────────────────────────────────────────────────────[0m[31m─╮[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m:127 in _async_main                                                     [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m124 [0m[2m│   │   [0m[94mraise[0m [96mValueError[0m([33mf[0m[33m"[0m[33mUnknown algorithm: [0m[33m{[0mconfig.trainer.algorithm[33m}[0m[33m"[0m)                                                                                       [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m125 [0m[2m│   [0m                                                                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m126 [0m[2m│   [0m[94mtry[0m:                                                                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m127 [2m│   │   [0m[94mawait[0m trainer.run([94mlambda[0m: shutdown_requested)                                                                                                            [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m128 [0m[2m│   │   [0mlogger.info([33m"[0m[33m[bold green]Training completed successfully![/bold green][0m[33m"[0m)                                                                                 [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m129 [0m[2m│   [0m[94mexcept[0m CustomBaseException [94mas[0m e:                                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m130 [0m[2m│   │   [0mlogger.critical([33mf[0m[33m"[0m[33mA predictable error halted training: [0m[33m{[0me[33m}[0m[33m"[0m, exc_info=[94mTrue[0m)                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/core/[0m[1mtrainer.py[0m:102 in run                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 99 [0m[2m│   │   │   [0m[96mself[0m.data_manager.set_tokenizer([96mself[0m.tokenizer)                                                                                                      [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m100 [0m[2m│   │   │   [0m[96mself[0m.data_manager.set_system_prompt([96mself[0m.config.system_prompt)                                                                                       [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m101 [0m[2m│   │   [0m                                                                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m102 [2m│   │   [0m[1;4;94mawait[0m[1;4m [0m[1;4;96mself[0m[1;4m.data_manager.load_datasets()[0m                                                                                                                  [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m103 [0m[2m│   │   [0mtrain_data_iterator = [96miter[0m([96mself[0m.data_manager.get_dataloader([33m"[0m[33mtrain[0m[33m"[0m,                                                                                     [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m       [96mself[0m.config.trainer.ppo_batch_size))                                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m104 [0m[2m│   │   [0m                                                                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m105 [0m[2m│   │   [0m[94mwith[0m trange([96mself[0m.global_step, [96mself[0m.config.trainer.num_training_steps,                                                                                    [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m       initial=[96mself[0m.global_step, desc=[33m"[0m[33mTraining[0m[33m"[0m) [94mas[0m pbar:                                                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/[0m[1mdataset_manager.py[0m:158 in load_datasets                                            [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m155 [0m[2m│   │   │   [0m[94melse[0m []                                                                                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m156 [0m[2m│   │   [0m)                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m157 [0m[2m│   │   [0m                                                                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m158 [2m│   │   [0m[96mself[0m._train_dataset = [1;4;96mself[0m[1;4m._process_raw_to_dataset(raw_train_data, [0m[1;4;33m"[0m[1;4;33mtrain[0m[1;4;33m"[0m[1;4m)[0m                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m159 [0m[2m│   │   [0m[96mself[0m._val_dataset = (                                                                                                                                    [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m160 [0m[2m│   │   │   [0m[96mself[0m._process_raw_to_dataset(raw_val_data, [33m"[0m[33mval[0m[33m"[0m) [94mif[0m raw_val_data [94melse[0m [94mNone[0m                                                                          [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m161 [0m[2m│   │   [0m)                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/[0m[1mdataset_manager.py[0m:195 in _process_raw_to_dataset                                  [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m192 [0m[2m│   │   [0m[94mif[0m [95mnot[0m normalized_records:                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m193 [0m[2m│   │   │   [0mlogger.warning([33mf[0m[33m"[0m[33mNo valid records found for [0m[33m{[0msplit_name[33m}[0m[33m.[0m[33m"[0m)                                                                                          [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m194 [0m[2m│   │   │   [0m[94mreturn[0m Dataset.from_list([])                                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m195 [2m│   │   [0m[94mreturn[0m [1;4mDataset.from_list(normalized_records)[0m                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m196 [0m[2m│   [0m                                                                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m197 [0m[2m│   [0m[94mdef[0m[90m [0m[92mget_dataloader[0m([96mself[0m, split: [96mstr[0m, batch_size: [96mint[0m) -> Iterator[Dict[[96mstr[0m, Any]]:                                                                           [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m198 [0m[2m│   │   [0mdataset = [96mself[0m._train_dataset [94mif[0m split == [33m"[0m[33mtrain[0m[33m"[0m [94melse[0m [96mself[0m._val_dataset                                                                                 [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1marrow_dataset.py[0m:986 in from_list                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 983 [0m[2;33m│   │   [0m[33m"""[0m                                                                                                                                                     [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 984 [0m[2m│   │   [0m[2m# for simplicity and consistency wrt OptimizedTypedSequence we do not use [0m                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m        [2mInMemoryTable.from_pylist here[0m                                                                                                                                  [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 985 [0m[2m│   │   [0mmapping = {k: [r.get(k) [94mfor[0m r [95min[0m mapping] [94mfor[0m k [95min[0m mapping[[94m0[0m]} [94mif[0m mapping [94melse[0m                                                                          [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m        {}                                                                                                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m 986 [2m│   │   [0m[94mreturn[0m [1;4;96mcls[0m[1;4m.from_dict(mapping, features, info, split)[0m                                                                                                    [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 987 [0m[2m│   [0m                                                                                                                                                            [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 988 [0m[2m│   [0m[1;95m@staticmethod[0m                                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 989 [0m[2m│   [0m[94mdef[0m[90m [0m[92mfrom_csv[0m(                                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1marrow_dataset.py[0m:940 in from_dict                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 937 [0m[2m│   │   │   │   [0m)                                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 938 [0m[2m│   │   │   [0marrow_typed_mapping[col] = data                                                                                                                     [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 939 [0m[2m│   │   [0mmapping = arrow_typed_mapping                                                                                                                           [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m 940 [2m│   │   [0mpa_table = [1;4mInMemoryTable.from_pydict(mapping=mapping)[0m                                                                                                   [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 941 [0m[2m│   │   [0m[94mif[0m info [95mis[0m [94mNone[0m:                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 942 [0m[2m│   │   │   [0minfo = DatasetInfo()                                                                                                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 943 [0m[2m│   │   [0minfo.features = features                                                                                                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1mtable.py[0m:758 in from_pydict                                                      [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 755 [0m[2;33m│   │   [0m[33mReturns:[0m                                                                                                                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 756 [0m[2;33m│   │   │   [0m[33m`datasets.table.Table`[0m                                                                                                                              [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 757 [0m[2;33m│   │   [0m[33m"""[0m                                                                                                                                                     [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m 758 [2m│   │   [0m[94mreturn[0m [96mcls[0m([1;4mpa.Table.from_pydict(*args, **kwargs)[0m)                                                                                                       [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 759 [0m[2m│   [0m                                                                                                                                                            [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 760 [0m[2m│   [0m[1;95m@classmethod[0m                                                                                                                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m 761 [0m[2m│   [0m[94mdef[0m[90m [0m[92mfrom_pylist[0m([96mcls[0m, mapping, *args, **kwargs):                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib._Tabular.from_pydict:1813                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib._from_pydict:5347                                                                                                                                       [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib.asarray:373                                                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib.array:247                                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib._handle_arrow_array_protocol:112                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1marrow_writer.py[0m:243 in __arrow_array__                                           [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m240 [0m[2m│   │   │   │   [0mout = list_of_np_array_to_pyarrow_listarray(data)                                                                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m241 [0m[2m│   │   │   [0m[94melse[0m:                                                                                                                                                [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m242 [0m[2m│   │   │   │   [0mtrying_cast_to_python_objects = [94mTrue[0m                                                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m [31m❱ [0m243 [2m│   │   │   │   [0mout = pa.array(cast_to_python_objects(data, only_1d_for_numpy=[94mTrue[0m))                                                                             [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m244 [0m[2m│   │   │   [0m[2m# use smaller integer precisions if possible[0m                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m245 [0m[2m│   │   │   [0m[94mif[0m [96mself[0m.trying_int_optimization:                                                                                                                     [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m   [2m246 [0m[2m│   │   │   │   [0m[94mif[0m pa.types.is_int64(out.type):                                                                                                                  [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib.array:343                                                                                                                                               [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib._sequence_to_array:42                                                                                                                                   [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib.pyarrow_internal_check_status:154                                                                                                                       [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m                                                                                                                                                                        [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m│[0m in pyarrow.lib.check_status:91                                                                                                                                         [31m│[0m [2m            [0m
+[2;36m                    [0m         [31m╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯[0m [2m            [0m
+[2;36m                    [0m         [1;91mArrowInvalid: [0mcannot mix list and non-list, non-null values                                                                                                                [2m            [0m
+[2;36m                   [0m[2;36m [0m[34mINFO    [0m INFO:mlx_rl_trainer.scripts.train:Application shutdown sequence initiated.                                                                                                 ]8;id=167753;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py\[2mtrain.py[0m]8;;\[2m:[0m]8;id=830555;file:///Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py#138\[2m138[0m]8;;\
+Traceback (most recent call last):
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py", line 127, in _async_main
+    await trainer.run(lambda: shutdown_requested)
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/core/trainer.py", line 102, in run
+    await self.data_manager.load_datasets()
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py", line 158, in load_datasets
+    self._train_dataset = self._process_raw_to_dataset(raw_train_data, "train")
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/dataset_manager.py", line 195, in _process_raw_to_dataset
+    return Dataset.from_list(normalized_records)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/arrow_dataset.py", line 986, in from_list
+    return cls.from_dict(mapping, features, info, split)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/arrow_dataset.py", line 940, in from_dict
+    pa_table = InMemoryTable.from_pydict(mapping=mapping)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/table.py", line 758, in from_pydict
+    return cls(pa.Table.from_pydict(*args, **kwargs))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "pyarrow/table.pxi", line 1813, in pyarrow.lib._Tabular.from_pydict
+  File "pyarrow/table.pxi", line 5347, in pyarrow.lib._from_pydict
+  File "pyarrow/array.pxi", line 373, in pyarrow.lib.asarray
+  File "pyarrow/array.pxi", line 247, in pyarrow.lib.array
+  File "pyarrow/array.pxi", line 112, in pyarrow.lib._handle_arrow_array_protocol
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/arrow_writer.py", line 243, in __arrow_array__
+    out = pa.array(cast_to_python_objects(data, only_1d_for_numpy=True))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "pyarrow/array.pxi", line 343, in pyarrow.lib.array
+  File "pyarrow/array.pxi", line 42, in pyarrow.lib._sequence_to_array
+  File "pyarrow/error.pxi", line 154, in pyarrow.lib.pyarrow_internal_check_status
+  File "pyarrow/error.pxi", line 91, in pyarrow.lib.check_status
+pyarrow.lib.ArrowInvalid: cannot mix list and non-list, non-null values
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py", line 136, in _async_main
+    sys.exit(1)
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/wandb/sdk/lib/exit_hooks.py", line 36, in exit
+    self._orig_exit(orig_code)  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+SystemExit: 1
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/mlx-train", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py", line 148, in main
+    asyncio.run(_async_main())
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py", line 141, in _async_main
+    _emit_plots_from_csv(metrics_logger.file_path, config.trainer.output_dir, config)
+TypeError: _emit_plots_from_csv() takes 2 positional arguments but 3 were given
+[31m╭─[0m[31m──────────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m───────────────────────────────[0m[31m─╮[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m: [31m│[0m
+[31m│[0m 127 in _async_main                                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m124 [0m[2m│   │   [0m[94mraise[0m [96mValueError[0m([33mf[0m[33m"[0m[33mUnknown algorithm: [0m[33m{[0mconfig.trainer.algorithm[33m}[0m[33m"[0m)                 [31m│[0m
+[31m│[0m   [2m125 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m126 [0m[2m│   [0m[94mtry[0m:                                                                                   [31m│[0m
+[31m│[0m [31m❱ [0m127 [2m│   │   [0m[94mawait[0m trainer.run([94mlambda[0m: shutdown_requested)                                      [31m│[0m
+[31m│[0m   [2m128 [0m[2m│   │   [0mlogger.info([33m"[0m[33m[bold green]Training completed successfully![/bold green][0m[33m"[0m)           [31m│[0m
+[31m│[0m   [2m129 [0m[2m│   [0m[94mexcept[0m CustomBaseException [94mas[0m e:                                                       [31m│[0m
+[31m│[0m   [2m130 [0m[2m│   │   [0mlogger.critical([33mf[0m[33m"[0m[33mA predictable error halted training: [0m[33m{[0me[33m}[0m[33m"[0m, exc_info=[94mTrue[0m)        [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/core/[0m[1mtrainer.py[0m:1 [31m│[0m
+[31m│[0m 02 in run                                                                                        [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 99 [0m[2m│   │   │   [0m[96mself[0m.data_manager.set_tokenizer([96mself[0m.tokenizer)                                [31m│[0m
+[31m│[0m   [2m100 [0m[2m│   │   │   [0m[96mself[0m.data_manager.set_system_prompt([96mself[0m.config.system_prompt)                 [31m│[0m
+[31m│[0m   [2m101 [0m[2m│   │   [0m                                                                                   [31m│[0m
+[31m│[0m [31m❱ [0m102 [2m│   │   [0m[1;4;94mawait[0m[1;4m [0m[1;4;96mself[0m[1;4m.data_manager.load_datasets()[0m                                            [31m│[0m
+[31m│[0m   [2m103 [0m[2m│   │   [0mtrain_data_iterator = [96miter[0m([96mself[0m.data_manager.get_dataloader([33m"[0m[33mtrain[0m[33m"[0m, [96mself[0m.config   [31m│[0m
+[31m│[0m   [2m104 [0m[2m│   │   [0m                                                                                   [31m│[0m
+[31m│[0m   [2m105 [0m[2m│   │   [0m[94mwith[0m trange([96mself[0m.global_step, [96mself[0m.config.trainer.num_training_steps, initial=[96mse[0m   [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/[0m[1mdataset_mana[0m [31m│[0m
+[31m│[0m [1mger.py[0m:158 in load_datasets                                                                      [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m155 [0m[2m│   │   │   [0m[94melse[0m []                                                                        [31m│[0m
+[31m│[0m   [2m156 [0m[2m│   │   [0m)                                                                                  [31m│[0m
+[31m│[0m   [2m157 [0m[2m│   │   [0m                                                                                   [31m│[0m
+[31m│[0m [31m❱ [0m158 [2m│   │   [0m[96mself[0m._train_dataset = [1;4;96mself[0m[1;4m._process_raw_to_dataset(raw_train_data, [0m[1;4;33m"[0m[1;4;33mtrain[0m[1;4;33m"[0m[1;4m)[0m        [31m│[0m
+[31m│[0m   [2m159 [0m[2m│   │   [0m[96mself[0m._val_dataset = (                                                              [31m│[0m
+[31m│[0m   [2m160 [0m[2m│   │   │   [0m[96mself[0m._process_raw_to_dataset(raw_val_data, [33m"[0m[33mval[0m[33m"[0m) [94mif[0m raw_val_data [94melse[0m [94mNone[0m    [31m│[0m
+[31m│[0m   [2m161 [0m[2m│   │   [0m)                                                                                  [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/data/[0m[1mdataset_mana[0m [31m│[0m
+[31m│[0m [1mger.py[0m:195 in _process_raw_to_dataset                                                            [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m192 [0m[2m│   │   [0m[94mif[0m [95mnot[0m normalized_records:                                                         [31m│[0m
+[31m│[0m   [2m193 [0m[2m│   │   │   [0mlogger.warning([33mf[0m[33m"[0m[33mNo valid records found for [0m[33m{[0msplit_name[33m}[0m[33m.[0m[33m"[0m)                    [31m│[0m
+[31m│[0m   [2m194 [0m[2m│   │   │   [0m[94mreturn[0m Dataset.from_list([])                                                   [31m│[0m
+[31m│[0m [31m❱ [0m195 [2m│   │   [0m[94mreturn[0m [1;4mDataset.from_list(normalized_records)[0m                                       [31m│[0m
+[31m│[0m   [2m196 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m197 [0m[2m│   [0m[94mdef[0m[90m [0m[92mget_dataloader[0m([96mself[0m, split: [96mstr[0m, batch_size: [96mint[0m) -> Iterator[Dict[[96mstr[0m, Any]]:     [31m│[0m
+[31m│[0m   [2m198 [0m[2m│   │   [0mdataset = [96mself[0m._train_dataset [94mif[0m split == [33m"[0m[33mtrain[0m[33m"[0m [94melse[0m [96mself[0m._val_dataset           [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1marrow_data[0m [31m│[0m
+[31m│[0m [1mset.py[0m:986 in from_list                                                                          [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 983 [0m[2;33m│   │   [0m[33m"""[0m                                                                               [31m│[0m
+[31m│[0m   [2m 984 [0m[2m│   │   [0m[2m# for simplicity and consistency wrt OptimizedTypedSequence we do not use InMemo[0m  [31m│[0m
+[31m│[0m   [2m 985 [0m[2m│   │   [0mmapping = {k: [r.get(k) [94mfor[0m r [95min[0m mapping] [94mfor[0m k [95min[0m mapping[[94m0[0m]} [94mif[0m mapping [94melse[0m {  [31m│[0m
+[31m│[0m [31m❱ [0m 986 [2m│   │   [0m[94mreturn[0m [1;4;96mcls[0m[1;4m.from_dict(mapping, features, info, split)[0m                              [31m│[0m
+[31m│[0m   [2m 987 [0m[2m│   [0m                                                                                      [31m│[0m
+[31m│[0m   [2m 988 [0m[2m│   [0m[1;95m@staticmethod[0m                                                                         [31m│[0m
+[31m│[0m   [2m 989 [0m[2m│   [0m[94mdef[0m[90m [0m[92mfrom_csv[0m(                                                                         [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1marrow_data[0m [31m│[0m
+[31m│[0m [1mset.py[0m:940 in from_dict                                                                          [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 937 [0m[2m│   │   │   │   [0m)                                                                         [31m│[0m
+[31m│[0m   [2m 938 [0m[2m│   │   │   [0marrow_typed_mapping[col] = data                                               [31m│[0m
+[31m│[0m   [2m 939 [0m[2m│   │   [0mmapping = arrow_typed_mapping                                                     [31m│[0m
+[31m│[0m [31m❱ [0m 940 [2m│   │   [0mpa_table = [1;4mInMemoryTable.from_pydict(mapping=mapping)[0m                             [31m│[0m
+[31m│[0m   [2m 941 [0m[2m│   │   [0m[94mif[0m info [95mis[0m [94mNone[0m:                                                                  [31m│[0m
+[31m│[0m   [2m 942 [0m[2m│   │   │   [0minfo = DatasetInfo()                                                          [31m│[0m
+[31m│[0m   [2m 943 [0m[2m│   │   [0minfo.features = features                                                          [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1mtable.py[0m:7 [31m│[0m
+[31m│[0m 58 in from_pydict                                                                                [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 755 [0m[2;33m│   │   [0m[33mReturns:[0m                                                                          [31m│[0m
+[31m│[0m   [2m 756 [0m[2;33m│   │   │   [0m[33m`datasets.table.Table`[0m                                                        [31m│[0m
+[31m│[0m   [2m 757 [0m[2;33m│   │   [0m[33m"""[0m                                                                               [31m│[0m
+[31m│[0m [31m❱ [0m 758 [2m│   │   [0m[94mreturn[0m [96mcls[0m([1;4mpa.Table.from_pydict(*args, **kwargs)[0m)                                 [31m│[0m
+[31m│[0m   [2m 759 [0m[2m│   [0m                                                                                      [31m│[0m
+[31m│[0m   [2m 760 [0m[2m│   [0m[1;95m@classmethod[0m                                                                          [31m│[0m
+[31m│[0m   [2m 761 [0m[2m│   [0m[94mdef[0m[90m [0m[92mfrom_pylist[0m([96mcls[0m, mapping, *args, **kwargs):                                       [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib._Tabular.from_pydict:1813                                                         [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib._from_pydict:5347                                                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib.asarray:373                                                                       [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib.array:247                                                                         [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib._handle_arrow_array_protocol:112                                                  [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/datasets/[0m[1marrow_writ[0m [31m│[0m
+[31m│[0m [1mer.py[0m:243 in __arrow_array__                                                                     [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m240 [0m[2m│   │   │   │   [0mout = list_of_np_array_to_pyarrow_listarray(data)                          [31m│[0m
+[31m│[0m   [2m241 [0m[2m│   │   │   [0m[94melse[0m:                                                                          [31m│[0m
+[31m│[0m   [2m242 [0m[2m│   │   │   │   [0mtrying_cast_to_python_objects = [94mTrue[0m                                       [31m│[0m
+[31m│[0m [31m❱ [0m243 [2m│   │   │   │   [0mout = pa.array(cast_to_python_objects(data, only_1d_for_numpy=[94mTrue[0m))       [31m│[0m
+[31m│[0m   [2m244 [0m[2m│   │   │   [0m[2m# use smaller integer precisions if possible[0m                                   [31m│[0m
+[31m│[0m   [2m245 [0m[2m│   │   │   [0m[94mif[0m [96mself[0m.trying_int_optimization:                                               [31m│[0m
+[31m│[0m   [2m246 [0m[2m│   │   │   │   [0m[94mif[0m pa.types.is_int64(out.type):                                            [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib.array:343                                                                         [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib._sequence_to_array:42                                                             [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib.pyarrow_internal_check_status:154                                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m in pyarrow.lib.check_status:91                                                                   [31m│[0m
+[31m╰──────────────────────────────────────────────────────────────────────────────────────────────────╯[0m
+[1;91mArrowInvalid: [0mcannot mix list and non-list, non-null values
+
+[3mDuring handling of the above exception, another exception occurred:[0m
+
+[31m╭─[0m[31m──────────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m───────────────────────────────[0m[31m─╮[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m: [31m│[0m
+[31m│[0m 136 in _async_main                                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m133 [0m[2m│   [0m[94mexcept[0m [96mException[0m [94mas[0m e:                                                                 [31m│[0m
+[31m│[0m   [2m134 [0m[2m│   │   [0mlogger.critical([33mf[0m[33m"[0m[33mAn unexpected error occurred during training: [0m[33m{[0me[33m}[0m[33m"[0m, exc_info=[94mT[0m   [31m│[0m
+[31m│[0m   [2m135 [0m[2m│   │   [0m[94mif[0m trainer [95mand[0m trainer.global_step > [94m0[0m: trainer.save_final_checkpoint(reason=[33m"[0m[33mun[0m   [31m│[0m
+[31m│[0m [31m❱ [0m136 [2m│   │   [0msys.exit([94m1[0m)                                                                        [31m│[0m
+[31m│[0m   [2m137 [0m[2m│   [0m[94mfinally[0m:                                                                               [31m│[0m
+[31m│[0m   [2m138 [0m[2m│   │   [0mlogger.info([33m"[0m[33mApplication shutdown sequence initiated.[0m[33m"[0m)                            [31m│[0m
+[31m│[0m   [2m139 [0m[2m│   │   [0m[94mif[0m metrics_logger:                                                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/site-packages/wandb/sdk/lib/[0m[1mexit_[0m [31m│[0m
+[31m│[0m [1mhooks.py[0m:36 in exit                                                                              [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m33 [0m[2m│   │   [0mcode = code [94mif[0m code [95mis[0m [95mnot[0m [94mNone[0m [94melse[0m [94m0[0m                                              [31m│[0m
+[31m│[0m   [2m34 [0m[2m│   │   [0mcode = code [94mif[0m [96misinstance[0m(code, [96mint[0m) [94melse[0m [94m1[0m                                         [31m│[0m
+[31m│[0m   [2m35 [0m[2m│   │   [0m[96mself[0m.exit_code = code                                                               [31m│[0m
+[31m│[0m [31m❱ [0m36 [2m│   │   [0m[1;4;96mself[0m[1;4m._orig_exit(orig_code)[0m  [2m# type: ignore[0m                                          [31m│[0m
+[31m│[0m   [2m37 [0m[2m│   [0m                                                                                        [31m│[0m
+[31m│[0m   [2m38 [0m[2m│   [0m[94mdef[0m[90m [0m[92mwas_ctrl_c[0m([96mself[0m) -> [96mbool[0m:                                                           [31m│[0m
+[31m│[0m   [2m39 [0m[2m│   │   [0m[94mreturn[0m [96misinstance[0m([96mself[0m.exception, [96mKeyboardInterrupt[0m)                                [31m│[0m
+[31m╰──────────────────────────────────────────────────────────────────────────────────────────────────╯[0m
+[1;91mSystemExit: [0m[1;36m1[0m
+
+[3mDuring handling of the above exception, another exception occurred:[0m
+
+[31m╭─[0m[31m──────────────────────────────[0m[31m [0m[1;31mTraceback [0m[1;2;31m(most recent call last)[0m[31m [0m[31m───────────────────────────────[0m[31m─╮[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/bin/[0m[1mmlx-train[0m:7 in <module>                      [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m4 [0m[94mif[0m [91m__name__[0m == [33m'[0m[33m__main__[0m[33m'[0m:                                                                   [31m│[0m
+[31m│[0m   [2m5 [0m[2m│   [0m[94mif[0m sys.argv[[94m0[0m].endswith([33m'[0m[33m.exe[0m[33m'[0m):                                                         [31m│[0m
+[31m│[0m   [2m6 [0m[2m│   │   [0msys.argv[[94m0[0m] = sys.argv[[94m0[0m][:-[94m4[0m]                                                       [31m│[0m
+[31m│[0m [31m❱ [0m7 [2m│   [0msys.exit([1;4mmain()[0m)                                                                         [31m│[0m
+[31m│[0m   [2m8 [0m                                                                                             [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m: [31m│[0m
+[31m│[0m 148 in main                                                                                      [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m145 [0m[94mdef[0m[90m [0m[92mmain[0m():                                                                                [31m│[0m
+[31m│[0m   [2m146 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m147 [0m[2m│   [0mrprint([33mf[0m[33m"[0m[33mMLX using device: [bold cyan][0m[33m{[0mmx.default_device()[33m}[0m[33m[/bold cyan][0m[33m"[0m)              [31m│[0m
+[31m│[0m [31m❱ [0m148 [2m│   [0m[1;4masyncio.run(_async_main())[0m                                                             [31m│[0m
+[31m│[0m   [2m149 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m150 [0m[94mif[0m [91m__name__[0m == [33m"[0m[33m__main__[0m[33m"[0m:                                                                 [31m│[0m
+[31m│[0m   [2m151 [0m[2m│   [0mmain()                                                                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/[0m[1mrunners.py[0m:190 in run     [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m187 [0m[2m│   │   │   [0m[33m"[0m[33masyncio.run() cannot be called from a running event loop[0m[33m"[0m)                    [31m│[0m
+[31m│[0m   [2m188 [0m[2m│   [0m                                                                                       [31m│[0m
+[31m│[0m   [2m189 [0m[2m│   [0m[94mwith[0m Runner(debug=debug) [94mas[0m runner:                                                    [31m│[0m
+[31m│[0m [31m❱ [0m190 [2m│   │   [0m[94mreturn[0m [1;4mrunner.run(main)[0m                                                            [31m│[0m
+[31m│[0m   [2m191 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m192 [0m                                                                                           [31m│[0m
+[31m│[0m   [2m193 [0m[94mdef[0m[90m [0m[92m_cancel_all_tasks[0m(loop):                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/[0m[1mrunners.py[0m:118 in run     [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m115 [0m[2m│   │   [0m                                                                                   [31m│[0m
+[31m│[0m   [2m116 [0m[2m│   │   [0m[96mself[0m._interrupt_count = [94m0[0m                                                          [31m│[0m
+[31m│[0m   [2m117 [0m[2m│   │   [0m[94mtry[0m:                                                                               [31m│[0m
+[31m│[0m [31m❱ [0m118 [2m│   │   │   [0m[94mreturn[0m [96mself[0m._loop.run_until_complete(task)                                     [31m│[0m
+[31m│[0m   [2m119 [0m[2m│   │   [0m[94mexcept[0m exceptions.CancelledError:                                                  [31m│[0m
+[31m│[0m   [2m120 [0m[2m│   │   │   [0m[94mif[0m [96mself[0m._interrupt_count > [94m0[0m:                                                  [31m│[0m
+[31m│[0m   [2m121 [0m[2m│   │   │   │   [0muncancel = [96mgetattr[0m(task, [33m"[0m[33muncancel[0m[33m"[0m, [94mNone[0m)                                 [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/opt/homebrew/Caskroom/miniforge/base/envs/p311/lib/python3.11/asyncio/[0m[1mbase_events.py[0m:654 in     [31m│[0m
+[31m│[0m run_until_complete                                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m 651 [0m[2m│   │   [0m[94mif[0m [95mnot[0m future.done():                                                             [31m│[0m
+[31m│[0m   [2m 652 [0m[2m│   │   │   [0m[94mraise[0m [96mRuntimeError[0m([33m'[0m[33mEvent loop stopped before Future completed.[0m[33m'[0m)             [31m│[0m
+[31m│[0m   [2m 653 [0m[2m│   │   [0m                                                                                  [31m│[0m
+[31m│[0m [31m❱ [0m 654 [2m│   │   [0m[94mreturn[0m [1;4mfuture.result()[0m                                                            [31m│[0m
+[31m│[0m   [2m 655 [0m[2m│   [0m                                                                                      [31m│[0m
+[31m│[0m   [2m 656 [0m[2m│   [0m[94mdef[0m[90m [0m[92mstop[0m([96mself[0m):                                                                       [31m│[0m
+[31m│[0m   [2m 657 [0m[2;90m│   │   [0m[33m"""Stop running the event loop.[0m                                                   [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m [2m/Users/adeelahmad/work/themlx/mlx_rl_trainer/mlx_rl_trainer/src/mlx_rl_trainer/scripts/[0m[1mtrain.py[0m: [31m│[0m
+[31m│[0m 141 in _async_main                                                                               [31m│[0m
+[31m│[0m                                                                                                  [31m│[0m
+[31m│[0m   [2m138 [0m[2m│   │   [0mlogger.info([33m"[0m[33mApplication shutdown sequence initiated.[0m[33m"[0m)                            [31m│[0m
+[31m│[0m   [2m139 [0m[2m│   │   [0m[94mif[0m metrics_logger:                                                                 [31m│[0m
+[31m│[0m   [2m140 [0m[2m│   │   │   [0mmetrics_logger.close()                                                         [31m│[0m
+[31m│[0m [31m❱ [0m141 [2m│   │   │   [0m[1;4m_emit_plots_from_csv(metrics_logger.file_path, config.trainer.output_dir, co[0m   [31m│[0m
+[31m│[0m   [2m142 [0m[2m│   │   [0m[94mif[0m wandb_run: wandb_run.finish()                                                   [31m│[0m
+[31m│[0m   [2m143 [0m[2m│   │   [0mlogger.info([33m"[0m[33m[bold blue]All resources released. Shutdown complete.[/bold blue][0m[33m"[0m)   [31m│[0m
+[31m│[0m   [2m144 [0m                                                                                           [31m│[0m
+[31m╰──────────────────────────────────────────────────────────────────────────────────────────────────╯[0m
+[1;91mTypeError: [0m[1;35m_emit_plots_from_csv[0m[1m([0m[1m)[0m takes [1;36m2[0m positional arguments but [1;36m3[0m were given

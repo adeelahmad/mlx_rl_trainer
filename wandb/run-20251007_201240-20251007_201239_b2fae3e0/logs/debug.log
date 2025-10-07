@@ -19,3 +19,5 @@ config: {'trainer': {'algorithm': 'grpo', 'output_dir': 'outputs/code_gen_run_00
 2025-10-07 20:12:42,323 INFO    MainThread:29581 [wandb_run.py:_redirect():2411] Wrapping output streams.
 2025-10-07 20:12:42,323 INFO    MainThread:29581 [wandb_run.py:_redirect():2434] Redirects installed.
 2025-10-07 20:12:42,325 INFO    MainThread:29581 [wandb_init.py:init():1057] run started, returning control to user process
+2025-10-07 20:14:53,051 INFO    wandb-AsyncioManager-main:29581 [service_client.py:_forward_responses():84] Reached EOF.
+2025-10-07 20:14:53,051 INFO    wandb-AsyncioManager-main:29581 [mailbox.py:close():137] Closing mailbox, abandoning 1 handles.
