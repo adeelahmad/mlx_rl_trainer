@@ -1,13 +1,10 @@
 import logging
 import json
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 from datasets import Dataset
 import mlx.core as mx
 
-from mlx_lm.tokenizer_utils import TokenizerWrapper
-
-
-from mlx_rl_trainer.core.config import ExperimentConfig, GenerationConfig
+from mlx_rl_trainer.core.config import ExperimentConfig, DataConfig, GenerationConfig
 from mlx_rl_trainer.utils.text_utils import (
     _mcq_meta_from_sample,
     apply_chat_template_wrapper,
@@ -16,7 +13,6 @@ from mlx_rl_trainer.rewards.format.tag_structure import (
     extract_think_region,
     extract_answer_region,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +42,26 @@ def build_rollout_batch(
     tokenizer: TokenizerWrapper,
     dataset: Dataset,
     indices: List[int],
-    config: ExperimentConfig,  # Expects the full ExperimentConfig
+    config: Union[ExperimentConfig, DataConfig],  # Can receive either config type
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
     prompts_data: List[Dict[str, Any]] = []
     max_len_in_batch = 0
     pad_id = tokenizer.pad_token_id
 
-    # Access nested data config
-    data_config = config.data
+    # --- FIX START ---
+    # Check if we have the full ExperimentConfig or just the DataConfig part
+    if hasattr(config, 'data'):
+        # It's the full ExperimentConfig
+        data_config = config.data
+        system_prompt = config.system_prompt
+    else:
+        # It's just the DataConfig
+        data_config = config
+        # DataConfig doesn't have a system_prompt, so we use an empty string.
+        # This is fine because this path is usually taken by the dataloader,
+        # where the final system prompt isn't critical.
+        system_prompt = ""
+    # --- FIX END ---
 
     for i in indices:
         try:
@@ -68,13 +76,11 @@ def build_rollout_batch(
                 }
             )
 
-            # Use the system_prompt from the main config
             formatted_prompt = apply_chat_template_wrapper(
-                tokenizer, prompt_text, config.system_prompt
+                tokenizer, prompt_text, system_prompt
             )
             p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
-            # CORRECTED: Access max_prompt_len via config.data
             if len(p_tokens) > data_config.max_prompt_len:
                 p_tokens = p_tokens[-data_config.max_prompt_len :]
             if not p_tokens:
