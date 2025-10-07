@@ -541,21 +541,18 @@ def make_dynamic_tag_bias_processor(
 
         if eos_tok is not None:
             logits = logits.at[:, eos_tok].add(mx.where(ae_seen, B_EOS_ANS, 0.0))
-        # if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
-        #     # --- FIX START ---
-        #     # Do not use .tolist() for boolean indexing. Use the MLX tensor directly.
-        #     logits = logits.at[inside_think, encourage_ids].add(B_ENCOURAGE)
-        #     # --- FIX END ---
-        #
+
+        # --- FIX START ---
+        # The .at[mask, list] indexing is ambiguous and can cause backend errors.
+        # This new method is more robust: create a full bias matrix and apply it with a mask.
         if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
-            # Create a bias array for the encourage_ids columns
+            # Create a bias array of the same shape as logits, initially all zeros.
             encourage_bias = mx.zeros_like(logits)
-            # Set bias for encourage_ids columns across all rows
-            encourage_bias = encourage_bias.at[:, encourage_ids].set(B_ENCOURAGE)
-            # Apply only to rows where inside_think is True by broadcasting the mask
-            encourage_bias = encourage_bias * inside_think[:, None]
-            # Add the bias to logits
-            logits = logits + encourage_bias
+            # Set the bias value for the target token IDs (columns) across all rows.
+            encourage_bias = encourage_bias.at[:, encourage_ids].add(B_ENCOURAGE)
+            # Apply the bias only to the rows where `inside_think` is True by broadcasting the mask.
+            logits = logits + (encourage_bias * inside_think[:, None])
+        # --- FIX END ---
 
         mcq_first_token_mask = mx.logical_and(
             is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
@@ -563,7 +560,7 @@ def make_dynamic_tag_bias_processor(
         if mx.any(mcq_first_token_mask).item() and HARD_MASK:
             mcq_allowed_logits = mx.full((V,), neg_inf, dtype=logits.dtype)
             if mcq_letter_ids:
-                mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].set(LIFT_MCQ)
+                mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].add(LIFT_MCQ)
             if ban_ids:
                 mcq_allowed_logits = mcq_allowed_logits.at[ban_ids].add(BAN_MCQ)
             logits = mx.where(
@@ -573,8 +570,13 @@ def make_dynamic_tag_bias_processor(
         non_mcq_first_answer = mx.logical_and(
             mx.logical_not(is_mcq_mask), mx.logical_and(inside_answer, (k_answer == 0))
         )
-        if mx.any(non_mcq_first_answer).item() and ban_ids:
-            logits = logits.at[non_mcq_first_answer.tolist(), ban_ids].add(BAN_NONMCQ)
+        # --- FIX START ---
+        # Applying the same robust pattern here to avoid potential indexing errors.
+        if ban_ids and BAN_NONMCQ != 0 and mx.any(non_mcq_first_answer).item():
+            ban_bias = mx.zeros_like(logits)
+            ban_bias = ban_bias.at[:, ban_ids].add(BAN_NONMCQ)
+            logits = logits + (ban_bias * non_mcq_first_answer[:, None])
+        # --- FIX END ---
 
         if ae is not None:
             min_ans_len = mx.where(is_mcq_mask, MIN_ANS_MCQ, MIN_ANS)

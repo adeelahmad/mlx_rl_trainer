@@ -7,6 +7,9 @@ import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
 import numpy as np
 from tqdm import trange
 
+from mlx.utils import tree_flatten, tree_map, tree_unflatten
+
+
 from .config import ExperimentConfig
 from .model_manager import ModelManager
 from .dataset_manager import DatasetManager
@@ -226,7 +229,7 @@ class BaseTrainer(ABC):
 
                     if grads_mb:
                         accum_grads = (
-                            mx.utils.tree_map(mx.add, accum_grads, grads_mb)
+                            mlx.tree_map(mx.add, accum_grads, grads_mb)
                             if accum_grads
                             else grads_mb
                         )
@@ -237,7 +240,7 @@ class BaseTrainer(ABC):
                     grad_norm = np.linalg.norm(
                         [
                             np.linalg.norm(v.flatten())
-                            for v in mx.utils.tree_flatten(accum_grads)[1]
+                            for v in tree_flatten(accum_grads)[1]
                         ]
                     )
 
