@@ -135,6 +135,8 @@ def generate_rollouts_for_batch(
             prompt_text=prompts_data_replicated[i]["text"],
             reference_completion=prompts_data_replicated[i]["ref_answer_str"],
             metadata=prompts_data_replicated[i],
+            update_step=current_update,
+
         )
         for i in range(total_samples)
     ]
@@ -150,6 +152,8 @@ def generate_rollouts_for_batch(
     advantages = grpo_algo.compute_advantages(
         rewards_total, config.trainer.num_rollout_samples
     )
+
+
 
     full_seq = mx.concatenate([prompts_mx, responses_mx], axis=1)
     ref_logits = ref_model(full_seq.astype(mx.int64))[:, max_prompt_len - 1 : -1, :]

@@ -4,17 +4,17 @@
 trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_002"
-  num_training_steps: 10000
+  num_training_steps: 1000
   learning_rate: 2e-6 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
-  num_rollout_samples: 3
+  num_rollout_samples: 2
   grad_accum_steps: 1
   # CORRECTED: Increased beta to prevent model collapse.
-  grpo_beta: 0.1
+  grpo_beta: 0.02
   seed: 429
 
 model:
-  model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
+  model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
   ref_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   use_lora: false
   lora_rank: 16
@@ -22,19 +22,10 @@ model:
 data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
-  max_prompt_len: 512
-  max_gen_len: 246
+  max_prompt_len: 350
+  max_gen_len: 256
   loader_type: "jsonl"
   shuffle_data: true
-  system_prompt: |
-    You are ReasonableQwen3 . Always respond in this format:
-
-    <think>
-    [Your compressed reasoning - use abbreviated notation]
-    </think>
-    [Your final answer - clear and direct]
-
-    CRITICAL: You MUST include <think></think> tags, then provide answer directly after.
 
 # The system_prompt from your ExperimentConfig will be used automatically by the trainer.
 # You don't need to specify it here unless you want to override the default.

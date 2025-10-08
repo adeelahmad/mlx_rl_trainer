@@ -93,7 +93,7 @@ THINK_STYLE_PROMPT_LITERAL = """THINKING RULES - Use maximally compressed notati
 
     ═══ WHEN UNCERTAIN ═══ DO NOT guess or assume. Instead: ? = flag uncertainty w/ question mark ASK: "need clarification on X" or "X not specified - options: A/B/C?" CONSTRAINT: "cannot solve b/c: missing info Y" If problem unsolvable → state why concisely, don\'t elaborate Think like: debugger output, medical chart notes, trading floor shorthand, or military briefing. COMPRESS EVERYTHING. Every word must earn its place."""
 
-
+THINK_STYLE_PROMPT_LITERAL = ""
 class RewardConfig(BaseModel):
     name: str = Field(..., description="Registered name of the reward function.")
     weight: float = Field(
@@ -181,10 +181,10 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        25, description="Save a full checkpoint every N training updates."
+        20, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
-        3, description="Number of most recent checkpoints to retain."
+        2, description="Number of most recent checkpoints to retain."
     )
     save_optimizer_state: bool = Field(
         False, description="Whether to save the optimizer's state."
@@ -194,7 +194,7 @@ class CheckpointConfig(BaseModel):
 class MonitoringConfig(BaseModel):
     use_wandb: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
     wandb_project: Optional[str] = Field(
-        "mlx-grpo-qwen3-new", description="W&B project name."
+        "mlx-grpo-qwen3-v2", description="W&B project name."
     )
     wandb_entity: Optional[str] = Field(
         None, description="Your W&B entity (username or team name)."
@@ -316,7 +316,7 @@ class TrainerParams(BaseModel):
     invalid_sample_layers_set: Set[int] = Field(default_factory=set, exclude=True)
 
     # Evaluation Frequency
-    eval_every: PositiveInt = Field(10)
+    eval_every: PositiveInt = Field(10000000000)
     reward_smoothing_window: PositiveInt = Field(20)
 
     # Add the missing field

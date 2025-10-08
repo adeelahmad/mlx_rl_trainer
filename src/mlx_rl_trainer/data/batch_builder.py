@@ -4,7 +4,7 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 from datasets import Dataset
 import mlx.core as mx
 
-from mlx_LM.tokenizer_utils import TokenizerWrapper
+from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 
 from mlx_rl_trainer.core.config import ExperimentConfig, DataConfig, GenerationConfig
@@ -45,26 +45,22 @@ def build_rollout_batch(
     tokenizer: TokenizerWrapper,
     dataset: Dataset,
     indices: List[int],
-    config: Union[ExperimentConfig, DataConfig],  # Can receive either config type
+    config: Union[ExperimentConfig, DataConfig],
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
     prompts_data: List[Dict[str, Any]] = []
     max_len_in_batch = 0
     pad_id = tokenizer.pad_token_id
 
-    # --- FIX START ---
-    # Check if we have the full ExperimentConfig or just the DataConfig part
-    if hasattr(config, 'data'):
+    # Extract data_config and system_prompt based on config type
+    if isinstance(config, ExperimentConfig):
         # It's the full ExperimentConfig
         data_config = config.data
-        system_prompt = config.system_prompt
+        system_prompt = getattr(config, 'system_prompt', None) or ""
     else:
         # It's just the DataConfig
         data_config = config
-        # DataConfig doesn't have a system_prompt, so we use an empty string.
-        # This is fine because this path is usually taken by the dataloader,
-        # where the final system prompt isn't critical.
-        system_prompt = ""
-    # --- FIX END ---
+        # Use a default system prompt or empty string
+        system_prompt = getattr(config, 'system_prompt', None) or ""
 
     for i in indices:
         try:
@@ -79,13 +75,20 @@ def build_rollout_batch(
                 }
             )
 
+            # Apply chat template with system prompt
+            # The apply_chat_template_wrapper should format as:
+            # [system message][user message] ready for the model
             formatted_prompt = apply_chat_template_wrapper(
                 tokenizer, prompt_text, system_prompt
             )
+
+            # Encode without adding special tokens since they should be in the template
             p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
+            # Truncate if necessary (keeping the end, which is the actual prompt)
             if len(p_tokens) > data_config.max_prompt_len:
-                p_tokens = p_tokens[-data_config.max_prompt_len :]
+                p_tokens = p_tokens[-data_config.max_prompt_len:]
+
             if not p_tokens:
                 logger.warning(f"Skipping empty prompt (idx {i}).")
                 continue
@@ -108,10 +111,12 @@ def build_rollout_batch(
     if not prompts_data:
         return [], mx.array([], dtype=mx.int32), 0
 
+    # Pad all sequences to max_len_in_batch
     padded_tokens = []
     for p in prompts_data:
         tok = p["tokens"]
         pad_len = max_len_in_batch - len(tok)
+        # Left-pad with pad_id
         padded_tokens.append([pad_id] * pad_len + tok)
 
     return prompts_data, mx.array(padded_tokens, dtype=mx.int32), max_len_in_batch
