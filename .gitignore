@@ -29,7 +29,8 @@ MANIFEST
 #  but in case your project builds executable files from this directory
 *.manifest
 *.spec
-
+wandb
+wandb/**
 # Environments
 .env
 .venv
