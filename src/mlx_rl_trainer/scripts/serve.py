@@ -99,7 +99,7 @@ async def _perform_generation(request: GenerateRequest) -> Tuple[str, int, float
     formatted_prompt = apply_chat_template_wrapper(
         global_tokenizer, request.prompt, system_prompt_to_use
     )
-    encoded_prompt = global_tokenizer.encode(formatted_prompt, add_special_tokens=True)
+    encoded_prompt = global_tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
     prompt_mx = mx.array([encoded_prompt], dtype=mx.int32)
 

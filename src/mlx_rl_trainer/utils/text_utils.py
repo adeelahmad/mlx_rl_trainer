@@ -361,8 +361,8 @@ def apply_chat_template_wrapper(
     tokenizer: TokenizerWrapper, prompt: str, system_prompt: Optional[str]
 ) -> str:
     messages = []
-    # if system_prompt and system_prompt.strip():
-    #     messages.append({"role": "system", "content": system_prompt.strip()})
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(
@@ -378,8 +378,8 @@ def apply_chat_template_wrapper_newer(
     tokenizer: TokenizerWrapper, prompt: str, system_prompt: Optional[str]
 ) -> str:
     messages = []
-    # if system_prompt and system_prompt.strip():
-    #     messages.append({"role": "system", "content": system_prompt.strip()})
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(
@@ -465,7 +465,7 @@ def _resolve_tag_ids(tokenizer: TokenizerWrapper, gen_cfg: GenerationConfig) -> 
         if tag:
             try:
                 # Tokenize the tag and take the first ID
-                ids = tokenizer.tokenizer.encode(tag)
+                ids = tokenizer.encode(tok_str, add_special_tokens=False)
                 if ids:
                     resolved_ids[name] = ids[0]
             except Exception as e:
@@ -475,26 +475,30 @@ def _resolve_tag_ids(tokenizer: TokenizerWrapper, gen_cfg: GenerationConfig) -> 
     resolved_ids["eos"] = tokenizer.tokenizer.eos_token_id
     return resolved_ids
 
-def _letter_token_ids(tokenizer: TokenizerWrapper) -> Dict[str, List[int]]:
-    """Get token IDs for all uppercase letters 'A' through 'Z'."""
-    ids = {}
-    for letter in string.ascii_uppercase:
-        try:
-            # Tokenize the letter (with a space prefix if needed by the model)
-            # We assume the most common is a token representing ' A', ' B', etc.
-            # Using the raw tokenization of the single character.
-            token_ids = tokenizer.tokenizer.encode(letter)
-            ids[letter] = token_ids
-        except Exception:
-            ids[letter] = []
-    return ids
+
+def _letter_token_ids(tokenizer, letters=("A", "B", "C", "D")) -> Dict[str, List[int]]:
+    out = {}
+    for L in letters:
+        cand = []
+        ids = tokenizer.encode(L, add_special_tokens=False)
+        if len(ids) == 1:
+            cand.append(ids[0])
+        ids = tokenizer.encode(" " + L, add_special_tokens=False)
+        if len(ids) == 1 and ids[0] not in cand:
+            cand.append(ids[0])
+        for suf in [")", ".", " )", " ."]:
+            ids = tokenizer.encode(L + suf, add_special_tokens=False)
+            if len(ids) == 1 and ids[0] not in cand:
+                cand.append(ids[0])
+        out[L] = cand
+    return out
 
 def _first_token_ids_for_lexemes(tokenizer: TokenizerWrapper, lexemes: Sequence[str]) -> List[int]:
     """Get the first token ID for a list of lexemes."""
     ids = set()
     for lexeme in lexemes:
         try:
-            token_ids = tokenizer.tokenizer.encode(lexeme)
+            token_ids = tokenizer.tokenizer.encode(lexeme, add_special_tokens=False)
             if token_ids:
                 ids.add(token_ids[0])
         except Exception:

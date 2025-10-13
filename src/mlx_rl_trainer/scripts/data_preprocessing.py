@@ -78,7 +78,7 @@ async def _async_load_and_process_jsonl(
                         # Apply chat template and tokenize (for length checks, not actual token IDs for storage)
                         formatted_prompt = apply_chat_template_wrapper(tokenizer, p, s)
                         encoded_prompt_len = len(
-                            tokenizer.encode(formatted_prompt, add_special_tokens=True)
+                            tokenizer.encode(formatted_prompt, add_special_tokens=False)
                         )
 
                         processed_data.append(
@@ -149,7 +149,7 @@ async def _async_load_and_process_hf(
                 # Apply chat template and tokenize (for length checks)
                 formatted_prompt = apply_chat_template_wrapper(tokenizer, p, s)
                 encoded_prompt_len = len(
-                    tokenizer.encode(formatted_prompt, add_special_tokens=True)
+                    tokenizer.encode(formatted_prompt, add_special_tokens=False)
                 )
 
                 processed_data.append(
