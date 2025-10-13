@@ -196,7 +196,7 @@ async def _async_main():
         if metrics_logger:
             metrics_logger.close()
             _emit_plots_from_csv(
-                metrics_logger.file_path, config.trainer.output_dir, config
+                metrics_logger.file_path, config.trainer.output_dir, config, run_id
             )
         if wandb_run:
             wandb_run.finish()

@@ -5,7 +5,7 @@ trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_005"
   num_training_steps: 10000
-  learning_rate: 3e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
+  learning_rate: 1e-3 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
   grad_accum_steps: 1
@@ -23,8 +23,8 @@ model:
 data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/tr2.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
-  max_prompt_len: 350
-  max_gen_len: 128
+  max_prompt_len: 250
+  max_gen_len: 192
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -33,16 +33,20 @@ data:
 
 rewards:
   - name: "format_structure" # ADDED: A dedicated reward for getting the format right.
-    weight: 0.30
+    weight: 0.40
     config: {}
   - name: "code_execution"
     weight: 0.00 # ADJUSTED
     config:
       timeout: 3
   - name: "semantic_similarity"
-    weight: 0.70 # ADJUSTED
+    weight: 0.50 # ADJUSTED
     config:
       method: "jaccard"
+  - name: "steps_coverage"
+    weight: 0.10 # ADJUSTED
+    config:
+      required_steps: 2
 
 evaluation:
   - name: "human_eval"

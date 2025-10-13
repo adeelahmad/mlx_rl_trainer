@@ -181,7 +181,7 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        5, description="Save a full checkpoint every N training updates."
+        20, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         2, description="Number of most recent checkpoints to retain."
@@ -194,7 +194,7 @@ class CheckpointConfig(BaseModel):
 class MonitoringConfig(BaseModel):
     use_wandb: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
     wandb_project: Optional[str] = Field(
-        "mlx-grpo-qwen3-v2", description="W&B project name."
+        "mlx-grpo-qwen3-v3", description="W&B project name."
     )
     wandb_entity: Optional[str] = Field(
         None, description="Your W&B entity (username or team name)."
@@ -224,17 +224,17 @@ class GenerationConfig(BaseModel):
     answer_end_tag: str = Field("")
 
     # Sampling parameters
-    think_boost_tokens: int = Field(32)
-    think_temperature: NonNegativeFloat = Field(0.23)
-    answer_temperature: NonNegativeFloat = Field(0.15)
-    sampling_top_p: NonNegativeFloat = Field(0.7)
-    sampling_min_p: NonNegativeFloat = Field(0.02)
+    think_boost_tokens: int = Field(1)
+    think_temperature: NonNegativeFloat = Field(0.35)
+    answer_temperature: NonNegativeFloat = Field(0.2)
+    sampling_top_p: NonNegativeFloat = Field(0.6)
+    sampling_min_p: NonNegativeFloat = Field(0.00)
     sampling_top_k: int = Field(60)
-    repetition_penalty: Optional[float] = Field(1.6)
-    repetition_context_size: Optional[int] = Field(40)
+    repetition_penalty: Optional[float] = Field(1.4)
+    repetition_context_size: Optional[int] = Field(20)
 
     # Dynamic Bias Controls (from BEFORE_STATE)
-    min_think_tokens: int = Field(32)
+    min_think_tokens: int = Field(16)
     think_end_early_bias: float = Field(-12.0)
     bias_answer_start_after_min_think: bool = Field(True)
     bias_close_think: float = Field(9.0)
@@ -257,22 +257,23 @@ class GenerationConfig(BaseModel):
 
     ban_phrases_for_bias: List[str] = Field(
         default_factory=lambda: [
+            "<think>\\n<|im_start|>",
             "Confused",
             "stuck",
             "frustrated",
             "<|im_start|>",
             "<think>\n<|im_start|><think>\n<|im_start|><think>\n<think>",
-            "<think>\n<think>",
+            # "<think>\n<think>",
             "I think the answer",
             "I believe that",
             "In my view",
             "From what I can tell",
             "It seems to me",
             "It appears that",
-            "My understanding is",
+            # "My understanding is",
             "As far as I know",
-            "Let me start by",
-            "Let me first",
+            # "Let me start by",
+            # "Let me first",
             "I should probably",
             "I need to figure out",
             "I'm trying to",
@@ -306,6 +307,10 @@ class GenerationConfig(BaseModel):
             "False assumption",
             "Insufficient information to",
             "Wait, what if",
+            "Wait, "
+            "Wait, another idea:",
+            "Wait, unless...",
+            "Wait, perhaps","Wait, let's see","Wait, here's","Wait, no. Wait,","Wait, wait! Wait,",
             "Wait, actually no",
             "Wait, on second thought",
             "Hold on, maybe",
@@ -3146,6 +3151,9 @@ class GenerationConfig(BaseModel):
             "ranking",
             "filtering",
             "retrieval",
+            "The answer is undeterminable",
+            "The problem does not have any answer given the contradictions and mathematical proof above.",
+            "Hence, There is no solution as we proved it mathematically."
         ]
     )
 
@@ -3158,9 +3166,9 @@ class GenerationConfig(BaseModel):
     tool_call_penalty: NonNegativeFloat = Field(0.0)
 
     # Think Length Penalty Config (used by Reward logic)
-    think_length_target_min: PositiveInt = Field(32)
-    think_length_target_max: PositiveInt = Field(128)
-    think_length_penalty_strength: NonNegativeFloat = Field(0.15)
+    think_length_target_min: PositiveInt = Field(8)
+    think_length_target_max: PositiveInt = Field(64)
+    think_length_penalty_strength: NonNegativeFloat = Field(0.8)
 
 
 class TrainerParams(BaseModel):
@@ -3191,7 +3199,7 @@ class TrainerParams(BaseModel):
     mid_mul: NonNegativeFloat = Field(1.3)
     top_mul: NonNegativeFloat = Field(1.5)
     head_mul: NonNegativeFloat = Field(1.2)
-    train_layer_start: Optional[int] = Field(26)
+    train_layer_start: Optional[int] = Field(22)
     train_layer_end: Optional[int] = Field(35)
 
     # Custom Invalid Sample Handling
@@ -3252,7 +3260,70 @@ class ExperimentConfig(BaseModel):
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
 
     max_kv_size: PositiveInt = Field(1536)
-    system_prompt: str = Field("")
+
+    _THINK_STYLE_PROMPT = """You are an AI that efficiently think before the final answer.\nTHINKING RULES - Use maximally compressed notation:
+\n═══ SYMBOLS & NOTATION ═══
+Math: ∴(therefore) ∵(because) ⇒(implies) ≈(approx) ∈(in) ∀(forall) ∃(exists) ≠ ≤ ≥
+Logic: ✓(yes) ✗(no) ?(unknown) !(important) ⚠(warning) ∧(and) ∨(or) ¬(not) ⊕(xor)
+Flow: →(then) ←(from) ↔(bidirect) ⇄(exchange) ▸(next) ◂(prev) ⊃(implies) ⊂(subset)
+Status: ✓(done) ○(pending) ●(active) ◐(partial) ⊗(blocked) ⊘(invalid)
+\n═══ UNIVERSAL ABBREVIATIONS ═══
+w/(with) w/o(without) b/c(because) re:(regarding) vs(versus) via per thru
+@(at/location) #(number) &(and) +(plus/also) -(minus/without) /(per/or) |(or/pipe)
+i.e.(that is) e.g.(example) etc.(and so on) cf.(compare) viz.(namely) NB(note well)
+\n═══ ACTION SHORTHAND ═══
+chk(check) calc(calculate) eval(evaluate) cmp(compare) est(estimate) approx(approximate)
+find get set test run init proc(process) upd(update) del(delete) add sub mul div
+verify confirm validate analyze extract parse transform merge split filter sort
+\n═══ DOMAIN-SPECIFIC SHORTHAND ═══
+- CODE/TECH: func var obj arr str int bool dict list async await req res API DB
+impl(implement) refactor debug deploy config exec cmd arg param ret val idx len
+- BUSINESS: rev(revenue) exp(expense) proj(projection) KPI ROI Q1/Q2/Q3/Q4 YoY MoM
+stakeholder cust(customer) mkt(market) comp(competitor) strat(strategy) ops(operations)
+- SCIENCE: exp(experiment) obs(observation) hyp(hypothesis) ctrl(control) var(variable)
+sig(significant) corr(correlation) data pt(point) meas(measure) temp pres vol mass
+- LOGIC/REASONING: IF/THEN/ELSE WHEN/WHILE FOR/EACH CASE/SWITCH TRY/CATCH
+premise→conclusion assumption→inference cause→effect condition→result
+\n═══ TIME & QUANTITY ═══
+mins hrs days wks mos yrs NOW ASAP prev next cur(current) hist(historical)
+approx ~100 <10 >50 ≤5 ≥20 between±5 range[1-10] max min avg sum total count
+\n═══ COMPARISON & RELATIONSHIPS ═══
+better/worse higher/lower more/less same≠diff equal>unequal similar≈different
+vs opt1/opt2/opt3 pros/cons trade-off cost/benefit risk/reward
+\n═══ STRICTLY FORBIDDEN PHRASES ═══
+✗ "I think" "I believe" "I feel" "In my opinion" "It seems" "It appears"
+✗ "Let me" "I should" "I need to" "I want to" "I'm going to"
+✗ "This is interesting" "Looking at" "Considering" "Taking into account"
+✗ "First of all" "On the other hand" "In this case" "As we can see"
+✗ "It's worth noting" "It's important to" "We should consider"
+✗ "Taking into account" "With that in mind"
+✗ Any emoji unless user explicitly requests them
+✗ Flowery language, hedging, or conversational filler
+\n═══ REQUIRED FORMAT ═══
+- Write as compact telegraphic notes, NOT full sentences
+- Use vertical lists w/ bullets or dashes for multi-items
+- Group related info with indentation or symbols
+- One idea per line when possible
+- Omit articles (a/an/the), auxiliary verbs (is/are/was), obvious subjects
+\nEXAMPLES:
+❌ BAD: "I think we should first check if the value is greater than 10, and if it is, then we need to calculate..."
+✓ GOOD: "chk val>10 → calc x²+3 → ∴ result≈42"
+❌ BAD: "Looking at the data, it seems that the customer retention rate is lower than expected"
+✓ GOOD: "data: cust retention<expected (est 65% vs target 80%) → need improve"
+❌ BAD: "Let me break this down. We have three options here. Option A would cost more but..."
+✓ GOOD: "3 opts: A(↑cost ✓quality) B(balanced) C(↓cost ✗quality) → rec: B"
+❌ BAD: "First, I need to understand the problem. The user is asking about performance issues..."
+✓ GOOD: "problem: perf issues → causes: DB query O(n²), mem leak @ loop → fix: index+cache"
+\n═══ WHEN UNCERTAIN ═══
+DO NOT guess or assume. Instead:
+? = flag uncertainty w/ question mark
+ASK: "need clarification on X" or "X not specified - options: A/B/C?"
+CONSTRAINT: "cannot solve b/c: missing info Y"
+If problem unsolvable → state why concisely, don't elaborate or overthink
+\nThink like: debugger output, medical chart notes, trading floor shorthand, or military briefing.
+COMPRESS EVERYTHING. Every word must earn its place."""
+
+    system_prompt: str = Field(_THINK_STYLE_PROMPT)
 
     use_paged_kv_cache: bool = Field(True)
     kv_cache_block_size: PositiveInt = Field(16)

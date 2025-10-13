@@ -95,7 +95,7 @@ class MetricsLogger:
 
 
 def _emit_plots_from_csv(
-    csv_path: Path, out_dir: Path, config: ExperimentConfig = None
+    csv_path: Path, out_dir: Path, config: ExperimentConfig = None, run_id = None
 ):
     if (
         not (PANDAS_AVAILABLE and MPL_AVAILABLE)
@@ -104,47 +104,71 @@ def _emit_plots_from_csv(
     ):
         return
     try:
-        df = pd.read_csv(csv_path)
+        # FIX 1: Added on_bad_lines='skip' to prevent ParserError (saw in logs)
+        # when corrupted lines (with too many fields) are encountered.
+        df = pd.read_csv(csv_path, on_bad_lines='skip')
         if df.empty:
             return
 
-        # --- FIX: Ensure only the latest metric value per update_step is used for plotting ---
-        # The inner plot function defaults to x_col="update_step".
+        # Define all meaningful plot columns (Y-axes)
+        plot_metrics = {
+            "train/loss": "loss",
+            "train/reward_mean": "reward_mean",
+            "train/rewards/raw_total": "reward_total",
+            "train/learning_rate": "lr",
+            "train/grad_norm": "grad_norm",
+            "train/kl_divergence": "kl_divergence",
+            "train/rewards/raw_TagStructureReward": "reward_TagStructure",
+            "train/rewards/raw_SemanticSimilarityReward": "reward_SemanticSimilarity",
+            "train/rewards/raw_CodeExecutionReward": "reward_CodeExecution",
+        }
+
+        # --- FIX 2: Ensure only the latest metric value per update_step is used for plotting ---
         x_col = "update_step"
         if x_col in df.columns:
             # Keep the last entry (most recent log) for each unique 'update_step' value.
             df = df.drop_duplicates(subset=[x_col], keep='last')
         # -----------------------------------------------------------------------------------
 
-        plots_dir = out_dir / "plots" / config.run_id
-        plots_dir.mkdir(exist_ok=True)
+        # Use run_id if available, otherwise use a generic 'plots' directory structure
+        plots_dir = out_dir / "plots"
+        if run_id:
+             plots_dir = plots_dir / run_id
+
+        plots_dir.mkdir(exist_ok=True, parents=True)
 
         def _plot(y_col: str, fname_suffix: str, x_col: str = "update_step"):
             if y_col in df.columns:
                 plt.figure(figsize=(10, 6))
+
+                # Use raw NumPy arrays from the filtered DataFrame for plotting
                 plt.plot(df[x_col].values, df[y_col].values)
-                plt.xlabel(x_col.replace("_", " ").title())
-                plt.ylabel(y_col.replace("_", " ").title())
+
+                # Formatting
+                x_label = x_col.replace("_", " ").title()
+                y_label = y_col.replace("_", " ").title()
+
+                plt.xlabel(x_label)
+                plt.ylabel(y_label)
                 plt.title(
-                    f"{y_col.replace('_', ' ').title()} vs {x_col.replace('_', ' ').title()}"
+                    f"{y_label} vs {x_label}"
                 )
                 plt.grid(True, alpha=0.5)
                 plt.tight_layout()
-                plt.savefig(plots_dir / f"{y_col.replace('/', '_')}_{fname_suffix}.png")
+
+                # Use the safer suffix for the filename
+                safe_y_col = y_col.replace('/', '_').replace('.', '_')
+                plt.savefig(plots_dir / f"{safe_y_col}_{fname_suffix}.png")
                 plt.close()
 
-        plot_map = {
-            "train/loss": "loss",
-            "train/reward_raw_mean": "reward",
-            "train/learning_rate": "lr",
-            "train/grad_norm": "grad_norm",
-        }
-        for col, name in plot_map.items():
+        for col, name in plot_metrics.items():
             _plot(col, name)
 
         logger.info(f"Plots generated in: {plots_dir}")
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
+
+
 
 def _maybe_log_samples(
     config: ExperimentConfig,

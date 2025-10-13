@@ -23,7 +23,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+.ropeproject
+.ropeproject/**
 # PyInstaller
 #  Usually these files are written by a parent folder of pyproject.toml,
 #  but in case your project builds executable files from this directory
