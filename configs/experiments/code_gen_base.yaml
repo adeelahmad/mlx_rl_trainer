@@ -3,9 +3,9 @@
 
 trainer:
   algorithm: "grpo"
-  output_dir: "./outputs/code_gen_run_005"
-  num_training_steps: 10000
-  learning_rate: 3e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
+  output_dir: "./outputs/code_gen_run_006"
+  num_training_steps: 80000
+  learning_rate: 1e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
   grad_accum_steps: 1
@@ -14,14 +14,14 @@ trainer:
   seed: 429
 
 model:
-  model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
+  model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   ref_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   base_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   use_lora: false
   lora_rank: 16
 
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/tr2.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 150
   max_gen_len: 128
