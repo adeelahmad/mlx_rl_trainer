@@ -226,11 +226,11 @@ class GenerationConfig(BaseModel):
     # Sampling parameters
     think_boost_tokens: int = Field(32)
     think_temperature: NonNegativeFloat = Field(0.23)
-    answer_temperature: NonNegativeFloat = Field(0.24)
+    answer_temperature: NonNegativeFloat = Field(0.15)
     sampling_top_p: NonNegativeFloat = Field(0.7)
     sampling_min_p: NonNegativeFloat = Field(0.02)
-    sampling_top_k: int = Field(20)
-    repetition_penalty: Optional[float] = Field(1.4)
+    sampling_top_k: int = Field(60)
+    repetition_penalty: Optional[float] = Field(1.1)
     repetition_context_size: Optional[int] = Field(20)
 
     # Dynamic Bias Controls (from BEFORE_STATE)
@@ -297,20 +297,18 @@ class TrainerParams(BaseModel):
     lr_schedule_config: Dict[str, Any] = Field(default_factory=dict)
 
     # Gradient Control
-    use_grad_checkpointing: bool = Field(False)
-    grad_checkpoint_layers: PositiveInt = Field(0)
     low_band: Tuple[int, int] = Field((0, 15))
     mid_band: Tuple[int, int] = Field((16, 23))
     top_band: Tuple[int, int] = Field((24, 35))
-    low_mul: NonNegativeFloat = Field(0.1)
-    mid_mul: NonNegativeFloat = Field(0.95)
+    low_mul: NonNegativeFloat = Field(0.3)
+    mid_mul: NonNegativeFloat = Field(1.3)
     top_mul: NonNegativeFloat = Field(1.5)
     head_mul: NonNegativeFloat = Field(1.2)
     train_layer_start: Optional[int] = Field(26)
     train_layer_end: Optional[int] = Field(35)
 
     # Custom Invalid Sample Handling
-    use_custom_batch_builder: bool = Field(False)
+    use_custom_batch_builder: bool = Field(True)
     invalid_sample_layers: str = Field("33,34,35")
     invalid_sample_frequency: PositiveInt = Field(2)
     invalid_sample_layers_set: Set[int] = Field(default_factory=set, exclude=True)
@@ -352,6 +350,10 @@ class TrainerParams(BaseModel):
 
 class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    use_grad_checkpointing: bool = Field(True)
+    grad_checkpoint_layers: PositiveInt = Field(1)
+
 
     trainer: TrainerParams
     model: ModelConfig

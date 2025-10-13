@@ -3,14 +3,14 @@
 
 trainer:
   algorithm: "grpo"
-  output_dir: "./outputs/code_gen_run_002"
-  num_training_steps: 1000
-  learning_rate: 2e-6 # CORRECTED: Lowered to a safe value for fine-tuning.
+  output_dir: "./outputs/code_gen_run_005"
+  num_training_steps: 10000
+  learning_rate: 3e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
-  grad_accum_steps: 1
+  grad_accum_steps: 3
   # CORRECTED: Increased beta to prevent model collapse.
-  grpo_beta: 0.02
+  grpo_beta: 0.0015
   seed: 429
 
 model:
@@ -20,10 +20,10 @@ model:
   lora_rank: 16
 
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/tr2.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
-  max_prompt_len: 350
-  max_gen_len: 256
+  max_prompt_len: 150
+  max_gen_len: 384
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -32,14 +32,14 @@ data:
 
 rewards:
   - name: "format_structure" # ADDED: A dedicated reward for getting the format right.
-    weight: 0.20
+    weight: 0.25
     config: {}
   - name: "code_execution"
-    weight: 0.20 # ADJUSTED
+    weight: 0.00 # ADJUSTED
     config:
       timeout: 3
   - name: "semantic_similarity"
-    weight: 0.60 # ADJUSTED
+    weight: 0.75 # ADJUSTED
     config:
       method: "jaccard"
 

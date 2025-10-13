@@ -93,7 +93,7 @@ async def _async_main():
         sys.exit(1)
 
     run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
-    config.trainer.output_dir = config.trainer.output_dir / run_id
+    # config.trainer.output_dir = config.trainer.output_dir / run_id
     config.trainer.output_dir.mkdir(parents=True, exist_ok=True)
 
     file_handler = logging.FileHandler(

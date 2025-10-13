@@ -107,7 +107,16 @@ def _emit_plots_from_csv(
         df = pd.read_csv(csv_path)
         if df.empty:
             return
-        plots_dir = out_dir / "plots"
+
+        # --- FIX: Ensure only the latest metric value per update_step is used for plotting ---
+        # The inner plot function defaults to x_col="update_step".
+        x_col = "update_step"
+        if x_col in df.columns:
+            # Keep the last entry (most recent log) for each unique 'update_step' value.
+            df = df.drop_duplicates(subset=[x_col], keep='last')
+        # -----------------------------------------------------------------------------------
+
+        plots_dir = out_dir / "plots" / self.config.run_id
         plots_dir.mkdir(exist_ok=True)
 
         def _plot(y_col: str, fname_suffix: str, x_col: str = "update_step"):
@@ -137,7 +146,6 @@ def _emit_plots_from_csv(
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
 
-
 def _maybe_log_samples(
     config: ExperimentConfig,
     update_idx: int,
@@ -158,7 +166,7 @@ def _maybe_log_samples(
         global wandb_run
         out_path = (
             config.monitoring.sample_log_path
-            or config.trainer.output_dir / f"samples_debug_{run_id}.jsonl"
+            or config.trainer.output_dir / f"samples_debug.jsonl"
         )
         k = min(config.monitoring.max_logged_samples, len(decoded_responses))
 
@@ -170,7 +178,7 @@ def _maybe_log_samples(
 
                 original_sample = prompts_data[p_idx]
                 gen_text = decoded_responses[i]
-                ref_text = f"{config.generation.think_start_tag}{original_sample.get('ref_think_str','')}{config.generation.think_end_tag}\n{original_sample.get('ref_answer_str','')}"
+                ref_text =  original_sample.get('ref', {"completion":f"{config.generation.think_start_tag}\n{original_sample.get('ref_think_str','')}{config.generation.think_end_tag}\n{original_sample.get('ref_answer_str','')}"})["completion"]
 
                 gen_think_len, gen_ans_len = _extract_think_answer_lengths(
                     gen_text, config.generation
@@ -183,11 +191,11 @@ def _maybe_log_samples(
                     "update": update_idx,
                     "is_invalid_batch": is_invalid_batch,
                     "kl_mode": kl_mode,
-                    "prompt": _preview(original_sample.get("text", ""), 600)
+                    "prompt": _preview(original_sample.get("ref", "")["prompt"], 1200)
                     if config.monitoring.log_prompts
                     else "[REDACTED]",
-                    "generated": _preview(gen_text, 600),
-                    "reference": _preview(ref_text, 300),
+                    "generated": _preview(gen_text, 1200),
+                    "reference": _preview(ref_text, 1200),
                     "reward_total": rewards_data["total"][i],
                     "gen_think_len": gen_think_len,
                     "gen_ans_len": gen_ans_len,

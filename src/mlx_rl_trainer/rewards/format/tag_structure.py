@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
     """
-    Extract the text between <think> and </think> tags.
+    Extract the text between the FIRST <think> and the FIRST </think> tags.
 
     Args:
         text: Full generated text
@@ -26,18 +26,26 @@ def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
     start_tag = gen_config.think_start_tag
     end_tag = gen_config.think_end_tag
 
-    if start_tag in text and end_tag in text:
-        start_idx = text.find(start_tag) + len(start_tag)
-        end_idx = text.find(end_tag)
-        if start_idx < end_idx:
-            return text[start_idx:end_idx].strip()
+    if not start_tag or not end_tag:
+        return ""
+
+    # Use re.search for robust, case-insensitive, non-greedy match to find the first block
+    # Note: re.escape is not needed here as tags are typically simple strings and we
+    # rely on string methods in the reward for counting tags.
+    pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
+
+    m = re.search(pattern, text, flags=re.I | re.S)
+
+    if m:
+        # Group 1 is the content inside the tags
+        return m.group(1).strip()
 
     return ""
 
 
 def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
     """
-    Extract the answer text that comes AFTER </think> tag.
+    Extract the answer text that comes AFTER the LAST </think> tag.
     This is for formats without explicit <answer> tags.
 
     Args:
@@ -45,21 +53,35 @@ def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
         gen_config: Generation configuration with tag definitions
 
     Returns:
-        Text after </think> tag, or empty string if not found
+        Text after the last </think> tag, or empty string if not found
     """
     if not text:
         return ""
 
     end_tag = gen_config.think_end_tag
+    if not end_tag:
+        # If no end tag defined, return the whole text as answer (fallback)
+        return text.strip()
 
-    if end_tag in text:
-        # Split on closing think tag and take everything after
-        parts = text.split(end_tag, 1)
-        if len(parts) > 1:
-            # Strip leading newline and whitespace
-            return parts[1].lstrip('\n').strip()
+    # Use rfind for the last occurrence of the end tag (case-insensitive find)
+    end_tag_lower = end_tag.lower()
+    text_lower = text.lower()
 
-    # If no think tag found, return full text (fallback)
+    last_idx = text_lower.rfind(end_tag_lower)
+
+    if last_idx != -1:
+        # The length of the original tag must be used to slice the original text
+        # Assumes the tags are simple strings defined in config.
+        # Find the end of the *original* tag, based on the lowercased match index.
+        original_end_tag_len = len(end_tag)
+
+        # Take everything AFTER the last end tag
+        answer_text = text[last_idx + original_end_tag_len :].strip()
+
+        # Strip leading newline specifically, as often the answer starts on a new line
+        return answer_text.lstrip('\n').strip()
+
+    # If no think end tag found, return full text (fallback, although reward logic should penalize this)
     return text.strip()
 
 
@@ -121,15 +143,25 @@ class TagStructureReward(BaseReward):
                 return 0.0  # Way too short
 
             # Scale from min_think_length to target_min
-            ratio = (think_length - self.min_think_length) / (self.think_target_min - self.min_think_length)
-            return 0.5 + (0.5 * ratio)  # Range: 0.5 to 1.0
+            # Ensure denominator is not zero
+            range_diff = self.think_target_min - self.min_think_length
+            if range_diff <= 0:
+                return 0.5  # Neutral if min/target are equal or inverted
+
+            ratio = (think_length - self.min_think_length) / range_diff
+            return 0.5 + (0.5 * max(0.0, min(1.0, ratio)))  # Range: 0.5 to 1.0
 
         else:
             # Too long - exponential penalty (verbosity is bad!)
             excess = think_length - self.think_target_max
-            penalty_range = self.think_target_max  # How far over we tolerate
+            penalty_range = self.think_target_max  # How far over we tolerate (approximation)
 
             # Apply penalty strength with verbosity factor
+            # Ensure non-zero denominator
+            if penalty_range <= 0:
+                # If target max is zero or less, any length > 0 is penalized heavily
+                penalty_range = 100
+
             normalized_excess = excess / penalty_range
             penalty = normalized_excess * self.length_penalty_strength * self.verbosity_penalty_factor
 
@@ -153,24 +185,27 @@ class TagStructureReward(BaseReward):
         if not generated or len(generated.strip()) < 10:
             return 0.0
 
+        # Use GenerationConfig to get standard tags (default is <think> and </think>)
         gen_config = GenerationConfig()
+        start_tag = gen_config.think_start_tag
+        end_tag = gen_config.think_end_tag
 
         # Count tags (case-insensitive)
         th_s = len(re.findall(
-            re.escape(gen_config.think_start_tag),
+            re.escape(start_tag),
             generated,
             flags=re.I
         ))
         th_e = len(re.findall(
-            re.escape(gen_config.think_end_tag),
+            re.escape(end_tag),
             generated,
             flags=re.I
         ))
 
-        # Extract thinking section using our function
+        # Extract thinking section (first valid block)
         think_text = extract_think_region(generated, gen_config)
 
-        # Extract answer section using our function
+        # Extract answer section (text after last </think>)
         answer_text = extract_answer_region(generated, gen_config)
 
         # === SCORING LOGIC ===
@@ -190,6 +225,7 @@ class TagStructureReward(BaseReward):
                 if context.update_step % 50 == 0:
                     logger.debug(
                         f"Format reward: think_len={think_len}, "
+                        f"answer_len={answer_len}, "
                         f"length_score={length_score:.3f}, "
                         f"final={final_score:.3f}"
                     )

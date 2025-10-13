@@ -127,7 +127,7 @@ def generate_rollouts_for_batch(
     )
 
     # --- Reward Calculation ---
-    decoded = tokenizer.batch_decode(responses_mx.tolist(), skip_special_tokens=True)
+    decoded = tokenizer.batch_decode(responses_mx.tolist(), skip_special_tokens=False)
 
     contexts = [
         reward_composer.context_cls(

@@ -20,11 +20,14 @@ from mlx_rl_trainer.utils.text_utils import (
     apply_chat_template_wrapper,
     extract_think_region,
     _looks_garbage,
+    clean_completion_string
 )
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
 
 logger = logging.getLogger(__name__)
+
+
 
 
 def _normalize_record(
@@ -46,31 +49,20 @@ def _normalize_record(
     system = _s(obj.get("system", system_prompt_default))
 
     gen_config_default = GenerationConfig()
-    completion_cleaned = (
-        completion.replace(
-            f"{gen_config_default.think_start_tag}\n{gen_config_default.think_start_tag}\n",
-            gen_config_default.think_start_tag,
-        )
-        .replace(
-            f"{gen_config_default.think_end_tag}\n{gen_config_default.think_end_tag}",
-            gen_config_default.think_end_tag,
-        )
-        .replace(
-            f"{gen_config_default.think_start_tag}\n\n{gen_config_default.think_start_tag}",
-            gen_config_default.think_start_tag,
-        )
-    )
-    if (
-        completion_cleaned
-        and gen_config_default.think_start_tag not in completion_cleaned
-    ):
-        completion_cleaned = f"{gen_config_default.think_start_tag}\n\n{gen_config_default.think_end_tag}\n{completion_cleaned}"
+    completion_cleaned = clean_completion_string(completion)
+    # if (
+    #     completion_cleaned
+    #     and gen_config_default.think_start_tag not in completion_cleaned
+    # ):
+    #     completion_cleaned = f"{gen_config_default.think_start_tag}\n\n{gen_config_default.think_end_tag}\n{completion_cleaned}"
 
-    meta = obj.get("meta", {}) if isinstance(obj.get("meta"), dict) else {}
+    meta_in = obj.get("meta", {}) if isinstance(obj.get("meta"), dict) else {}
     mcq_meta = _mcq_meta_from_sample(
-        {"prompt": prompt, "completion": completion_cleaned, "meta": meta}
+        {"prompt": prompt, "completion": completion_cleaned, "meta": meta_in}
     )
 
+    # *** START OF FIX ***
+    # Create a final, standardized meta dictionary for EVERY record.
     final_meta = {
         "is_mcq": mcq_meta.get("is_mcq", False),
         "mcq_options": mcq_meta.get("mcq_options", []),
@@ -78,11 +70,14 @@ def _normalize_record(
         "mcq_correct_indices": mcq_meta.get("mcq_correct_indices", []),
         "mcq_correct_letters": mcq_meta.get("mcq_correct_letters", ""),
     }
-    final_meta.update({k: v for k, v in meta.items() if k not in final_meta})
+    # Merge any other original meta keys that don't conflict
+    final_meta.update({k: v for k, v in meta_in.items() if k not in final_meta})
+    # *** END OF FIX ***
 
     test_cases = obj.get("test_cases", [])
     if not isinstance(test_cases, list):
         test_cases = [test_cases] if test_cases is not None else []
+    # Convert dict test cases to JSON strings for PyArrow compatibility
     test_cases_str = [
         json.dumps(tc) if isinstance(tc, dict) else str(tc) for tc in test_cases
     ]
@@ -98,6 +93,7 @@ def _normalize_record(
         "is_invalid_sample": obj.get("is_invalid_sample", False),
         "meta": final_meta,
     }
+
 
 
 class DatasetManager:

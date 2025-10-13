@@ -5,6 +5,7 @@ import numpy as np
 from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.utils import build_schedule
 from mlx_lm.utils import load_config as mlx_lm_load_config
+from mlx_lm.tuner.trainer import grad_checkpoint
 
 from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics
 from mlx_rl_trainer.utils.mlx_utils import (
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class GRPOTrainer(BaseTrainer):
+
     def _setup(self) -> Tuple[int, int]:
         self.actor_model, self.tokenizer = self.model_manager.load_model(
             self.config.model.model_path,
@@ -47,6 +49,31 @@ class GRPOTrainer(BaseTrainer):
         start_updates, metadata = self.checkpoint_manager.load_latest_state(
             self.actor_model, self.optimizer
         )
+
+
+        # Apply gradient checkpointing if requested
+        if self.config.use_grad_checkpointing:
+            logging.info("Applying gradient checkpointing to transformer layers...")
+            try:
+                # Most common model structures have layers under `.model.layers`
+                core_model = getattr(self.actor_model, "model", self.actor_model)
+                if hasattr(core_model, "layers") and isinstance(core_model.layers, list):
+                    # grad_checkpoint(core_model.layers[0])
+                    index=0
+                    for layer in core_model.layers:
+                        if self.config.grad_checkpoint_layers and self.config.grad_checkpoint_layers > 0 and self.config.grad_checkpoint_layers > index:
+                            grad_checkpoint(layer)
+                            index += 1
+                    logging.info(
+                        f"Successfully applied gradient checkpointing to {len(core_model.layers)} layers."
+                    )
+                else:
+                    logging.warning(
+                        "Could not find a standard '.model.layers' attribute. Gradient checkpointing not applied."
+                    )
+            except Exception as e:
+                logging.error(f"Failed to apply gradient checkpointing: {e}", exc_info=True)
+
         return metadata.get("num_updates", 0), metadata.get("epoch", 0)
 
     def generate_rollouts(

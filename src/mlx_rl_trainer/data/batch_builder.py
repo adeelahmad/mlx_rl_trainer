@@ -6,11 +6,13 @@ import mlx.core as mx
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
+import re
 
 from mlx_rl_trainer.core.config import ExperimentConfig, DataConfig, GenerationConfig
 from mlx_rl_trainer.utils.text_utils import (
     _mcq_meta_from_sample,
     apply_chat_template_wrapper,
+    clean_completion_string
 )
 from mlx_rl_trainer.rewards.format.tag_structure import (
     extract_think_region,
@@ -18,6 +20,7 @@ from mlx_rl_trainer.rewards.format.tag_structure import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 
 def _compose_prompt_from_sample(
@@ -32,7 +35,7 @@ def _compose_prompt_from_sample(
     else:
         prompt_text = json.dumps(sample, ensure_ascii=False)
 
-    completion = sample.get("completion", sample.get("answer", ""))
+    completion = clean_completion_string(sample.get("completion", sample.get("answer", "")))
     if isinstance(completion, str):
         gen_config = GenerationConfig()
         ref_think = extract_think_region(completion, gen_config)
@@ -79,7 +82,7 @@ def build_rollout_batch(
             # The apply_chat_template_wrapper should format as:
             # [system message][user message] ready for the model
             formatted_prompt = apply_chat_template_wrapper(
-                tokenizer, prompt_text, system_prompt
+                tokenizer, prompt_text, ""
             )
 
             # Encode without adding special tokens since they should be in the template
@@ -99,6 +102,7 @@ def build_rollout_batch(
                 "tokens": p_tokens,
                 "ref_answer_str": ref_ans,
                 "ref_think_str": ref_think,
+                "ref":raw,
                 "is_invalid_sample": raw.get("is_invalid_sample", False),
             }
             entry.update(mcq_meta)
