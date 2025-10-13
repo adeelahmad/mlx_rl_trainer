@@ -261,7 +261,8 @@ class GenerationConfig(BaseModel):
             "stuck",
             "frustrated",
             "<|im_start|>",
-            "Okay,"
+            "<think>\n<|im_start|><think>\n<|im_start|><think>\n<think>",
+            "<think>\n<think>"
         ]
     )
     encourage_phrases_for_bias: List[str] = Field(default_factory=lambda: [])

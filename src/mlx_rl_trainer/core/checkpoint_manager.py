@@ -117,6 +117,9 @@ class CheckpointManager:
                     "tokenizer.json",
                     "tokenizer_config.json",
                     "special_tokens_map.json",
+                    "vocab.json",
+                    "added_tokens.json",
+                    "chat_template.jinja",
                 ]
                 for file_pattern in ["*.model", "*.txt", "*.py"]:
                     for f_path in self.base_model_path.glob(file_pattern):

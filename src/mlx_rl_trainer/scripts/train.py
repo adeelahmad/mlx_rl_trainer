@@ -154,7 +154,7 @@ async def _async_main():
         config.trainer.output_dir / config.checkpointing.save_dir,
         keep_last_n=config.checkpointing.keep_last_n,  # CORRECTED from keep_best_n
         save_best=True,
-        base_model_path=config.model.base_model_path
+        base_model_path=config.model.model_path
     )
     if args.resume:
         checkpoint_manager.resume_from_path = Path(args.resume)
