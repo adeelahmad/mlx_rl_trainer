@@ -16,14 +16,15 @@ trainer:
 model:
   model_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/outy1266_align_last30/latest"
   ref_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
+  base_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   use_lora: false
   lora_rank: 16
 
 data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/tr2.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
-  max_prompt_len: 150
-  max_gen_len: 384
+  max_prompt_len: 350
+  max_gen_len: 128
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -32,14 +33,14 @@ data:
 
 rewards:
   - name: "format_structure" # ADDED: A dedicated reward for getting the format right.
-    weight: 0.25
+    weight: 0.30
     config: {}
   - name: "code_execution"
     weight: 0.00 # ADJUSTED
     config:
       timeout: 3
   - name: "semantic_similarity"
-    weight: 0.75 # ADJUSTED
+    weight: 0.70 # ADJUSTED
     config:
       method: "jaccard"
 

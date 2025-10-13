@@ -116,7 +116,7 @@ def _emit_plots_from_csv(
             df = df.drop_duplicates(subset=[x_col], keep='last')
         # -----------------------------------------------------------------------------------
 
-        plots_dir = out_dir / "plots" / self.config.run_id
+        plots_dir = out_dir / "plots" / config.run_id
         plots_dir.mkdir(exist_ok=True)
 
         def _plot(y_col: str, fname_suffix: str, x_col: str = "update_step"):
@@ -191,7 +191,7 @@ def _maybe_log_samples(
                     "update": update_idx,
                     "is_invalid_batch": is_invalid_batch,
                     "kl_mode": kl_mode,
-                    "prompt": _preview(original_sample.get("ref", "")["prompt"], 1200)
+                    "prompt": _preview(original_sample.get("text", ""), 1200)
                     if config.monitoring.log_prompts
                     else "[REDACTED]",
                     "generated": _preview(gen_text, 1200),

@@ -158,35 +158,45 @@ def _extract_final_numeric(s: str) -> Optional[str]:
 
 
 def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
-    """Extracts the content between the start and end think tags (first occurrence)."""
-    if not text or not gen_config.think_start_tag or not gen_config.think_end_tag:
+    """Extracts the content between the FIRST <think> and the FIRST </think> tags."""
+    text_str = str(text) if text is not None else "" # Robust string conversion
+    if not text_str or not gen_config.think_start_tag or not gen_config.think_end_tag:
         return ""
-    m = re.search(
+
+    # Use re.escape for tags and a non-greedy search (.*?)
+    pattern = (
         re.escape(gen_config.think_start_tag)
         + r"\s*(.*?)\s*"
-        + re.escape(gen_config.think_end_tag),
-        text,
-        flags=re.I | re.S,
+        + re.escape(gen_config.think_end_tag)
     )
-    # Original length limit kept
+
+    m = re.search(pattern, text_str, flags=re.I | re.S)
+
+    # If the pattern is matched, return the content (group 1), respecting the limit.
     return (m.group(1).strip() if m else "")[:8000]
 
 
 def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
     """Extracts the content after the LAST think end tag."""
-    tl = text or ""
+    tl = str(text) if text is not None else "" # Robust string conversion
     tend = gen_config.think_end_tag
-    if tend and tend.lower() in tl.lower():
-        # Use rfind for the last occurrence of the tag (case-insensitive)
-        idx = tl.lower().rfind(tend.lower())
 
-        # We need the length of the *original* tag to slice correctly
-        original_end_tag_len = len(tend)
+    if not tl or not tend:
+        return tl.strip()[:2000]
 
-        # Return content AFTER the last end tag
-        return tl[idx + original_end_tag_len :].strip()[:2000]
+    tend_lower = tend.lower()
+    tl_lower = tl.lower()
 
-    # If no end tag, return everything
+    # Find the index of the LAST occurrence of the closing tag (case-insensitive)
+    idx = tl_lower.rfind(tend_lower)
+
+    if idx != -1:
+        # Get the remaining text starting AFTER the last closing tag
+        remaining_text = tl[idx + len(tend) :].strip()
+        # Return the stripped content, respecting the limit
+        return remaining_text[:2000]
+
+    # If no end tag found, return everything (or nothing, depending on policy. Returning everything is the robust fallback)
     return tl.strip()[:2000]
 
 

@@ -181,7 +181,7 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        20, description="Save a full checkpoint every N training updates."
+        5, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         2, description="Number of most recent checkpoints to retain."
@@ -230,8 +230,8 @@ class GenerationConfig(BaseModel):
     sampling_top_p: NonNegativeFloat = Field(0.7)
     sampling_min_p: NonNegativeFloat = Field(0.02)
     sampling_top_k: int = Field(60)
-    repetition_penalty: Optional[float] = Field(1.1)
-    repetition_context_size: Optional[int] = Field(20)
+    repetition_penalty: Optional[float] = Field(1.6)
+    repetition_context_size: Optional[int] = Field(40)
 
     # Dynamic Bias Controls (from BEFORE_STATE)
     min_think_tokens: int = Field(32)
@@ -260,6 +260,8 @@ class GenerationConfig(BaseModel):
             "Confused",
             "stuck",
             "frustrated",
+            "<|im_start|>",
+            "Okay,"
         ]
     )
     encourage_phrases_for_bias: List[str] = Field(default_factory=lambda: [])
