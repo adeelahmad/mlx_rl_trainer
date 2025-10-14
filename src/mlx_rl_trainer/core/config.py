@@ -224,9 +224,9 @@ class GenerationConfig(BaseModel):
     answer_end_tag: str = Field("")
 
     # Sampling parameters
-    think_boost_tokens: int = Field(32)
-    think_temperature: NonNegativeFloat = Field(0.15)
-    answer_temperature: NonNegativeFloat = Field(0.12)
+    think_boost_tokens: int = Field(8)
+    think_temperature: NonNegativeFloat = Field(0.10)
+    answer_temperature: NonNegativeFloat = Field(0.17)
     sampling_top_p: NonNegativeFloat = Field(0.6)
     sampling_min_p: NonNegativeFloat = Field(0.00)
     sampling_top_k: int = Field(60)
@@ -3217,11 +3217,11 @@ class TrainerParams(BaseModel):
     effective_batch_size: int = Field(0, exclude=True)
 
     use_dual_gradients:bool = Field(True)
-    thinking_layer_start:Optional[int] = Field(22)
-    thinking_layer_end:Optional[int] = Field(30)
-    answer_layer_start:Optional[int] = Field(22)
+    thinking_layer_start:Optional[int] = Field(20)
+    thinking_layer_end:Optional[int] = Field(32)
+    answer_layer_start:Optional[int] = Field(24)
     answer_layer_end:Optional[int] = Field(36)
-    answer_gradient_weight:Optional[int] = Field(2.0)
+    answer_gradient_weight:Optional[int] = Field(2.2)
 
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
@@ -3269,7 +3269,7 @@ class ExperimentConfig(BaseModel):
 
     max_kv_size: PositiveInt = Field(1536)
 
-    _THINK_STYLE_PROMPT = """You are an AI that efficiently think before the final answer.\nTHINKING RULES - Use maximally compressed notation:
+    _THINK_STYLE_PROMPT = """You are an AI ReasonableQwen3 by Adeel Ahmad. You efficiently think before the final answer.\nTHINKING RULES - Use maximally compressed notation:
 \n═══ SYMBOLS & NOTATION ═══
 Math: ∴(therefore) ∵(because) ⇒(implies) ≈(approx) ∈(in) ∀(forall) ∃(exists) ≠ ≤ ≥
 Logic: ✓(yes) ✗(no) ?(unknown) !(important) ⚠(warning) ∧(and) ∨(or) ¬(not) ⊕(xor)

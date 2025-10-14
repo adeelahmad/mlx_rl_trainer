@@ -1,3 +1,31 @@
+"""
+Generator with Thinking/Answer Mask Support for Dual Gradient Training
+
+FIXES APPLIED:
+1. Improved token boundary detection - decodes progressively instead of re-encoding
+2. Fallback to character-based estimation if progressive decode fails
+3. Comprehensive validation and error logging
+4. Clear warnings for edge cases (no thinking tokens, no answer tokens, etc.)
+
+FORMAT REQUIREMENT:
+Your model must generate responses in this format:
+  <think>reasoning steps here</think>final answer here
+
+MASK CREATION:
+- thinking_mask: 1.0 for all tokens up to and including </think>
+- answer_mask: 1.0 for all tokens after </think>
+
+ERROR HANDLING:
+- If </think> tag not found: All tokens marked as thinking
+- If mask creation fails: Falls back to standard training with clear error log
+- Empty masks: Error logged, dual gradients disabled for batch
+
+CONFIGURATION:
+trainer:
+  use_dual_gradients: true  # Enable this feature
+
+No other config needed - masks auto-created from generation format.
+"""
 import logging
 import gc
 import re
@@ -10,7 +38,7 @@ import numpy as np
 
 from mlx_rl_trainer.core.config import ExperimentConfig
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
-from mlx_rl_trainer.generation.caching import PagedKVCache
+
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 from mlx_rl_trainer.utils.mlx_utils import (
     _create_4d_attention_mask,
@@ -56,39 +84,60 @@ def _create_thinking_answer_masks(
     thinking_mask_list = []
     answer_mask_list = []
 
+    think_end_tag = '</think>'
+
     for batch_idx in range(batch_size):
         decoded_text = decoded_responses[batch_idx]
+        response_tokens = responses_mx[batch_idx].tolist()
 
-        # Find where </think> tag ends
-        think_end_tag = '</think>'
+        # Find where </think> tag ends in the decoded text
         thinking_end_pos = decoded_text.find(think_end_tag)
 
-        # Create masks based on token positions
+        # Create masks
+        thinking_mask = mx.zeros(seq_len, dtype=mx.float32)
+        answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+
         if thinking_end_pos == -1:
             # No </think> tag found - treat all as thinking tokens
-            thinking_mask = mx.ones(seq_len, dtype=mx.float32)
-            answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+            for i in range(seq_len):
+                if response_tokens[i] != pad_id:
+                    thinking_mask[i] = 1.0
         else:
-            # Include the </think> tag in thinking portion
-            thinking_end_pos += len(think_end_tag)
+            # Find token boundary by decoding progressively
+            # This is more accurate than re-encoding substrings
+            thinking_end_pos_with_tag = thinking_end_pos + len(think_end_tag)
 
-            # Encode the text up to end of </think> to find token boundary
-            text_up_to_think_end = decoded_text[:thinking_end_pos]
-            tokens_up_to_think_end = tokenizer.encode(text_up_to_think_end)
-            thinking_token_count = len(tokens_up_to_think_end)
+            # Decode token by token to find exact boundary
+            thinking_token_count = 0
+            accumulated_text = ""
 
-            # Create masks
-            thinking_mask = mx.zeros(seq_len, dtype=mx.float32)
-            answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+            for i in range(seq_len):
+                if response_tokens[i] == pad_id:
+                    break
+
+                # Decode up to this token
+                token_text = tokenizer.decode([response_tokens[i]])
+                accumulated_text += token_text
+
+                # Check if we've passed the </think> tag
+                if len(accumulated_text) >= thinking_end_pos_with_tag:
+                    thinking_token_count = i + 1
+                    break
+
+            # If we couldn't find the boundary properly, fall back to character-based estimate
+            if thinking_token_count == 0 and thinking_end_pos_with_tag > 0:
+                # Rough estimate: assume average token length
+                avg_char_per_token = len(decoded_text) / max(1, seq_len - response_tokens.count(pad_id))
+                thinking_token_count = min(seq_len, int(thinking_end_pos_with_tag / avg_char_per_token) + 1)
 
             # Set thinking tokens (everything up to and including </think>)
             for i in range(min(thinking_token_count, seq_len)):
-                if responses_mx[batch_idx, i].item() != pad_id:
+                if response_tokens[i] != pad_id:
                     thinking_mask[i] = 1.0
 
             # Set answer tokens (everything after </think>)
             for i in range(thinking_token_count, seq_len):
-                if responses_mx[batch_idx, i].item() != pad_id:
+                if response_tokens[i] != pad_id:
                     answer_mask[i] = 1.0
 
         thinking_mask_list.append(thinking_mask[None, :])
@@ -108,7 +157,6 @@ def generate_rollouts_for_batch(
     dataset: "Dataset",
     config: ExperimentConfig,
     reward_composer: RewardComposer,
-    paged_kv_cache: Optional[PagedKVCache],
     run_id: str,
     current_update: int,
     is_invalid_batch: bool,
@@ -264,9 +312,25 @@ def generate_rollouts_for_batch(
                 config,
                 pad_id
             )
-            logger.debug(f"Created thinking/answer masks for dual gradient training")
+
+            # Validate masks
+            thinking_token_count = mx.sum(thinking_mask).item()
+            answer_token_count = mx.sum(answer_mask).item()
+            total_token_count = mx.sum(response_mask).item()
+
+            if thinking_token_count == 0 and answer_token_count == 0:
+                logger.error(f"Dual gradient mask creation failed: Both masks are empty!")
+                thinking_mask = None
+                answer_mask = None
+            elif thinking_token_count == 0:
+                logger.warning(f"No thinking tokens detected in batch. All {int(answer_token_count)} tokens marked as answer.")
+            elif answer_token_count == 0:
+                logger.warning(f"No answer tokens detected in batch. All {int(thinking_token_count)} tokens marked as thinking.")
+            else:
+                logger.debug(f"Created masks - Thinking: {int(thinking_token_count)} tokens, Answer: {int(answer_token_count)} tokens, Total: {int(total_token_count)}")
+
         except Exception as e:
-            logger.warning(f"Failed to create thinking/answer masks: {e}. Continuing without dual gradients.")
+            logger.error(f"Failed to create thinking/answer masks: {e}. Dual gradients will be disabled for this batch.", exc_info=True)
             thinking_mask = None
             answer_mask = None
 

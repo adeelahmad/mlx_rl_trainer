@@ -1,3 +1,30 @@
+# <FILE name="./grpo_trainer.py">
+# Complete File with Dual Gradient (Thinking vs Answer) Training Support
+#
+# FIXES APPLIED:
+# 1. Smart default layer ranges - answer layers start AFTER thinking layers (no overlap)
+# 2. Configuration validation with helpful error messages
+# 3. Clear logging of layer configuration on first dual gradient step
+# 4. Detection and warning when layers overlap
+#
+# LAYER CONFIGURATION:
+# Default behavior creates SEPARATE pathways:
+#   - Thinking path: layers 22-30 (1x) - learns deep reasoning
+#   - Answer path: layers 31-36 (2x) - learns fast responses
+#
+# To create OVERLAPPING layers (advanced):
+#   - Set answer_layer_start: 22 (same as thinking_layer_start)
+#   - Layers 22-30 will receive BOTH gradients (3x total)
+#
+# CONFIGURATION EXAMPLE:
+# trainer:
+#   use_dual_gradients: true
+#   thinking_layer_start: 22
+#   thinking_layer_end: 30
+#   # answer_layer_start: 31  # Optional - auto-calculated if omitted
+#   answer_layer_end: 36
+#   answer_gradient_weight: 2.0
+#
 import logging
 import time
 import gc
@@ -80,7 +107,6 @@ class GRPOTrainer(BaseTrainer):
             dataset=self.data_manager._train_dataset,
             config=self.config,
             reward_composer=self.reward_composer,
-            paged_kv_cache=self.paged_kv_cache,
             run_id=self._run_id,
             current_update=update_step,
             is_invalid_batch=is_invalid_batch
@@ -93,7 +119,7 @@ class GRPOTrainer(BaseTrainer):
         If rollout_batch contains 'thinking_mask' and 'answer_mask', applies
         dual gradient approach:
         - Thinking gradients: 1x weight to middle layers
-        - Answer gradients: 2x weight to wider layer range
+        - Answer gradients: 2x weight to final layers (non-overlapping by default)
 
         Otherwise falls back to standard gradient computation.
         """
@@ -108,12 +134,40 @@ class GRPOTrainer(BaseTrainer):
             thinking_loss, thinking_grads, answer_loss, answer_grads, metrics = \
                 self.grpo_algorithm.calculate_dual_gradient_loss(B, self.config, self.tokenizer.pad_token_id)
 
-            # Get layer ranges from config or use defaults
+            # Get layer ranges from config or use smart defaults
             thinking_layer_start = getattr(self.config.trainer, 'thinking_layer_start', 22)
             thinking_layer_end = getattr(self.config.trainer, 'thinking_layer_end', 30)
-            answer_layer_start = getattr(self.config.trainer, 'answer_layer_start', 22)
+
+            # Default: answer layers start AFTER thinking layers to avoid overlap
+            # This creates separate pathways: thinking (22-30) vs answer (31-36)
+            default_answer_start = thinking_layer_end + 1
+            answer_layer_start = getattr(self.config.trainer, 'answer_layer_start', default_answer_start)
             answer_layer_end = getattr(self.config.trainer, 'answer_layer_end', 36)
             answer_gradient_weight = getattr(self.config.trainer, 'answer_gradient_weight', 2.0)
+
+            # Validate configuration
+            if thinking_layer_start < 0 or thinking_layer_end < thinking_layer_start:
+                raise ValueError(f"Invalid thinking layer range: [{thinking_layer_start}, {thinking_layer_end}]")
+
+            if answer_layer_start < 0 or answer_layer_end < answer_layer_start:
+                raise ValueError(f"Invalid answer layer range: [{answer_layer_start}, {answer_layer_end}]")
+
+            if answer_layer_end > 100:  # Sanity check for reasonable layer count
+                logger.warning(f"Answer layer end ({answer_layer_end}) seems unusually high. Verify your config.")
+
+            # Log layer configuration on first dual gradient step
+            if not hasattr(self, '_dual_grad_config_logged'):
+                overlap_layers = set(range(thinking_layer_start, thinking_layer_end + 1)) & set(range(answer_layer_start, answer_layer_end + 1))
+                if overlap_layers:
+                    logger.info(f"Dual gradient mode - OVERLAPPING layers:")
+                    logger.info(f"  Thinking: layers {thinking_layer_start}-{thinking_layer_end} (1x weight)")
+                    logger.info(f"  Answer: layers {answer_layer_start}-{answer_layer_end} ({answer_gradient_weight}x weight)")
+                    logger.info(f"  Overlap: layers {sorted(overlap_layers)} receive BOTH gradients (total {1 + answer_gradient_weight}x)")
+                else:
+                    logger.info(f"Dual gradient mode - SEPARATE pathways:")
+                    logger.info(f"  Thinking path: layers {thinking_layer_start}-{thinking_layer_end} (1x weight)")
+                    logger.info(f"  Answer path: layers {answer_layer_start}-{answer_layer_end} ({answer_gradient_weight}x weight)")
+                self._dual_grad_config_logged = True
 
             # Scale thinking gradients (1x weight)
             thinking_grads_scaled = tree_map(
@@ -188,3 +242,6 @@ class GRPOTrainer(BaseTrainer):
         """Placeholder for evaluation logic."""
         logger.info(f"Evaluation at step {update_step} is a placeholder.")
         return []
+
+# End of File: ./grpo_trainer.py
+#</FILE>

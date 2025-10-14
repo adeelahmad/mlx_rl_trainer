@@ -1,3 +1,25 @@
+# <FILE name="./grpo_algorithm.py">
+# Complete File with Dual Gradient (Thinking vs Answer) Support
+#
+# FIXES APPLIED:
+# 1. Optimized gradient computation - reduced from 3 forward passes to 2
+# 2. Better error handling and fallback to standard training
+# 3. Improved metrics collection efficiency
+#
+# CONFIGURATION REQUIRED (add to your config):
+# trainer:
+#   use_dual_gradients: true
+#   thinking_layer_start: 22
+#   thinking_layer_end: 30
+#   answer_layer_start: 31  # Starts AFTER thinking to avoid overlap
+#   answer_layer_end: 36
+#   answer_gradient_weight: 2.0  # 2x emphasis on fast answer path
+#
+# DEFAULT BEHAVIOR (non-breaking):
+# - If masks not present or use_dual_gradients=false: Falls back to standard training
+# - If answer_layer_start not specified: Auto-sets to thinking_layer_end + 1
+# - This creates separate pathways: thinking (slow) vs answer (fast)
+#
 import logging
 from typing import Dict, Any, Tuple
 import mlx.core as mx
@@ -97,7 +119,7 @@ class GRPOAlgorithm:
             loss, grads, metrics = self.calculate_loss_and_grads(A, full_config, pad_token_id)
             return loss, grads, loss, grads, metrics
 
-        def compute_loss_with_mask(actor_model, mask_type):
+        def compute_loss_with_mask_and_metrics(actor_model, mask_type, compute_metrics=False):
             """Compute loss using only specific tokens (thinking or answer)."""
             tokens_key = 'tokens'
             response_mask_key = 'response_mask'
@@ -131,19 +153,26 @@ class GRPOAlgorithm:
             mask_sum = mx.sum(combined_mask)
             loss = mx.sum(total_loss_per_token) / (mask_sum + 1e-8)
 
+            if compute_metrics:
+                kl_div = mx.sum(kl_penalty) / (mask_sum + 1e-8)
+                policy_loss = mx.sum(policy_loss_term) / (mask_sum + 1e-8)
+                return loss, {'kl_divergence': kl_div, 'policy_loss': policy_loss}
+
             return loss
 
         # Compute thinking-only gradients
-        thinking_loss_fn = lambda model: compute_loss_with_mask(model, 'thinking_mask')
+        thinking_loss_fn = lambda model: compute_loss_with_mask_and_metrics(model, 'thinking_mask', False)
         thinking_grads_fn = nn.value_and_grad(self.actor, thinking_loss_fn)
         thinking_loss, thinking_grads = thinking_grads_fn(self.actor)
 
-        # Compute answer-only gradients
-        answer_loss_fn = lambda model: compute_loss_with_mask(model, 'answer_mask')
+        # Compute answer-only gradients AND metrics in one pass
+        answer_loss_fn = lambda model: compute_loss_with_mask_and_metrics(model, 'answer_mask', True)
         answer_grads_fn = nn.value_and_grad(self.actor, answer_loss_fn)
-        answer_loss, answer_grads = answer_grads_fn(self.actor)
+        (answer_loss, metrics), answer_grads = answer_grads_fn(self.actor)
 
-        # Compute metrics from full loss for monitoring
-        full_loss, _, metrics = self.calculate_loss_and_grads(A, full_config, pad_token_id)
+        # Convert metrics to dict of floats
+        metrics_dict = {k: float(v.item()) for k, v in metrics.items()}
 
-        return thinking_loss, thinking_grads, answer_loss, answer_grads, metrics
+        return thinking_loss, thinking_grads, answer_loss, answer_grads, metrics_dict
+
+# End of File: ./grpo_algorithm.py
