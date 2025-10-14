@@ -24,7 +24,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 192
+  max_gen_len: 128
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -32,19 +32,31 @@ data:
 # You don't need to specify it here unless you want to override the default.
 
 rewards:
-  - name: "format_structure" # ADDED: A dedicated reward for getting the format right.
+  - name: "format_structure"
     weight: 0.05
     config: {}
+
   - name: "thinking_quality"
-    weight: 0.35 # ADJUSTED
+    weight: 0.35
     config:
       timeout: 3
+      # NEW: Length constraints for 128 token budget
+      target_length_min: 30
+      target_length_max: 80
+      optimal_length_min: 40
+      optimal_length_max: 60
+      excessive_length_threshold: 90
+      excessive_length_penalty: 0.5
+      conciseness_bonus: 0.15
+      use_trainer_thinking_limits: true # Use trainer max_thinking_tokens
+
   - name: "semantic_similarity"
-    weight: 0.55 # ADJUSTED
+    weight: 0.55
     config:
       method: "jaccard"
+
   - name: "steps_coverage"
-    weight: 0.05 # ADJUSTED
+    weight: 0.05
     config:
       required_steps: 2
 

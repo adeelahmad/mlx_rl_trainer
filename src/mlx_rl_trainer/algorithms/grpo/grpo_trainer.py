@@ -165,7 +165,55 @@ class GRPOTrainer(BaseTrainer):
             default_answer_start = thinking_layer_end + 1
             answer_layer_start = getattr(self.config.trainer, 'answer_layer_start', default_answer_start)
             answer_layer_end = getattr(self.config.trainer, 'answer_layer_end', 36)
-            answer_gradient_weight = getattr(self.config.trainer, 'answer_gradient_weight', 2.0)
+
+            # ADAPTIVE WEIGHT BALANCING for short sequences
+            # Problem: With 128 token limit, thinking often dominates (80+ tokens vs 20-40 answer tokens)
+            # Solution: Dynamically boost answer/SFT weights based on actual token distribution
+
+            thinking_token_count = mx.sum(B['thinking_mask']).item()
+            answer_token_count = mx.sum(B['answer_mask']).item()
+            total_tokens = thinking_token_count + answer_token_count
+
+            if total_tokens > 0:
+                thinking_ratio = thinking_token_count / total_tokens
+                answer_ratio = answer_token_count / total_tokens
+            else:
+                thinking_ratio = 0.5
+                answer_ratio = 0.5
+
+            # Base weights from config
+            base_answer_weight = getattr(self.config.trainer, 'answer_gradient_weight', 2.0)
+            base_sft_weight = getattr(self.config.trainer, 'sft_weight', 0.1)
+
+            # Enable adaptive balancing (default: true for sequences < 200 tokens)
+            use_adaptive_weights = getattr(self.config.trainer, 'adaptive_gradient_weights', True)
+
+            if use_adaptive_weights and total_tokens < 200:
+                # If thinking dominates (>70%), boost answer signals significantly
+                if thinking_ratio > 0.7:
+                    # Boost answer weight inversely to its proportion
+                    answer_gradient_weight = base_answer_weight * (1.0 / max(answer_ratio, 0.1))
+                    answer_gradient_weight = min(answer_gradient_weight, base_answer_weight * 4.0)  # Cap at 4x
+
+                    # Also boost SFT more aggressively for short answer sections
+                    sft_weight = base_sft_weight * (1.0 / max(answer_ratio, 0.2))
+                    sft_weight = min(sft_weight, base_sft_weight * 3.0)  # Cap at 3x
+
+                    if not hasattr(self, '_adaptive_weights_logged'):
+                        logger.info(f"Adaptive weights activated for short sequences:")
+                        logger.info(f"  Thinking: {thinking_token_count:.0f} tokens ({thinking_ratio*100:.1f}%)")
+                        logger.info(f"  Answer: {answer_token_count:.0f} tokens ({answer_ratio*100:.1f}%)")
+                        logger.info(f"  Boosted answer weight: {base_answer_weight:.1f} → {answer_gradient_weight:.1f}")
+                        logger.info(f"  Boosted SFT weight: {base_sft_weight:.2f} → {sft_weight:.2f}")
+                        self._adaptive_weights_logged = True
+                else:
+                    # Balanced distribution, use base weights
+                    answer_gradient_weight = base_answer_weight
+                    sft_weight = base_sft_weight
+            else:
+                # Use base weights (for long sequences or when disabled)
+                answer_gradient_weight = base_answer_weight
+                sft_weight = base_sft_weight
 
             # Validate configuration
             if thinking_layer_start < 0 or thinking_layer_end < thinking_layer_start:
@@ -179,7 +227,7 @@ class GRPOTrainer(BaseTrainer):
 
             # --- HYBRID SFT+RL MODE ---
             if use_sft_hybrid:
-                sft_weight = getattr(self.config.trainer, 'sft_weight', 0.1)  # Default 10% SFT, 90% RL
+                # sft_weight already computed above (adaptive or base)
 
                 # Compute SFT gradients on answer tokens
                 sft_loss, sft_grads, sft_metrics = self.grpo_algorithm.calculate_sft_loss_and_grads(

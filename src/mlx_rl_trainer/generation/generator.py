@@ -85,6 +85,11 @@ def _create_thinking_answer_masks(
     answer_mask_list = []
 
     think_end_tag = '</think>'
+    max_thinking_tokens = getattr(config.trainer, 'max_thinking_tokens', 80)  # Default 80 for 128 token budget
+
+    thinking_lengths = []
+    answer_lengths = []
+    missing_answer_count = 0
 
     for batch_idx in range(batch_size):
         decoded_text = decoded_responses[batch_idx]
@@ -99,9 +104,18 @@ def _create_thinking_answer_masks(
 
         if thinking_end_pos == -1:
             # No </think> tag found - treat all as thinking tokens
+            # This is a PROBLEM in constrained sequences!
+            thinking_token_count = 0
             for i in range(seq_len):
                 if response_tokens[i] != pad_id:
                     thinking_mask[i] = 1.0
+                    thinking_token_count += 1
+
+            missing_answer_count += 1
+            thinking_lengths.append(thinking_token_count)
+            answer_lengths.append(0)
+
+            logger.warning(f"Sample {batch_idx}: No </think> tag found - all {thinking_token_count} tokens are thinking (NO ANSWER SECTION!)")
         else:
             # Find token boundary by decoding progressively
             # This is more accurate than re-encoding substrings
@@ -136,15 +150,38 @@ def _create_thinking_answer_masks(
                     thinking_mask[i] = 1.0
 
             # Set answer tokens (everything after </think>)
+            answer_token_count = 0
             for i in range(thinking_token_count, seq_len):
                 if response_tokens[i] != pad_id:
                     answer_mask[i] = 1.0
+                    answer_token_count += 1
+
+            thinking_lengths.append(thinking_token_count)
+            answer_lengths.append(answer_token_count)
+
+            # Warn about imbalanced token distribution in constrained sequences
+            if thinking_token_count > max_thinking_tokens:
+                logger.warning(f"Sample {batch_idx}: Excessive thinking - {thinking_token_count} tokens (>{max_thinking_tokens} limit), only {answer_token_count} answer tokens remaining")
 
         thinking_mask_list.append(thinking_mask[None, :])
         answer_mask_list.append(answer_mask[None, :])
 
     thinking_mask_batch = mx.concatenate(thinking_mask_list, axis=0)
     answer_mask_batch = mx.concatenate(answer_mask_list, axis=0)
+
+    # Log aggregate statistics for monitoring
+    if thinking_lengths:
+        avg_thinking = sum(thinking_lengths) / len(thinking_lengths)
+        avg_answer = sum(answer_lengths) / len(answer_lengths)
+        ratio = avg_thinking / (avg_answer + 1e-6)
+
+        logger.debug(f"Mask stats: thinking={avg_thinking:.1f} tokens, answer={avg_answer:.1f} tokens, ratio={ratio:.2f}:1")
+
+        # Alert on severe imbalance
+        if ratio > 4.0:
+            logger.warning(f"SEVERE IMBALANCE: Thinking/answer ratio is {ratio:.2f}:1 - model generating too much thinking!")
+        if missing_answer_count > 0:
+            logger.warning(f"CRITICAL: {missing_answer_count}/{batch_size} samples have NO answer section (no </think> tag)")
 
     return thinking_mask_batch, answer_mask_batch
 
