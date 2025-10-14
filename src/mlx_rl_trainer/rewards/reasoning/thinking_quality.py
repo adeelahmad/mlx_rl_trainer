@@ -18,15 +18,15 @@ class ThinkingQualityReward(BaseReward):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.target_length_min = config.get("target_length_min", 50)
-        self.target_length_max = config.get("target_length_max", 500)
+        self.target_length_max = config.get("target_length_max", 200)
 
         # New: Optimal concise range (gets bonus reward)
-        self.optimal_length_min = config.get("optimal_length_min", 100)
-        self.optimal_length_max = config.get("optimal_length_max", 300)
+        self.optimal_length_min = config.get("optimal_length_min", 125)
+        self.optimal_length_max = config.get("optimal_length_max", 150)
         self.conciseness_bonus = config.get("conciseness_bonus", 0.15)
 
         # New: Excessive length penalty (for very verbose thinking)
-        self.excessive_length_threshold = config.get("excessive_length_threshold", 800)
+        self.excessive_length_threshold = config.get("excessive_length_threshold", 350)
         self.excessive_length_penalty = config.get("excessive_length_penalty", 0.3)
 
         # New: Special tokens penalty (tokens that shouldn't appear in thinking)
@@ -35,6 +35,7 @@ class ThinkingQualityReward(BaseReward):
             [
                 "<|endoftext|>",
                 "<|im_start|>",
+                "<think><think>",
                 "<|im_end|>",
                 "<|end|>",
                 "<|begin|>",
@@ -140,7 +141,9 @@ class ThinkingQualityReward(BaseReward):
                 "Put simply",
                 "Basically what happens",
                 "Long story short",
-                "At the end of the day"
+                "At the end of the day",
+                "since I need to provide an answer, I'll go with the following",
+                ""
             ]
         )
         self.tag_misuse_penalty = config.get("tag_misuse_penalty", 0.3)

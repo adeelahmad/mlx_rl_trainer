@@ -3216,6 +3216,13 @@ class TrainerParams(BaseModel):
     # Add the missing field
     effective_batch_size: int = Field(0, exclude=True)
 
+    use_dual_gradients:bool = Field(True)
+    thinking_layer_start:Optional[int] = Field(22)
+    thinking_layer_end:Optional[int] = Field(30)
+    answer_layer_start:Optional[int] = Field(22)
+    answer_layer_end:Optional[int] = Field(36)
+    answer_gradient_weight:Optional[int] = Field(2.0)
+
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
         self.effective_batch_size = (

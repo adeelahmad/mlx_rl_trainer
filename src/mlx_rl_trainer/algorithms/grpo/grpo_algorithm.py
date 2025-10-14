@@ -1,106 +1,149 @@
-"""
-GRPO (Group Relative Policy Optimization) Algorithm Implementation.
-"""
 import logging
 from typing import Dict, Any, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_flatten
-
 from mlx_rl_trainer.core.config import ExperimentConfig
 
 logger = logging.getLogger(__name__)
 
-
 class GRPOAlgorithm:
-    """Implements the GRPO loss calculation and advantage estimation."""
-
-    def __init__(
-        self, config: ExperimentConfig, actor_model: nn.Module, ref_model: nn.Module
-    ):
+    def __init__(self, config, actor_model, ref_model):
         self.config = config
         self.actor = actor_model
         self.reference = ref_model
         self.beta = config.trainer.grpo_beta
 
-    def compute_advantages(
-        self, rewards_flat: mx.array, samples_per_prompt: int
-    ) -> mx.array:
-        """Computes advantages by normalizing rewards within each prompt's response group."""
+    def compute_advantages(self, rewards_flat, samples_per_prompt):
+        """Compute advantages with optional baseline normalization."""
         if samples_per_prompt <= 1:
-            # Simple whitening across the batch
-            return (rewards_flat - mx.mean(rewards_flat)) / (
-                mx.std(rewards_flat) + 1e-8
-            )
+            return (rewards_flat - mx.mean(rewards_flat)) / (mx.std(rewards_flat) + 1e-8)
 
-        num_prompts = rewards_flat.shape[0] // samples_per_prompt
-        rewards_grouped = rewards_flat.reshape(num_prompts, samples_per_prompt)
+        batch_size = rewards_flat.shape[0] // samples_per_prompt
+        rewards_reshaped = rewards_flat.reshape(batch_size, samples_per_prompt)
+        baseline = mx.mean(rewards_reshaped, axis=1, keepdims=True)
+        std = mx.std(rewards_reshaped, axis=1, keepdims=True)
+        advantages = (rewards_reshaped - baseline) / (std + 1e-8)
+        return advantages.flatten()
 
-        mean_per_group = mx.mean(rewards_grouped, axis=1, keepdims=True)
-        std_per_group = mx.std(rewards_grouped, axis=1, keepdims=True)
+    def calculate_loss_and_grads(self, rollout_batch, full_config, pad_token_id):
+        """Original single gradient computation method."""
+        A = rollout_batch
+        zero_val = 0.0
 
-        advantages_grouped = (rewards_grouped - mean_per_group) / (std_per_group + 1e-8)
-        return advantages_grouped.flatten()
+        def compute_loss(actor_model):
+            tokens_key = 'tokens'
+            mask_key = 'response_mask'
 
-    def calculate_loss_and_grads(
-        self,
-        rollout_batch: Dict[str, mx.array],
-        full_config: ExperimentConfig,
-        pad_token_id: int,
-    ) -> Tuple[mx.array, Dict[str, mx.array], Dict[str, float]]:
-        """Calculates GRPO loss and gradients."""
-
-        def loss_fn(actor_model: nn.Module) -> Tuple[mx.array, Dict[str, mx.array]]:
-            # 1. Forward pass to get current log probabilities
-            logits = actor_model(rollout_batch["tokens"])
+            logits = actor_model(A[tokens_key])
             if isinstance(logits, tuple):
                 logits = logits[0]
             logits = logits.astype(mx.float32)
 
-            # We need log probs for the response part of the sequence
-            prompt_len = (
-                rollout_batch["tokens"].shape[1]
-                - rollout_batch["response_mask"].shape[1]
-            )
-            response_logits = logits[:, prompt_len - 1 : -1, :]
-            response_tokens = rollout_batch["tokens"][:, prompt_len:]
+            offset = A[tokens_key].shape[1] - A[mask_key].shape[1]
+            shifted_logits = logits[:, offset-1:-1, :]
+            target_tokens = A[tokens_key][:, offset:]
 
-            log_probs_all = nn.log_softmax(response_logits, axis=-1)
-            actor_log_probs = mx.take_along_axis(
-                log_probs_all, response_tokens[..., None], axis=-1
-            ).squeeze(-1)
+            log_probs = nn.log_softmax(shifted_logits, axis=-1)
+            gathered_log_probs = mx.take_along_axis(log_probs, target_tokens[..., None], axis=-1).squeeze(-1)
 
-            # 2. Compute KL divergence
-            log_ratio = actor_log_probs - rollout_batch["ref_log_probs"]
-            kl_div = (mx.exp(log_ratio) - 1) - log_ratio
-            kl_per_token = kl_div * rollout_batch["response_mask"]
+            log_ratio = gathered_log_probs - A['ref_log_probs']
+            kl_term = mx.exp(log_ratio) - 1 - log_ratio
+            kl_penalty = kl_term * A[mask_key]
 
-            # 3. Compute Policy Loss
-            advantages_expanded = rollout_batch["advantages"][:, None]
-            policy_loss_per_token = (
-                -log_ratio * advantages_expanded * rollout_batch["response_mask"]
-            )
+            advantages_expanded = A['advantages'][:, None]
+            policy_loss_term = -log_ratio * advantages_expanded * A[mask_key]
 
-            # 4. Combine for total loss
-            total_loss_per_token = policy_loss_per_token + self.beta * kl_per_token
+            total_loss_per_token = policy_loss_term + self.beta * kl_penalty
+            loss = mx.sum(total_loss_per_token) / mx.sum(A[mask_key])
 
-            # Sum over sequence length and mean over batch
-            loss = mx.sum(total_loss_per_token) / mx.sum(rollout_batch["response_mask"])
+            kl_div = mx.sum(kl_penalty) / mx.sum(A[mask_key])
+            policy_loss = mx.sum(policy_loss_term) / mx.sum(A[mask_key])
 
-            # Auxiliary metrics
-            kl_mean = mx.sum(kl_per_token) / mx.sum(rollout_batch["response_mask"])
-            policy_loss_mean = mx.sum(policy_loss_per_token) / mx.sum(
-                rollout_batch["response_mask"]
-            )
-
-            return loss, {"kl_divergence": kl_mean, "policy_loss": policy_loss_mean}
+            return loss, {
+                'kl_divergence': kl_div,
+                'policy_loss': policy_loss
+            }
 
         try:
-            value_and_grad_fn = nn.value_and_grad(self.actor, loss_fn)
-            (loss, aux_metrics), grads = value_and_grad_fn(self.actor)
-
-            metrics = {k: float(v.item()) for k, v in aux_metrics.items()}
-            return loss, grads, metrics
+            loss_grad_fn = nn.value_and_grad(self.actor, compute_loss)
+            (loss, metrics), grads = loss_grad_fn(self.actor)
+            metrics_dict = {k: float(v.item()) for k, v in metrics.items()}
+            return loss, grads, metrics_dict
         except Exception as e:
             logger.error(f"Error during loss computation: {e}", exc_info=True)
-            return mx.array(0.0), {}, {"kl_divergence": 0.0, "policy_loss": 0.0}
+            return mx.array(zero_val), {}, {'kl_divergence': zero_val, 'policy_loss': zero_val}
+
+    def calculate_dual_gradient_loss(self, rollout_batch, full_config, pad_token_id):
+        """
+        Compute separate gradients for thinking and answer tokens.
+
+        This creates two gradient pathways:
+        - Thinking gradients: From thinking tokens only
+        - Answer gradients: From answer tokens only
+
+        These can be applied with different weights and to different layers
+        to create fast vs deep reasoning modes.
+        """
+        A = rollout_batch
+
+        # Check if we have the necessary masks
+        has_thinking_mask = 'thinking_mask' in A
+        has_answer_mask = 'answer_mask' in A
+
+        # Fallback to original method if masks not present
+        if not has_thinking_mask or not has_answer_mask:
+            logger.warning("Thinking/answer masks not found in batch. Falling back to standard gradient computation.")
+            loss, grads, metrics = self.calculate_loss_and_grads(A, full_config, pad_token_id)
+            return loss, grads, loss, grads, metrics
+
+        def compute_loss_with_mask(actor_model, mask_type):
+            """Compute loss using only specific tokens (thinking or answer)."""
+            tokens_key = 'tokens'
+            response_mask_key = 'response_mask'
+
+            logits = actor_model(A[tokens_key])
+            if isinstance(logits, tuple):
+                logits = logits[0]
+            logits = logits.astype(mx.float32)
+
+            offset = A[tokens_key].shape[1] - A[response_mask_key].shape[1]
+            shifted_logits = logits[:, offset-1:-1, :]
+            target_tokens = A[tokens_key][:, offset:]
+
+            log_probs = nn.log_softmax(shifted_logits, axis=-1)
+            gathered_log_probs = mx.take_along_axis(log_probs, target_tokens[..., None], axis=-1).squeeze(-1)
+
+            log_ratio = gathered_log_probs - A['ref_log_probs']
+            kl_term = mx.exp(log_ratio) - 1 - log_ratio
+
+            # Apply the thinking or answer mask
+            token_mask = A[mask_type]
+            combined_mask = A[response_mask_key] * token_mask
+
+            kl_penalty = kl_term * combined_mask
+            advantages_expanded = A['advantages'][:, None]
+            policy_loss_term = -log_ratio * advantages_expanded * combined_mask
+
+            total_loss_per_token = policy_loss_term + self.beta * kl_penalty
+
+            # Normalize by actual number of masked tokens
+            mask_sum = mx.sum(combined_mask)
+            loss = mx.sum(total_loss_per_token) / (mask_sum + 1e-8)
+
+            return loss
+
+        # Compute thinking-only gradients
+        thinking_loss_fn = lambda model: compute_loss_with_mask(model, 'thinking_mask')
+        thinking_grads_fn = nn.value_and_grad(self.actor, thinking_loss_fn)
+        thinking_loss, thinking_grads = thinking_grads_fn(self.actor)
+
+        # Compute answer-only gradients
+        answer_loss_fn = lambda model: compute_loss_with_mask(model, 'answer_mask')
+        answer_grads_fn = nn.value_and_grad(self.actor, answer_loss_fn)
+        answer_loss, answer_grads = answer_grads_fn(self.actor)
+
+        # Compute metrics from full loss for monitoring
+        full_loss, _, metrics = self.calculate_loss_and_grads(A, full_config, pad_token_id)
+
+        return thinking_loss, thinking_grads, answer_loss, answer_grads, metrics

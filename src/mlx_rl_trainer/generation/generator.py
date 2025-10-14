@@ -1,6 +1,9 @@
-import logging, gc, re
+import logging
+import gc
+import re
 from typing import Dict, Any, List, Optional, Tuple
-import mlx.core as mx, mlx.nn as nn
+import mlx.core as mx
+import mlx.nn as nn
 from mlx_lm.models import cache
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 import numpy as np
@@ -24,6 +27,79 @@ from mlx_rl_trainer.algorithms.grpo.grpo_algorithm import GRPOAlgorithm
 logger = logging.getLogger(__name__)
 
 
+def _create_thinking_answer_masks(
+    responses_mx: mx.array,
+    decoded_responses: List[str],
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+    pad_id: int,
+) -> Tuple[mx.array, mx.array]:
+    """
+    Create masks to separate thinking and answer tokens.
+
+    Format assumption: <think>reasoning here</think>answer here
+    - Thinking: Everything up to and including </think>
+    - Answer: Everything after </think>
+
+    Args:
+        responses_mx: Token IDs of generated responses [batch, seq_len]
+        decoded_responses: Decoded text of responses
+        tokenizer: Tokenizer for encoding/decoding
+        config: Experiment configuration
+        pad_id: Padding token ID
+
+    Returns:
+        thinking_mask: 1.0 for thinking tokens (including tags), 0.0 elsewhere [batch, seq_len]
+        answer_mask: 1.0 for answer tokens, 0.0 elsewhere [batch, seq_len]
+    """
+    batch_size, seq_len = responses_mx.shape
+    thinking_mask_list = []
+    answer_mask_list = []
+
+    for batch_idx in range(batch_size):
+        decoded_text = decoded_responses[batch_idx]
+
+        # Find where </think> tag ends
+        think_end_tag = '</think>'
+        thinking_end_pos = decoded_text.find(think_end_tag)
+
+        # Create masks based on token positions
+        if thinking_end_pos == -1:
+            # No </think> tag found - treat all as thinking tokens
+            thinking_mask = mx.ones(seq_len, dtype=mx.float32)
+            answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+        else:
+            # Include the </think> tag in thinking portion
+            thinking_end_pos += len(think_end_tag)
+
+            # Encode the text up to end of </think> to find token boundary
+            text_up_to_think_end = decoded_text[:thinking_end_pos]
+            tokens_up_to_think_end = tokenizer.encode(text_up_to_think_end)
+            thinking_token_count = len(tokens_up_to_think_end)
+
+            # Create masks
+            thinking_mask = mx.zeros(seq_len, dtype=mx.float32)
+            answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+
+            # Set thinking tokens (everything up to and including </think>)
+            for i in range(min(thinking_token_count, seq_len)):
+                if responses_mx[batch_idx, i].item() != pad_id:
+                    thinking_mask[i] = 1.0
+
+            # Set answer tokens (everything after </think>)
+            for i in range(thinking_token_count, seq_len):
+                if responses_mx[batch_idx, i].item() != pad_id:
+                    answer_mask[i] = 1.0
+
+        thinking_mask_list.append(thinking_mask[None, :])
+        answer_mask_list.append(answer_mask[None, :])
+
+    thinking_mask_batch = mx.concatenate(thinking_mask_list, axis=0)
+    answer_mask_batch = mx.concatenate(answer_mask_list, axis=0)
+
+    return thinking_mask_batch, answer_mask_batch
+
+
 def generate_rollouts_for_batch(
     model: nn.Module,
     ref_model: nn.Module,
@@ -37,9 +113,17 @@ def generate_rollouts_for_batch(
     current_update: int,
     is_invalid_batch: bool,
 ) -> Tuple[Dict[str, mx.array], float, Dict[str, float]]:
+    """
+    Generate rollouts for a batch of prompts with optional thinking/answer mask creation.
+
+    If config.trainer.use_dual_gradients is True, this function will automatically
+    create thinking_mask and answer_mask arrays that separate thinking tokens from
+    answer tokens, enabling the dual gradient training approach.
+    """
     model.eval()
     if ref_model:
         ref_model.eval()
+
     num_prompts = len(prompts_data)
     if num_prompts == 0:
         return {}, 0.0, {}
@@ -136,7 +220,6 @@ def generate_rollouts_for_batch(
             reference_completion=prompts_data_replicated[i]["ref_answer_str"],
             metadata=prompts_data_replicated[i],
             update_step=current_update,
-
         )
         for i in range(total_samples)
     ]
@@ -153,8 +236,6 @@ def generate_rollouts_for_batch(
         rewards_total, config.trainer.num_rollout_samples
     )
 
-
-
     full_seq = mx.concatenate([prompts_mx, responses_mx], axis=1)
     ref_logits = ref_model(full_seq.astype(mx.int64))[:, max_prompt_len - 1 : -1, :]
     ref_log_probs_all = nn.log_softmax(ref_logits.astype(mx.float32), axis=-1)
@@ -164,6 +245,30 @@ def generate_rollouts_for_batch(
 
     response_mask = (responses_mx != pad_id).astype(mx.float32)
     response_mask = _mask_after_answer(responses_mx, response_mask, tokenizer, config)
+
+    # --- Create Thinking/Answer Masks (if dual gradients enabled) ---
+    thinking_mask = None
+    answer_mask = None
+
+    use_dual_gradients = (
+        hasattr(config.trainer, 'use_dual_gradients')
+        and config.trainer.use_dual_gradients
+    )
+
+    if use_dual_gradients:
+        try:
+            thinking_mask, answer_mask = _create_thinking_answer_masks(
+                responses_mx,
+                decoded,
+                tokenizer,
+                config,
+                pad_id
+            )
+            logger.debug(f"Created thinking/answer masks for dual gradient training")
+        except Exception as e:
+            logger.warning(f"Failed to create thinking/answer masks: {e}. Continuing without dual gradients.")
+            thinking_mask = None
+            answer_mask = None
 
     # --- Logging ---
     _maybe_log_samples(
@@ -177,6 +282,7 @@ def generate_rollouts_for_batch(
         is_invalid_batch,
     )
 
+    # --- Build Rollout Batch ---
     rollout_batch = {
         "tokens": full_seq,
         "response_mask": response_mask,
@@ -185,12 +291,18 @@ def generate_rollouts_for_batch(
         "actor_log_probs": actor_log_probs,
     }
 
+    # Add thinking/answer masks if they were created
+    if thinking_mask is not None and answer_mask is not None:
+        rollout_batch["thinking_mask"] = thinking_mask
+        rollout_batch["answer_mask"] = answer_mask
+
     avg_reward = mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0
     avg_breakdown = {k: np.mean(v) for k, v in rewards_breakdown.items()}
 
     model.train()
     if ref_model:
-        ref_model.train()  # Set back to train mode if it was changed
+        ref_model.train()
+
     gc.collect()
     mx.clear_cache()
 

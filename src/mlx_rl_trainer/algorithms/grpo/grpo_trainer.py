@@ -1,86 +1,76 @@
-import logging, time, gc, json
+import logging
+import time
+import gc
+import json
 from typing import Dict, Any, List, Optional, Tuple
-import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
 import numpy as np
 from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.utils import build_schedule
 from mlx_lm.utils import load_config as mlx_lm_load_config
 from mlx_lm.tuner.trainer import grad_checkpoint
-
 from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics
-from mlx_rl_trainer.utils.mlx_utils import (
-    _maybe_clip_grad_norm,
-    mask_grads_to_layer_band,
-    scale_grads_by_band,
-)
+from mlx_rl_trainer.utils.mlx_utils import _maybe_clip_grad_norm, mask_grads_to_layer_band, scale_grads_by_band
 from mlx_rl_trainer.monitoring.metrics_logger import _maybe_log_samples
 from mlx_rl_trainer.generation.generator import generate_rollouts_for_batch
 from .grpo_algorithm import GRPOAlgorithm
 
 logger = logging.getLogger(__name__)
 
-
 class GRPOTrainer(BaseTrainer):
-
-    def _setup(self) -> Tuple[int, int]:
+    def _setup(self):
+        """Initialize models, optimizer, and load checkpoints."""
         self.actor_model, self.tokenizer = self.model_manager.load_model(
             self.config.model.model_path,
-            "actor",
+            'actor',
             is_trainable=True,
             apply_lora=self.config.model.use_lora,
-            lora_config=self.config.model.model_dump(),
+            lora_config=self.config.model.model_dump()
         )
+
         self.ref_model, _ = self.model_manager.load_model(
-            self.config.model.ref_model_path, "reference", is_trainable=False
+            self.config.model.ref_model_path,
+            'reference',
+            is_trainable=False
         )
-        self.grpo_algorithm = GRPOAlgorithm(
-            self.config, self.actor_model, self.ref_model
-        )
+
+        self.grpo_algorithm = GRPOAlgorithm(self.config, self.actor_model, self.ref_model)
+
         self.optimizer = optim.AdamW(
             learning_rate=self.config.trainer.learning_rate,
-            betas=(
-                self.config.trainer.optimizer_beta1,
-                self.config.trainer.optimizer_beta2,
-            ),
-            weight_decay=self.config.trainer.optimizer_weight_decay,
+            betas=(self.config.trainer.optimizer_beta1, self.config.trainer.optimizer_beta2),
+            weight_decay=self.config.trainer.optimizer_weight_decay
         )
+
         self.lr_scheduler = build_schedule(self.config.trainer.lr_schedule_config)
 
-        start_updates, metadata = self.checkpoint_manager.load_latest_state(
-            self.actor_model, self.optimizer
-        )
+        num_updates, state = self.checkpoint_manager.load_latest_state(self.actor_model, self.optimizer)
 
-
-        # Apply gradient checkpointing if requested
+        # Apply gradient checkpointing if enabled
         if self.config.use_grad_checkpointing:
-            logging.info("Applying gradient checkpointing to transformer layers...")
+            logging.info('Applying gradient checkpointing to transformer layers...')
             try:
-                # Most common model structures have layers under `.model.layers`
-                core_model = getattr(self.actor_model, "model", self.actor_model)
-                if hasattr(core_model, "layers") and isinstance(core_model.layers, list):
-                    # grad_checkpoint(core_model.layers[0])
-                    index=0
-                    for layer in core_model.layers:
-                        if self.config.grad_checkpoint_layers and self.config.grad_checkpoint_layers > 0 and self.config.grad_checkpoint_layers > index:
+                model_core = getattr(self.actor_model, 'model', self.actor_model)
+                if hasattr(model_core, 'layers') and isinstance(model_core.layers, list):
+                    checkpointed_count = 0
+                    for layer in model_core.layers:
+                        if self.config.grad_checkpoint_layers and self.config.grad_checkpoint_layers > 0 and self.config.grad_checkpoint_layers > checkpointed_count:
                             grad_checkpoint(layer)
-                            index += 1
-                    logging.info(
-                        f"Successfully applied gradient checkpointing to {len(core_model.layers)} layers."
-                    )
+                            checkpointed_count += 1
+                    logging.info(f"Successfully applied gradient checkpointing to {len(model_core.layers)} layers.")
                 else:
-                    logging.warning(
-                        "Could not find a standard '.model.layers' attribute. Gradient checkpointing not applied."
-                    )
+                    logging.warning("Could not find a standard '.model.layers' attribute. Gradient checkpointing not applied.")
             except Exception as e:
                 logging.error(f"Failed to apply gradient checkpointing: {e}", exc_info=True)
 
-        return metadata.get("num_updates", 0), metadata.get("epoch", 0)
+        return state.get('num_updates', 0), state.get('epoch', 0)
 
-    def generate_rollouts(
-        self, batch_data: Dict[str, Any], update_step: int
-    ) -> Tuple[Dict, float, Dict]:
-        prompts_data = batch_data.get("prompts_data", [])
-        is_invalid_batch = any(p.get("is_invalid_sample", False) for p in prompts_data)
+    def generate_rollouts(self, batch_data, update_step):
+        """Generate rollouts for the given batch."""
+        prompts_data = batch_data.get('prompts_data', [])
+        is_invalid_batch = any(p.get('is_invalid_sample', False) for p in prompts_data)
 
         return generate_rollouts_for_batch(
             model=self.actor_model,
@@ -93,37 +83,108 @@ class GRPOTrainer(BaseTrainer):
             paged_kv_cache=self.paged_kv_cache,
             run_id=self._run_id,
             current_update=update_step,
-            is_invalid_batch=is_invalid_batch,
+            is_invalid_batch=is_invalid_batch
         )
 
-    def train_step(
-        self, rollout_batch: Dict[str, mx.array], update_step: int
-    ) -> Tuple[TrainingMetrics, Dict[str, mx.array]]:
+    def train_step(self, rollout_batch, update_step):
+        """
+        Execute single training step with optional dual gradient support.
+
+        If rollout_batch contains 'thinking_mask' and 'answer_mask', applies
+        dual gradient approach:
+        - Thinking gradients: 1x weight to middle layers
+        - Answer gradients: 2x weight to wider layer range
+
+        Otherwise falls back to standard gradient computation.
+        """
+        B = rollout_batch
         start_time = time.time()
 
-        loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(
-            rollout_batch, self.config, self.tokenizer.pad_token_id
-        )
+        # Check if we should use dual gradient approach
+        use_dual_gradients = ('thinking_mask' in B and 'answer_mask' in B)
 
-        # Scale gradients for accumulation
-        scaled_grads = tree_map(
-            lambda g: g / self.config.trainer.grad_accum_steps, grads
-        )
+        if use_dual_gradients and hasattr(self.config.trainer, 'use_dual_gradients') and self.config.trainer.use_dual_gradients:
+            # Dual gradient path: thinking vs answer separation
+            thinking_loss, thinking_grads, answer_loss, answer_grads, metrics = \
+                self.grpo_algorithm.calculate_dual_gradient_loss(B, self.config, self.tokenizer.pad_token_id)
 
-        metrics_obj = TrainingMetrics(
-            loss=loss.item(),
-            reward_mean=rollout_batch["advantages"].mean().item(),
-            reward_std=rollout_batch["advantages"].std().item(),
-            grad_norm=0.0,  # Will be calculated in the main run loop after accumulation
+            # Get layer ranges from config or use defaults
+            thinking_layer_start = getattr(self.config.trainer, 'thinking_layer_start', 22)
+            thinking_layer_end = getattr(self.config.trainer, 'thinking_layer_end', 30)
+            answer_layer_start = getattr(self.config.trainer, 'answer_layer_start', 22)
+            answer_layer_end = getattr(self.config.trainer, 'answer_layer_end', 36)
+            answer_gradient_weight = getattr(self.config.trainer, 'answer_gradient_weight', 2.0)
+
+            # Scale thinking gradients (1x weight)
+            thinking_grads_scaled = tree_map(
+                lambda g: g / self.config.trainer.grad_accum_steps,
+                thinking_grads
+            )
+
+            # Mask to thinking layers only
+            thinking_grads_masked = mask_grads_to_layer_band(
+                thinking_grads_scaled,
+                start=thinking_layer_start,
+                end=thinking_layer_end,
+                include_embed=False,
+                include_head=False
+            )
+
+            # Scale answer gradients (2x weight by default)
+            answer_grads_scaled = tree_map(
+                lambda g: g * answer_gradient_weight / self.config.trainer.grad_accum_steps,
+                answer_grads
+            )
+
+            # Mask to answer layers (wider range, includes final layers)
+            answer_grads_masked = mask_grads_to_layer_band(
+                answer_grads_scaled,
+                start=answer_layer_start,
+                end=answer_layer_end,
+                include_embed=False,
+                include_head=True
+            )
+
+            # Combine the gradients
+            combined_grads = tree_map(
+                lambda t, a: t + a,
+                thinking_grads_masked,
+                answer_grads_masked
+            )
+
+            avg_loss = (thinking_loss.item() + answer_loss.item()) / 2
+
+        else:
+            # Standard gradient path (original behavior)
+            loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(
+                B,
+                self.config,
+                self.tokenizer.pad_token_id
+            )
+
+            combined_grads = tree_map(
+                lambda g: g / self.config.trainer.grad_accum_steps,
+                grads
+            )
+
+            avg_loss = loss.item()
+
+        # Create training metrics
+        training_metrics = TrainingMetrics(
+            loss=avg_loss,
+            reward_mean=B['advantages'].mean().item(),
+            reward_std=B['advantages'].std().item(),
+            grad_norm=0.0,
             learning_rate=self.lr_scheduler(update_step),
             step_time_s=time.time() - start_time,
-            kl_divergence=metrics.get("kl_divergence", 0.0),
+            kl_divergence=metrics.get('kl_divergence', 0.0),
             epoch=self.current_epoch,
-            step=update_step,
+            step=update_step
         )
-        return metrics_obj, scaled_grads
 
-    def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
-        # Placeholder for full evaluation logic
+        return training_metrics, combined_grads
+
+    def evaluate(self, update_step):
+        """Placeholder for evaluation logic."""
         logger.info(f"Evaluation at step {update_step} is a placeholder.")
         return []
