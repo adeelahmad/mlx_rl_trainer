@@ -1,27 +1,42 @@
+#-----------#
 # <FILE name="./grpo_trainer.py">
 # Complete File with Dual Gradient (Thinking vs Answer) Training Support
+# Now includes HYBRID RL+SFT mode (Approach 2)
 #
 # FIXES APPLIED:
 # 1. Smart default layer ranges - answer layers start AFTER thinking layers (no overlap)
 # 2. Configuration validation with helpful error messages
 # 3. Clear logging of layer configuration on first dual gradient step
 # 4. Detection and warning when layers overlap
+# 5. Hybrid RL+SFT mode for answer tokens to prevent drift
 #
-# LAYER CONFIGURATION:
-# Default behavior creates SEPARATE pathways:
-#   - Thinking path: layers 22-30 (1x) - learns deep reasoning
-#   - Answer path: layers 31-36 (2x) - learns fast responses
+# TRAINING MODES:
+# 1. Standard GRPO: Single RL gradient to all layers
+# 2. Dual Gradient: Thinking (RL) and Answer (RL) to separate layers
+# 3. Hybrid (Approach 2): Thinking (RL only) + Answer (RL + SFT combined)
 #
-# To create OVERLAPPING layers (advanced):
-#   - Set answer_layer_start: 22 (same as thinking_layer_start)
-#   - Layers 22-30 will receive BOTH gradients (3x total)
+# HYBRID MODE (Recommended):
+# Prevents answer degradation during RL by mixing supervised learning:
+#   - Thinking tokens: RL only → layers 22-30 (learn from rewards)
+#   - Answer tokens: RL + SFT → layers 31-36 (learn from rewards + references)
 #
-# CONFIGURATION EXAMPLE:
+# CONFIGURATION EXAMPLES:
+#
+# Basic Dual Gradient (RL only):
 # trainer:
 #   use_dual_gradients: true
 #   thinking_layer_start: 22
 #   thinking_layer_end: 30
-#   # answer_layer_start: 31  # Optional - auto-calculated if omitted
+#   answer_layer_end: 36
+#   answer_gradient_weight: 2.0
+#
+# Hybrid RL+SFT (Recommended):
+# trainer:
+#   use_dual_gradients: true
+#   use_sft_on_answer: true      # Enable SFT on answer tokens
+#   sft_weight: 0.1               # 10% SFT, 90% RL (prevents drift)
+#   thinking_layer_start: 22
+#   thinking_layer_end: 30
 #   answer_layer_end: 36
 #   answer_gradient_weight: 2.0
 #
@@ -107,6 +122,7 @@ class GRPOTrainer(BaseTrainer):
             dataset=self.data_manager._train_dataset,
             config=self.config,
             reward_composer=self.reward_composer,
+            paged_kv_cache=self.paged_kv_cache,
             run_id=self._run_id,
             current_update=update_step,
             is_invalid_batch=is_invalid_batch
@@ -114,20 +130,28 @@ class GRPOTrainer(BaseTrainer):
 
     def train_step(self, rollout_batch, update_step):
         """
-        Execute single training step with optional dual gradient support.
+        Execute single training step with optional dual gradient + SFT support.
 
-        If rollout_batch contains 'thinking_mask' and 'answer_mask', applies
-        dual gradient approach:
-        - Thinking gradients: 1x weight to middle layers
-        - Answer gradients: 2x weight to final layers (non-overlapping by default)
+        Training modes:
+        1. Standard: Single RL gradient to all layers
+        2. Dual gradient: Thinking (RL) + Answer (RL) to separate layers
+        3. Hybrid (Approach 2): Thinking (RL only) + Answer (RL + SFT combined)
 
-        Otherwise falls back to standard gradient computation.
+        Hybrid mode creates:
+        - Thinking path: RL only → middle layers (learn from rewards)
+        - Answer path: RL + SFT → final layers (learn from rewards + references)
         """
         B = rollout_batch
         start_time = time.time()
 
         # Check if we should use dual gradient approach
         use_dual_gradients = ('thinking_mask' in B and 'answer_mask' in B)
+        use_sft_hybrid = (
+            use_dual_gradients
+            and hasattr(self.config.trainer, 'use_sft_on_answer')
+            and self.config.trainer.use_sft_on_answer
+            and 'reference_tokens' in B
+        )
 
         if use_dual_gradients and hasattr(self.config.trainer, 'use_dual_gradients') and self.config.trainer.use_dual_gradients:
             # Dual gradient path: thinking vs answer separation
@@ -139,7 +163,6 @@ class GRPOTrainer(BaseTrainer):
             thinking_layer_end = getattr(self.config.trainer, 'thinking_layer_end', 30)
 
             # Default: answer layers start AFTER thinking layers to avoid overlap
-            # This creates separate pathways: thinking (22-30) vs answer (31-36)
             default_answer_start = thinking_layer_end + 1
             answer_layer_start = getattr(self.config.trainer, 'answer_layer_start', default_answer_start)
             answer_layer_end = getattr(self.config.trainer, 'answer_layer_end', 36)
@@ -152,8 +175,56 @@ class GRPOTrainer(BaseTrainer):
             if answer_layer_start < 0 or answer_layer_end < answer_layer_start:
                 raise ValueError(f"Invalid answer layer range: [{answer_layer_start}, {answer_layer_end}]")
 
-            if answer_layer_end > 100:  # Sanity check for reasonable layer count
+            if answer_layer_end > 100:
                 logger.warning(f"Answer layer end ({answer_layer_end}) seems unusually high. Verify your config.")
+
+            # --- HYBRID SFT+RL MODE ---
+            if use_sft_hybrid:
+                sft_weight = getattr(self.config.trainer, 'sft_weight', 0.1)  # Default 10% SFT, 90% RL
+
+                # Compute SFT gradients on answer tokens
+                sft_loss, sft_grads, sft_metrics = self.grpo_algorithm.calculate_sft_loss_and_grads(
+                    B,
+                    B['reference_tokens'],
+                    self.config,
+                    self.tokenizer.pad_token_id
+                )
+
+                # Combine RL and SFT gradients for answer tokens
+                # answer_grads already scaled by answer_gradient_weight
+                answer_grads_scaled = tree_map(
+                    lambda g: g * answer_gradient_weight / self.config.trainer.grad_accum_steps,
+                    answer_grads
+                )
+
+                sft_grads_scaled = tree_map(
+                    lambda g: g * sft_weight / self.config.trainer.grad_accum_steps,
+                    sft_grads
+                )
+
+                # Combine: answer gets both RL and SFT
+                combined_answer_grads = tree_map(
+                    lambda rl, sft: rl + sft,
+                    answer_grads_scaled,
+                    sft_grads_scaled
+                )
+
+                # Log hybrid mode on first step
+                if not hasattr(self, '_hybrid_mode_logged'):
+                    logger.info(f"Hybrid RL+SFT training mode enabled:")
+                    logger.info(f"  Answer tokens: {answer_gradient_weight:.1f}x RL + {sft_weight:.1f}x SFT")
+                    logger.info(f"  SFT helps prevent answer drift during RL")
+                    self._hybrid_mode_logged = True
+
+                metrics.update(sft_metrics)
+                avg_loss = (thinking_loss.item() + answer_loss.item() + sft_loss.item()) / 3
+            else:
+                # Standard dual gradient (no SFT)
+                combined_answer_grads = tree_map(
+                    lambda g: g * answer_gradient_weight / self.config.trainer.grad_accum_steps,
+                    answer_grads
+                )
+                avg_loss = (thinking_loss.item() + answer_loss.item()) / 2
 
             # Log layer configuration on first dual gradient step
             if not hasattr(self, '_dual_grad_config_logged'):
@@ -184,15 +255,9 @@ class GRPOTrainer(BaseTrainer):
                 include_head=False
             )
 
-            # Scale answer gradients (2x weight by default)
-            answer_grads_scaled = tree_map(
-                lambda g: g * answer_gradient_weight / self.config.trainer.grad_accum_steps,
-                answer_grads
-            )
-
-            # Mask to answer layers (wider range, includes final layers)
+            # Mask combined answer gradients (RL or RL+SFT) to answer layers
             answer_grads_masked = mask_grads_to_layer_band(
-                answer_grads_scaled,
+                combined_answer_grads,
                 start=answer_layer_start,
                 end=answer_layer_end,
                 include_embed=False,
@@ -205,8 +270,6 @@ class GRPOTrainer(BaseTrainer):
                 thinking_grads_masked,
                 answer_grads_masked
             )
-
-            avg_loss = (thinking_loss.item() + answer_loss.item()) / 2
 
         else:
             # Standard gradient path (original behavior)
@@ -245,3 +308,4 @@ class GRPOTrainer(BaseTrainer):
 
 # End of File: ./grpo_trainer.py
 #</FILE>
+#-----------#

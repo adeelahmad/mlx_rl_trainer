@@ -3221,7 +3221,11 @@ class TrainerParams(BaseModel):
     thinking_layer_end:Optional[int] = Field(32)
     answer_layer_start:Optional[int] = Field(24)
     answer_layer_end:Optional[int] = Field(36)
-    answer_gradient_weight:Optional[int] = Field(2.2)
+    answer_gradient_weight:Optional[NonNegativeFloat] = Field(2.2)
+
+
+    use_sft_on_answer:bool = Field(True)
+    sft_weight:Optional[NonNegativeFloat] = Field(0.1)
 
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":

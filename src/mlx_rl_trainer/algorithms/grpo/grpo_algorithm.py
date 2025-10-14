@@ -1,3 +1,4 @@
+#-----------#
 # <FILE name="./grpo_algorithm.py">
 # Complete File with Dual Gradient (Thinking vs Answer) Support
 #
@@ -175,4 +176,71 @@ class GRPOAlgorithm:
 
         return thinking_loss, thinking_grads, answer_loss, answer_grads, metrics_dict
 
+    def calculate_sft_loss_and_grads(self, rollout_batch, reference_tokens, full_config, pad_token_id):
+        """
+        Compute SFT (supervised fine-tuning) loss and gradients on answer tokens only.
+
+        This provides a supervised signal to keep answers aligned with reference completions
+        while RL optimizes for rewards. Used in hybrid training where:
+        - Thinking tokens: RL only
+        - Answer tokens: RL + SFT
+
+        Args:
+            rollout_batch: Batch containing tokens and masks
+            reference_tokens: Ground truth tokens for supervised learning [batch, seq_len]
+            full_config: Experiment configuration
+            pad_token_id: ID of padding token
+
+        Returns:
+            loss: SFT loss value
+            grads: Gradients from SFT loss
+            metrics_dict: Dictionary with loss breakdown
+        """
+        A = rollout_batch
+
+        # Check if we have answer mask
+        if 'answer_mask' not in A:
+            logger.warning("Answer mask not found for SFT. Falling back to response_mask.")
+            answer_mask = A.get('response_mask', mx.ones_like(A['tokens'][:, :reference_tokens.shape[1]]))
+        else:
+            answer_mask = A['answer_mask']
+
+        def compute_sft_loss(actor_model):
+            """Compute cross-entropy loss on answer tokens only."""
+            tokens_key = 'tokens'
+
+            logits = actor_model(A[tokens_key])
+            if isinstance(logits, tuple):
+                logits = logits[0]
+            logits = logits.astype(mx.float32)
+
+            # Get the response portion
+            offset = A[tokens_key].shape[1] - answer_mask.shape[1]
+            shifted_logits = logits[:, offset-1:-1, :]  # Shift for next-token prediction
+            target_tokens = reference_tokens[:, 1:]  # Target is next token
+
+            # Compute cross-entropy loss
+            log_probs = nn.log_softmax(shifted_logits, axis=-1)
+            gathered_log_probs = mx.take_along_axis(log_probs, target_tokens[..., None], axis=-1).squeeze(-1)
+
+            # Apply answer mask - only compute loss on answer tokens
+            masked_log_probs = -gathered_log_probs * answer_mask
+
+            # Normalize by number of answer tokens
+            mask_sum = mx.sum(answer_mask)
+            loss = mx.sum(masked_log_probs) / (mask_sum + 1e-8)
+
+            return loss, {'sft_loss': loss}
+
+        try:
+            loss_grad_fn = nn.value_and_grad(self.actor, compute_sft_loss)
+            (loss, metrics), grads = loss_grad_fn(self.actor)
+            metrics_dict = {k: float(v.item()) for k, v in metrics.items()}
+            return loss, grads, metrics_dict
+        except Exception as e:
+            logger.error(f"Error during SFT loss computation: {e}", exc_info=True)
+            return mx.array(0.0), {}, {'sft_loss': 0.0}
+
 # End of File: ./grpo_algorithm.py
+#</FILE>
+#-----------#

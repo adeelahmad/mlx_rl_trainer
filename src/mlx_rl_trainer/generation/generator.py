@@ -360,6 +360,33 @@ def generate_rollouts_for_batch(
         rollout_batch["thinking_mask"] = thinking_mask
         rollout_batch["answer_mask"] = answer_mask
 
+    # Add reference tokens for SFT (if hybrid training enabled)
+    use_sft_hybrid = (
+        hasattr(config.trainer, 'use_sft_on_answer')
+        and config.trainer.use_sft_on_answer
+    )
+
+    if use_sft_hybrid:
+        try:
+            # Encode reference completions
+            reference_texts = [p["ref_answer_str"] for p in prompts_data_replicated]
+            reference_tokens_list = [tokenizer.encode(ref_text) for ref_text in reference_texts]
+
+            # Pad to same length as responses
+            max_ref_len = max(len(rt) for rt in reference_tokens_list)
+            reference_tokens_padded = []
+
+            for ref_tokens in reference_tokens_list:
+                padded = ref_tokens + [pad_id] * (max_ref_len - len(ref_tokens))
+                reference_tokens_padded.append(padded)
+
+            reference_tokens_mx = mx.array(reference_tokens_padded, dtype=mx.int32)
+            rollout_batch["reference_tokens"] = reference_tokens_mx
+
+            logger.debug(f"Added reference tokens for SFT hybrid training (shape: {reference_tokens_mx.shape})")
+        except Exception as e:
+            logger.warning(f"Failed to add reference tokens for SFT: {e}. Hybrid training will be disabled for this batch.")
+
     avg_reward = mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0
     avg_breakdown = {k: np.mean(v) for k, v in rewards_breakdown.items()}
 
