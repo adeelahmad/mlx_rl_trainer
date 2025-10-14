@@ -224,9 +224,9 @@ class GenerationConfig(BaseModel):
     answer_end_tag: str = Field("")
 
     # Sampling parameters
-    think_boost_tokens: int = Field(1)
-    think_temperature: NonNegativeFloat = Field(0.35)
-    answer_temperature: NonNegativeFloat = Field(0.2)
+    think_boost_tokens: int = Field(32)
+    think_temperature: NonNegativeFloat = Field(0.15)
+    answer_temperature: NonNegativeFloat = Field(0.12)
     sampling_top_p: NonNegativeFloat = Field(0.6)
     sampling_min_p: NonNegativeFloat = Field(0.00)
     sampling_top_k: int = Field(60)
@@ -234,7 +234,7 @@ class GenerationConfig(BaseModel):
     repetition_context_size: Optional[int] = Field(20)
 
     # Dynamic Bias Controls (from BEFORE_STATE)
-    min_think_tokens: int = Field(16)
+    min_think_tokens: int = Field(32)
     think_end_early_bias: float = Field(-12.0)
     bias_answer_start_after_min_think: bool = Field(True)
     bias_close_think: float = Field(9.0)
@@ -3160,7 +3160,7 @@ class GenerationConfig(BaseModel):
 
     encourage_phrases_for_bias: List[str] = Field(default_factory=lambda: [])
     encourage_think_bias: float = Field(4.5)
-    ban_think_bias: float = Field(-3.0)
+    ban_think_bias: float = Field(-5.0)
 
     # Tool Use Configuration
     allow_tool_calls: bool = Field(True)

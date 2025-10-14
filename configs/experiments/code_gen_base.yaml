@@ -11,7 +11,7 @@ trainer:
   grad_accum_steps: 1
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
-  seed: 429
+  seed: 419
 
 model:
   model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
@@ -23,8 +23,8 @@ model:
 data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
-  max_prompt_len: 150
-  max_gen_len: 128
+  max_prompt_len: 250
+  max_gen_len: 192
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -33,14 +33,14 @@ data:
 
 rewards:
   - name: "format_structure" # ADDED: A dedicated reward for getting the format right.
-    weight: 0.40
+    weight: 0.10
     config: {}
-  - name: "code_execution"
-    weight: 0.00 # ADJUSTED
+  - name: "thinking_quality"
+    weight: 0.20 # ADJUSTED
     config:
       timeout: 3
   - name: "semantic_similarity"
-    weight: 0.50 # ADJUSTED
+    weight: 0.60 # ADJUSTED
     config:
       method: "jaccard"
   - name: "steps_coverage"
