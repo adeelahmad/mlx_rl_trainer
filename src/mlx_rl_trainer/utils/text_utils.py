@@ -434,8 +434,8 @@ If problem unsolvable → state why concisely, don't elaborate or overthink
 \nThink like: debugger output, medical chart notes, trading floor shorthand, or military briefing.
 COMPRESS EVERYTHING. Every word must earn its place."""
     system_prompt = _THINK_STYLE_PROMPT
-    if system_prompt and system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt.strip()})
+    # if system_prompt and system_prompt.strip():
+    #     messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(
@@ -515,8 +515,8 @@ If problem unsolvable → state why concisely, don't elaborate or overthink
 COMPRESS EVERYTHING. Every word must earn its place."""
     system_prompt = _THINK_STYLE_PROMPT
 
-    if system_prompt and system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt.strip()})
+    # if system_prompt and system_prompt.strip():
+    #     messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(
@@ -643,7 +643,316 @@ def _first_token_ids_for_lexemes(tokenizer: TokenizerWrapper, lexemes: Sequence[
     return sorted(list(ids))
 
 
+
 class TwoBlockFormatter:
+    def __init__(
+        self,
+        think_start: str,
+        think_end: str,
+        answer_start: str,
+        answer_end: str,
+        validate_json: bool = False,
+    ):
+        self.ts = think_start
+        self.te = think_end
+        self.as_ = answer_start
+        self.ae = answer_end
+        self.validate_json = validate_json
+
+        # Build regex patterns, handling empty strings
+        if self.ts and self.te:
+            self._re_think = re.compile(
+                re.escape(self.ts) + r"(.*?)" + re.escape(self.te), re.DOTALL
+            )
+        else:
+            self._re_think = None
+
+        if self.as_ and self.ae:
+            self._re_answer = re.compile(
+                re.escape(self.as_) + r"(.*?)" + re.escape(self.ae), re.DOTALL
+            )
+        else:
+            self._re_answer = None
+
+    def _extract_json_from_text(self, text: str) -> str:
+        """
+        Extract JSON from text, handling markdown code blocks.
+        Strips ```json or ``` blocks if present.
+        """
+        text = text.strip()
+
+        # Remove markdown code blocks
+        if text.startswith("```"):
+            first_newline = text.find("\n")
+            if first_newline != -1:
+                text = text[first_newline + 1 :]
+            else:
+                text = text[3:]
+
+        if text.endswith("```"):
+            text = text[:-3]
+
+        return text.strip()
+
+    def _looks_like_json(self, text: str) -> bool:
+        """Check if text looks like it's trying to be JSON."""
+        text = text.strip()
+
+        # Remove markdown code blocks first
+        text = self._extract_json_from_text(text)
+
+        # Check if it starts with JSON indicators
+        return text.startswith("{") or text.startswith("[")
+
+    def _validate_json_content(self, content: str) -> float:
+        """
+        Validate if content is valid JSON.
+        Returns 0.5 for valid JSON, 0.0 for invalid.
+        """
+        if not content or content == "Insufficient information.":
+            return 0.0
+
+        json_text = self._extract_json_from_text(content)
+
+        try:
+            json.loads(json_text)
+            return 0.5
+        except (json.JSONDecodeError, ValueError):
+            return 0.0
+
+    def _coerce_one(self, s: str) -> str:
+        if s is None:
+            s = ""
+
+        s = s.strip()
+
+        if not s:
+            return f"{self.ts}…{self.te}\n{self.as_}Insufficient information.{self.ae}"
+
+        i_ts = s.find(self.ts) if self.ts else -1
+
+        if i_ts == -1:
+            ans = _strip_specials(s or "Insufficient information.")
+            if self.te:
+                ans = ans.replace(self.te, "")
+            return f"{self.ts}…{self.te}\n{self.as_}{ans}{self.ae}"
+
+        s = s[i_ts:]
+        i_te = s.find(self.te, len(self.ts)) if self.te else -1
+
+        if i_te == -1:
+            s = s + self.te
+            i_te = len(s) - len(self.te)
+
+        think_body = s[len(self.ts) : i_te].strip()
+        if not think_body:
+            think_body = "…"
+        think_body = _strip_specials(think_body)
+
+        remainder = s[i_te + len(self.te) :].strip()
+
+        if self.as_ and self.ae:
+            i_as = remainder.find(self.as_)
+            if i_as != -1:
+                remainder = remainder[i_as + len(self.as_) :]
+                i_ae = remainder.find(self.ae)
+
+                if i_ae != -1:
+                    answer_body = remainder[:i_ae].strip()
+                else:
+                    answer_body = remainder.strip()
+            else:
+                answer_body = remainder
+        elif self.as_ and not self.ae:
+            i_as = remainder.find(self.as_)
+            if i_as != -1:
+                answer_body = remainder[i_as + len(self.as_) :].strip()
+            else:
+                answer_body = remainder
+        else:
+            answer_body = remainder
+
+        answer_body = _strip_specials(answer_body)
+        if self.te:
+            answer_body = answer_body.replace(self.te, "")
+
+        if not answer_body:
+            answer_body = "Insufficient information."
+
+        final = f"{self.ts}{think_body}{self.te}\n{self.as_}{answer_body}{self.ae}"
+
+        if self.ae:
+            j_ae = final.rfind(self.ae)
+            if j_ae != -1:
+                final = final[: j_ae + len(self.ae)]
+
+        return final
+
+    def _score_one(
+        self, s: str, detailed: bool = False
+    ) -> Union[float, Dict[str, float]]:
+        """
+        Score how well-formatted the text is with granular partial credit.
+
+        Special case: If output looks like JSON (starts with { or [), no think block required!
+
+        Normal format: <think>COT</think>\nAnswer
+        - Answer tags are OPTIONAL
+        - Everything after </think> is the answer
+
+        Format scoring rubric:
+        - 0.0: No think block and doesn't look like JSON
+        - 0.1: Think block exists but not at the start
+        - 0.2: Starts with think tag but not properly closed OR has nested/duplicate tags
+        - 0.3: Complete think block but empty content
+        - 0.4: Complete think block with content but missing/empty answer
+        - 0.5: Perfect format OR valid JSON output (no think needed)
+        """
+        result = {"reward_format": 0.0, "reward_content": 0.0, "reward_total": 0.0}
+
+        if not s:
+            return result if detailed else 0.0
+
+        s = s.strip()
+        answer_content = ""
+
+        # SPECIAL CASE: If it looks like JSON, format is perfect even without think!
+        if self._looks_like_json(s):
+            result["reward_format"] = 0.5
+            answer_content = s
+
+            # Validate the JSON if enabled
+            if self.validate_json:
+                result["reward_content"] = self._validate_json_content(answer_content)
+                result["reward_total"] = (
+                    result["reward_format"] * result["reward_content"]
+                )
+            else:
+                result["reward_total"] = result["reward_format"]
+
+            return result if detailed else result["reward_total"]
+
+        # Otherwise, require think block format
+        if self._re_think:
+            m_think = self._re_think.search(s)
+            if not m_think:
+                # No complete think block found
+                if self.ts and self.ts in s:
+                    if s.startswith(self.ts):
+                        result["reward_format"] = 0.2  # Starts but not closed
+                    else:
+                        result["reward_format"] = 0.1  # Has tag but not at start
+                else:
+                    result["reward_format"] = 0.0  # No think block
+
+                result["reward_total"] = result["reward_format"]
+                return result if detailed else result["reward_total"]
+
+            # Must start at the beginning
+            if not s.startswith(self.ts):
+                result["reward_format"] = 0.1
+                result["reward_total"] = result["reward_format"]
+                return result if detailed else result["reward_total"]
+
+            # Check think body for nested tags
+            think_body = (m_think.group(1) or "").strip()
+
+            if self.ts and self.ts in think_body:
+                # Nested think start tag - malformed!
+                result["reward_format"] = 0.2
+                result["reward_total"] = result["reward_format"]
+                return result if detailed else result["reward_total"]
+
+            if self.te and self.te in think_body:
+                # Nested think end tag - malformed!
+                result["reward_format"] = 0.2
+                result["reward_total"] = result["reward_format"]
+                return result if detailed else result["reward_total"]
+
+            # Think body must have content
+            if not think_body:
+                result["reward_format"] = 0.3
+                result["reward_total"] = result["reward_format"]
+                return result if detailed else result["reward_total"]
+
+            # Extract everything after </think> - this is the answer
+            after_think = s[m_think.end() :].strip()
+
+            # Answer tags are OPTIONAL
+            # We just need SOME content after </think>
+            if not after_think:
+                result["reward_format"] = 0.4  # No answer content
+                result["reward_total"] = result["reward_format"]
+                return result if detailed else result["reward_total"]
+
+            # If answer tags are provided, extract content from within them
+            if self.as_ and self.ae and after_think.startswith(self.as_):
+                if self._re_answer:
+                    m_ans = self._re_answer.search(after_think)
+                    if m_ans:
+                        ans_body = (m_ans.group(1) or "").strip()
+                        if not ans_body:
+                            result["reward_format"] = 0.4  # Empty answer
+                            result["reward_total"] = result["reward_format"]
+                            return result if detailed else result["reward_total"]
+
+                        # Check for nested tags in answer
+                        if self.ts in ans_body or self.te in ans_body:
+                            result["reward_format"] = 0.2  # Nested tags
+                            result["reward_total"] = result["reward_format"]
+                            return result if detailed else result["reward_total"]
+
+                        answer_content = ans_body
+
+                        # Check for trailing junk after </answer>
+                        tail = after_think[m_ans.end() :].strip()
+                        if tail:
+                            result["reward_format"] = 0.4  # Extra content
+                            result["reward_total"] = result["reward_format"]
+                            return result if detailed else result["reward_total"]
+                    else:
+                        # Has <answer> but not closed
+                        result["reward_format"] = 0.4
+                        result["reward_total"] = result["reward_format"]
+                        return result if detailed else result["reward_total"]
+            else:
+                # No answer tags or doesn't start with answer tag
+                # Just use whatever content is after </think>
+                answer_content = after_think
+
+                # Check for nested think tags in the answer content
+                if self.ts in answer_content or self.te in answer_content:
+                    result["reward_format"] = 0.2  # Nested tags
+                    result["reward_total"] = result["reward_format"]
+                    return result if detailed else result["reward_total"]
+
+            # Perfect format!
+            result["reward_format"] = 0.5
+        else:
+            result["reward_total"] = 0.0
+            return result if detailed else 0.0
+
+        # Validate JSON content if enabled
+        if self.validate_json and answer_content:
+            result["reward_content"] = self._validate_json_content(answer_content)
+            result["reward_total"] = result["reward_format"] * result["reward_content"]
+        else:
+            result["reward_total"] = result["reward_format"]
+
+        return result if detailed else result["reward_total"]
+
+    def coerce_batch(self, texts: Sequence[str]) -> List[str]:
+        """Coerce a batch of texts to proper format."""
+        return [self._coerce_one(t) for t in texts]
+
+    def score_batch(
+        self, texts: Sequence[str], detailed: bool = False
+    ) -> Union[List[float], List[Dict[str, float]]]:
+        """Score a batch of texts for formatting quality."""
+        return [self._score_one(t, detailed=detailed) for t in texts]
+
+
+class TwoBlockFormatter2:
     """Utility class used in BEFORE_STATE for coercing and scoring text format."""
 
     def __init__(

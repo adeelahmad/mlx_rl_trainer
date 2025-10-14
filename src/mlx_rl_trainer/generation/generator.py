@@ -6,6 +6,7 @@ FIXES APPLIED:
 2. Fallback to character-based estimation if progressive decode fails
 3. Comprehensive validation and error logging
 4. Clear warnings for edge cases (no thinking tokens, no answer tokens, etc.)
+5. Removed unused PagedKVCache - was a parameter but never actually used
 
 FORMAT REQUIREMENT:
 Your model must generate responses in this format:
@@ -38,7 +39,6 @@ import numpy as np
 
 from mlx_rl_trainer.core.config import ExperimentConfig
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
-
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 from mlx_rl_trainer.utils.mlx_utils import (
     _create_4d_attention_mask,
