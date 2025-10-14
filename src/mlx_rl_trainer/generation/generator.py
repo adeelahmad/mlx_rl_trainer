@@ -368,24 +368,52 @@ def generate_rollouts_for_batch(
 
     if use_sft_hybrid:
         try:
-            # Encode reference completions
-            reference_texts = [p["ref_answer_str"] for p in prompts_data_replicated]
-            reference_tokens_list = [tokenizer.encode(ref_text) for ref_text in reference_texts]
+            # We need only the response portion of references to match generated responses
+            reference_response_tokens_list = []
 
-            # Pad to same length as responses
-            max_ref_len = max(len(rt) for rt in reference_tokens_list)
+            for i, prompt_data in enumerate(prompts_data_replicated):
+                ref_text = prompt_data["ref_answer_str"]
+
+                # Strategy 1: Use prompt_len if available
+                if "prompt_len" in prompt_data:
+                    prompt_len = prompt_data["prompt_len"]
+                    ref_full_tokens = tokenizer.encode(ref_text)
+                    ref_response_tokens = ref_full_tokens[prompt_len:]
+
+                # Strategy 2: Encode prompt separately and subtract
+                elif "text" in prompt_data:
+                    prompt_text = prompt_data["text"]
+                    prompt_tokens = tokenizer.encode(prompt_text)
+                    ref_full_tokens = tokenizer.encode(ref_text)
+                    ref_response_tokens = ref_full_tokens[len(prompt_tokens):]
+
+                # Strategy 3: Just use the reference as-is (fallback)
+                else:
+                    logger.warning(f"Cannot determine prompt length for sample {i}, using full reference")
+                    ref_response_tokens = tokenizer.encode(ref_text)
+
+                reference_response_tokens_list.append(ref_response_tokens)
+
+            # Pad/truncate to match generated response length
+            max_response_len = responses_mx.shape[1]
             reference_tokens_padded = []
 
-            for ref_tokens in reference_tokens_list:
-                padded = ref_tokens + [pad_id] * (max_ref_len - len(ref_tokens))
+            for ref_tokens in reference_response_tokens_list:
+                if len(ref_tokens) > max_response_len:
+                    # Truncate if reference is longer
+                    padded = ref_tokens[:max_response_len]
+                else:
+                    # Pad if reference is shorter
+                    padded = ref_tokens + [pad_id] * (max_response_len - len(ref_tokens))
                 reference_tokens_padded.append(padded)
 
             reference_tokens_mx = mx.array(reference_tokens_padded, dtype=mx.int32)
             rollout_batch["reference_tokens"] = reference_tokens_mx
 
-            logger.debug(f"Added reference tokens for SFT hybrid training (shape: {reference_tokens_mx.shape})")
+            logger.debug(f"Added reference tokens for SFT (response-only, shape: {reference_tokens_mx.shape}, matches generated: {responses_mx.shape})")
+
         except Exception as e:
-            logger.warning(f"Failed to add reference tokens for SFT: {e}. Hybrid training will be disabled for this batch.")
+            logger.error(f"Failed to add reference tokens for SFT: {e}. Hybrid training disabled for this batch.", exc_info=True)
 
     avg_reward = mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0
     avg_breakdown = {k: np.mean(v) for k, v in rewards_breakdown.items()}

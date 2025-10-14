@@ -187,7 +187,7 @@ class GRPOAlgorithm:
 
         Args:
             rollout_batch: Batch containing tokens and masks
-            reference_tokens: Ground truth tokens for supervised learning [batch, seq_len]
+            reference_tokens: Ground truth RESPONSE tokens (not including prompt) [batch, response_len]
             full_config: Experiment configuration
             pad_token_id: ID of padding token
 
@@ -201,33 +201,56 @@ class GRPOAlgorithm:
         # Check if we have answer mask
         if 'answer_mask' not in A:
             logger.warning("Answer mask not found for SFT. Falling back to response_mask.")
-            answer_mask = A.get('response_mask', mx.ones_like(A['tokens'][:, :reference_tokens.shape[1]]))
+            answer_mask = A.get('response_mask', mx.ones_like(reference_tokens, dtype=mx.float32))
         else:
             answer_mask = A['answer_mask']
 
         def compute_sft_loss(actor_model):
             """Compute cross-entropy loss on answer tokens only."""
             tokens_key = 'tokens'
+            response_mask_key = 'response_mask'
 
+            # Get logits for full sequence
             logits = actor_model(A[tokens_key])
             if isinstance(logits, tuple):
                 logits = logits[0]
             logits = logits.astype(mx.float32)
 
-            # Get the response portion
-            offset = A[tokens_key].shape[1] - answer_mask.shape[1]
-            shifted_logits = logits[:, offset-1:-1, :]  # Shift for next-token prediction
-            target_tokens = reference_tokens[:, 1:]  # Target is next token
+            # Extract response portion logits
+            # offset tells us where response starts in the full sequence
+            offset = A[tokens_key].shape[1] - A[response_mask_key].shape[1]
+
+            # Shift logits for next-token prediction: logits[t] predicts token[t+1]
+            response_logits = logits[:, offset-1:-1, :]  # [batch, response_len, vocab]
+
+            # Reference tokens are already response-only, shift for next-token prediction
+            target_tokens = reference_tokens[:, 1:]  # [batch, response_len-1]
+
+            # Answer mask also needs to exclude first token to align with targets
+            current_answer_mask = answer_mask[:, 1:] if answer_mask.shape[1] > 1 else answer_mask
+
+            # Verify shapes match and truncate if needed
+            min_len = min(response_logits.shape[1], target_tokens.shape[1], current_answer_mask.shape[1])
+
+            if response_logits.shape[1] != target_tokens.shape[1] or response_logits.shape[1] != current_answer_mask.shape[1]:
+                logger.debug(f"Aligning SFT shapes: logits {response_logits.shape[1]} vs targets {target_tokens.shape[1]} vs mask {current_answer_mask.shape[1]} -> {min_len}")
+                response_logits = response_logits[:, :min_len, :]
+                target_tokens = target_tokens[:, :min_len]
+                current_answer_mask = current_answer_mask[:, :min_len]
 
             # Compute cross-entropy loss
-            log_probs = nn.log_softmax(shifted_logits, axis=-1)
-            gathered_log_probs = mx.take_along_axis(log_probs, target_tokens[..., None], axis=-1).squeeze(-1)
+            log_probs = nn.log_softmax(response_logits, axis=-1)
+            gathered_log_probs = mx.take_along_axis(
+                log_probs,
+                target_tokens[..., None],
+                axis=-1
+            ).squeeze(-1)
 
             # Apply answer mask - only compute loss on answer tokens
-            masked_log_probs = -gathered_log_probs * answer_mask
+            masked_log_probs = -gathered_log_probs * current_answer_mask
 
             # Normalize by number of answer tokens
-            mask_sum = mx.sum(answer_mask)
+            mask_sum = mx.sum(current_answer_mask)
             loss = mx.sum(masked_log_probs) / (mask_sum + 1e-8)
 
             return loss, {'sft_loss': loss}

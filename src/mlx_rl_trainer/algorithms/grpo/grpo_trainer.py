@@ -122,7 +122,6 @@ class GRPOTrainer(BaseTrainer):
             dataset=self.data_manager._train_dataset,
             config=self.config,
             reward_composer=self.reward_composer,
-            paged_kv_cache=self.paged_kv_cache,
             run_id=self._run_id,
             current_update=update_step,
             is_invalid_batch=is_invalid_batch
