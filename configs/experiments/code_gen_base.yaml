@@ -8,7 +8,7 @@ trainer:
   learning_rate: 2e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
-  grad_accum_steps: 2
+  grad_accum_steps: 1
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
   seed: 4291

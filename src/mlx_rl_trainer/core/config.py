@@ -181,7 +181,7 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        10, description="Save a full checkpoint every N training updates."
+        20, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         2, description="Number of most recent checkpoints to retain."
@@ -3218,14 +3218,14 @@ class TrainerParams(BaseModel):
 
     use_dual_gradients: bool = Field(True)
     thinking_layer_start: Optional[int] = Field(20)
-    thinking_layer_end: Optional[int] = Field(32)
-    answer_layer_start: Optional[int] = Field(24)
+    thinking_layer_end: Optional[int] = Field(24)
+    answer_layer_start: Optional[int] = Field(22)
     answer_layer_end: Optional[int] = Field(36)
-    answer_gradient_weight: Optional[NonNegativeFloat] = Field(2.2)
+    answer_gradient_weight: Optional[NonNegativeFloat] = Field(4.2)
 
     # NEW: Hybrid RL+SFT
     use_sft_on_answer: bool = Field(True)
-    sft_weight: Optional[NonNegativeFloat] = Field(0.1)
+    sft_weight: Optional[NonNegativeFloat] = Field(0.2)
 
     # NEW: Adaptive balancing (CRITICAL!)
     adaptive_gradient_weights: bool = Field(True)

@@ -298,12 +298,16 @@ def generate_rollouts_for_batch(
     # --- Reward Calculation ---
     decoded = tokenizer.batch_decode(responses_mx.tolist(), skip_special_tokens=False)
 
+    # In case max_thinking_tokens might not exist
     contexts = [
         reward_composer.context_cls(
             generated_text=decoded[i],
             prompt_text=prompts_data_replicated[i]["text"],
             reference_completion=prompts_data_replicated[i]["ref_answer_str"],
-            metadata=prompts_data_replicated[i],
+            metadata={
+                **prompts_data_replicated[i],
+                'max_thinking_tokens': getattr(config.trainer, 'max_thinking_tokens', 80),  # Safe access with default
+            },
             update_step=current_update,
         )
         for i in range(total_samples)
