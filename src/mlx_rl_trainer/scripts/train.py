@@ -28,7 +28,7 @@ except ImportError:
 from mlx_rl_trainer.algorithms.grpo.grpo_trainer import GRPOTrainer
 from mlx_rl_trainer.core.checkpoint_manager import CheckpointManager
 from mlx_rl_trainer.core.config import ExperimentConfig
-from mlx_rl_trainer.core.dataset_manager import DatasetManager
+from mlx_rl_trainer.data.dataset_manager import DatasetManager
 from mlx_rl_trainer.core.exceptions import CustomBaseException
 from mlx_rl_trainer.core.model_manager import ModelManager
 from mlx_rl_trainer.monitoring.metrics_logger import MetricsLogger, _emit_plots_from_csv

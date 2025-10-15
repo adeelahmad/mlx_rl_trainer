@@ -36,7 +36,10 @@ wandb_run = None  # Global variable to hold the wandb run object
 
 
 def _aggressive_memory_cleanup():
-    mx.clear_cache()
+    try:
+        mx.clear_cache()
+    except Exception:
+        pass
     gc.collect()
 
 
@@ -99,15 +102,10 @@ def _emit_plots_from_csv(
     config: ExperimentConfig,
     run_id: Optional[str] = None,
 ):
-    if (
-        not (PANDAS_AVAILABLE and MPL_AVAILABLE)
-        or not csv_path.exists()
-        or csv_path.stat().st_size == 0
-    ):
+    if not (PANDAS_AVAILABLE and MPL_AVAILABLE) or not csv_path.exists():
         return
     try:
         df = pd.read_csv(csv_path, on_bad_lines="skip")
-        # **THE FIX**: Check if 'step' column exists before proceeding
         if df.empty or "step" not in df.columns:
             logger.warning(
                 "Metrics CSV is empty or missing 'step' column. Skipping plot generation."
@@ -115,15 +113,14 @@ def _emit_plots_from_csv(
             return
 
         df = df.sort_values("step").drop_duplicates("step", keep="last")
-
         plot_dir = out_dir / "plots"
-        plot_dir.mkdir(exist_ok=True, parents=True)
+        plot_dir.mkdir(exist_ok=True)
         wandb_images = {}
         for col in df.columns:
             if (
                 "step" != col
                 and "run_id" != col
-                and pd.api.types.is_numeric_dtype(df[col])
+                and df[col].dtype in ["float64", "int64"]
                 and not df[col].isnull().all()
             ):
                 fig, ax = plt.subplots()
@@ -141,6 +138,7 @@ def _emit_plots_from_csv(
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
     finally:
+        plt.close("all")
         _aggressive_memory_cleanup()
 
 
@@ -162,21 +160,39 @@ def _maybe_log_samples(
     samples = []
     for i in range(min(config.monitoring.max_logged_samples, len(decoded_responses))):
         p_info = prompts_data[i]
-        sample = {
+        sample_dict = {
             "step": update_idx,
-            "prompt": _preview(p_info.get("text", "")),
+            "prompt": _preview(p_info.get("text", ""))
+            if config.monitoring.log_prompts
+            else "[PROMPT REDACTED]",
             "generated": _preview(decoded_responses[i]),
             "reference": _preview(p_info.get("ref_answer_str", "")),
             **{f"reward_{k}": v[i] for k, v in rewards_data.items()},
         }
-        samples.append(sample)
+        samples.append(sample_dict)
 
-    if WANDB_AVAILABLE and wandb_run and samples:
+    if not samples:
+        return
+
+    # --- Log to W&B ---
+    if WANDB_AVAILABLE and wandb_run:
         try:
-            table = wandb.Table(
-                columns=list(samples[0].keys()),
-                data=[list(s.values()) for s in samples],
-            )
+            df = pd.DataFrame(samples)
+            table = wandb.Table(dataframe=df)
             wandb.log({"samples/generations": table}, step=update_idx)
         except Exception as e:
-            logger.error(f"Failed to log samples to W&B: {e}")
+            logger.error(f"Failed to log samples to W&B: {e}", exc_info=True)
+
+    # --- Log to local JSONL file ---
+    # <-- FIX: THIS BLOCK WAS MISSING -->
+    try:
+        # Determine the log path. Use the configured path or a default.
+        log_path = (
+            config.monitoring.sample_log_path
+            or config.trainer.output_dir / f"samples_{run_id}.jsonl"
+        )
+        with open(log_path, "a", encoding="utf-8") as f:
+            for sample in samples:
+                f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to write samples to JSONL file: {e}", exc_info=True)

@@ -199,7 +199,7 @@ class CheckpointConfig(BaseModel):
         3, description="Number of most recent checkpoints to retain."
     )
     save_optimizer_state: bool = Field(
-        True, description="Whether to save the optimizer's state."
+        False, description="Whether to save the optimizer's state."
     )
     save_best: bool = Field(
         True,
@@ -3200,6 +3200,7 @@ class TrainerParams(BaseModel):
     algorithm: Literal["grpo", "ppo"] = Field("grpo")
     output_dir: Path = Field(Path("./outputs"))
     num_training_steps: PositiveInt = Field(45869)
+    validate_every: PositiveInt = Field(10)
     learning_rate: NonNegativeFloat = Field(2e-6)
     ppo_batch_size: PositiveInt = Field(1)
     num_rollout_samples: PositiveInt = Field(2)

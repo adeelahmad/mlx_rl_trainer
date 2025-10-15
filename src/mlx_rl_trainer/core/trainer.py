@@ -11,7 +11,7 @@ from tqdm import trange
 
 from mlx_rl_trainer.core.checkpoint_manager import CheckpointManager
 from mlx_rl_trainer.core.config import ExperimentConfig
-from mlx_rl_trainer.core.dataset_manager import DatasetManager
+from mlx_rl_trainer.data.dataset_manager import DatasetManager
 from mlx_rl_trainer.core.model_manager import ModelManager
 from mlx_rl_trainer.core.types import EvaluationMetrics, TrainingMetrics
 from mlx_rl_trainer.evaluation.registry import EvaluatorRegistry

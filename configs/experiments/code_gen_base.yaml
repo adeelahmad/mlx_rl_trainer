@@ -3,7 +3,7 @@
 
 trainer:
   algorithm: "grpo"
-  output_dir: "./outputs/code_gen_run_006"
+  output_dir: "./outputs/code_gen_run_007"
   num_training_steps: 80000
   learning_rate: 1e-3 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
@@ -15,7 +15,7 @@ trainer:
   memory_limit_gb: 80
 
 model:
-  model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
+  model_path: "./outputs/code_gen_run_006/checkpoints/latest"
   ref_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   base_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   use_lora: false
