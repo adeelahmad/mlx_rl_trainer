@@ -189,7 +189,7 @@ def _maybe_log_samples(
         # Determine the log path. Use the configured path or a default.
         log_path = (
             config.monitoring.sample_log_path
-            or config.trainer.output_dir / f"samples_{run_id}.jsonl"
+            or config.trainer.output_dir / f"samples_debug_rollouts.jsonl"
         )
         with open(log_path, "a", encoding="utf-8") as f:
             for sample in samples:

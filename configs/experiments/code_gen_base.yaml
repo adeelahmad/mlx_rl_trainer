@@ -5,14 +5,14 @@ trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_007"
   num_training_steps: 80000
-  learning_rate: 1e-3 # CORRECTED: Lowered to a safe value for fine-tuning.
+  learning_rate: 2e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
-  grad_accum_steps: 3
+  grad_accum_steps: 2
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
   seed: -1
-  memory_limit_gb: 80
+  memory_limit_gb: 85
 
 model:
   model_path: "./outputs/code_gen_run_006/checkpoints/latest"
@@ -25,7 +25,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 256
+  max_gen_len: 512
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -38,21 +38,21 @@ rewards:
     config: {}
 
   - name: "thinking_quality"
-    weight: 0.35
+    weight: 0.40
     config:
       timeout: 3
       # NEW: Length constraints for 128 token budget
-      target_length_min: 60
-      target_length_max: 160
-      optimal_length_min: 80
-      optimal_length_max: 120
-      excessive_length_threshold: 180
+      target_length_min: 30
+      target_length_max: 80
+      optimal_length_min: 40
+      optimal_length_max: 60
+      excessive_length_threshold: 90
       excessive_length_penalty: 0.5
       conciseness_bonus: 0.15
-      use_trainer_thinking_limits: true # Use trainer max_thinking_tokens
+      use_trainer_thinking_limits: false # Use trainer max_thinking_tokens
 
   - name: "semantic_similarity"
-    weight: 0.55
+    weight: 0.40
     config:
       method: "jaccard"
 
