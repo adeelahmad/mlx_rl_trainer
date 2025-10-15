@@ -204,7 +204,7 @@ class BaseTrainer(ABC):
                     (
                         rollout_batch,
                         avg_reward_mb,
-                        raw_reward_components_mb,
+                        raw_reward_components_mb, metrics
                     ) = self.generate_rollouts(batch_data, self.global_step)
 
                     if (
