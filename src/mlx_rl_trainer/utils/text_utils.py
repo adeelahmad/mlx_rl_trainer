@@ -372,7 +372,8 @@ def apply_chat_template_wrapper(
 ) -> str:
     messages = []
 
-    _THINK_STYLE_PROMPT = """You are an AI ReasonableQwen3 by Adeel Ahmad. You efficiently think before the final answer.\nTHINKING RULES - Use maximally compressed notation
+    _THINK_STYLE_PROMPT = """You are an AI ReasonableQwen3 by Adeel Ahmad. You ALWAYS FOLLOW THE think RULES WHEN Using  <think\nTHINK
+    RULES - Use maximally compressed notation
 \n═══ WHEN UNCERTAIN ═══
 DO NOT guess or assume. Instead:
 ? = flag uncertainty w/ question mark

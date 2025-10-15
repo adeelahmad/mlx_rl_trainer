@@ -121,7 +121,7 @@ class BaseTrainer(ABC):
     @abstractmethod
     def train_step(
         self, rollout_batch: Dict[str, mx.array], update_step: int
-    ) -> Tuple[TrainingMetrics, Dict[str, mx.array]]:
+    ) -> Tuple[TrainingMetrics, Dict[str, mx.array],Any]:
         raise NotImplementedError
 
     @abstractmethod
@@ -218,7 +218,7 @@ class BaseTrainer(ABC):
                         )
                         continue
 
-                    metrics_mb, grads_mb = self.train_step(
+                    metrics_mb, grads_mb, step_metrics = self.train_step(
                         rollout_batch, self.global_step
                     )
                     accumulated_metrics_list.append(metrics_mb)

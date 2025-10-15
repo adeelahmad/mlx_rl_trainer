@@ -58,140 +58,7 @@ from mlx_rl_trainer.algorithms.grpo.grpo_algorithm import GRPOAlgorithm
 logger = logging.getLogger(__name__)
 
 
-def _create_thinking_answer_masksx(
-    responses_mx: mx.array,
-    decoded_responses: List[str],
-    tokenizer: TokenizerWrapper,
-    config: ExperimentConfig,
-    pad_id: int,
-) -> Tuple[mx.array, mx.array]:
-    """
-    Create masks to separate thinking and answer tokens.
-
-    Format assumption: <think>reasoning here</think>answer here
-    - Thinking: Everything up to and including </think>
-    - Answer: Everything after </think>
-
-    Args:
-        responses_mx: Token IDs of generated responses [batch, seq_len]
-        decoded_responses: Decoded text of responses
-        tokenizer: Tokenizer for encoding/decoding
-        config: Experiment configuration
-        pad_id: Padding token ID
-
-    Returns:
-        thinking_mask: 1.0 for thinking tokens (including tags), 0.0 elsewhere [batch, seq_len]
-        answer_mask: 1.0 for answer tokens, 0.0 elsewhere [batch, seq_len]
-    """
-    batch_size, seq_len = responses_mx.shape
-    thinking_mask_list = []
-    answer_mask_list = []
-
-    think_end_tag = '</think>'
-    max_thinking_tokens = getattr(config.trainer, 'max_thinking_tokens', 80)  # Default 80 for 128 token budget
-
-    thinking_lengths = []
-    answer_lengths = []
-    missing_answer_count = 0
-
-    for batch_idx in range(batch_size):
-        decoded_text = decoded_responses[batch_idx]
-        response_tokens = responses_mx[batch_idx].tolist()
-
-        # Find where </think> tag ends in the decoded text
-        thinking_end_pos = decoded_text.find(think_end_tag)
-
-        # Create masks
-        thinking_mask = mx.zeros(seq_len, dtype=mx.float32)
-        answer_mask = mx.zeros(seq_len, dtype=mx.float32)
-
-        if thinking_end_pos == -1:
-            # No </think> tag found - treat all as thinking tokens
-            # This is a PROBLEM in constrained sequences!
-            thinking_token_count = 0
-            for i in range(seq_len):
-                if response_tokens[i] != pad_id:
-                    thinking_mask[i] = 1.0
-                    thinking_token_count += 1
-
-            missing_answer_count += 1
-            thinking_lengths.append(thinking_token_count)
-            answer_lengths.append(0)
-
-            logger.warning(f"Sample {batch_idx}: No </think> tag found - all {thinking_token_count} tokens are thinking (NO ANSWER SECTION!)")
-        else:
-            # Find token boundary by decoding progressively
-            # This is more accurate than re-encoding substrings
-            thinking_end_pos_with_tag = thinking_end_pos + len(think_end_tag)
-
-            # Decode token by token to find exact boundary
-            thinking_token_count = 0
-            accumulated_text = ""
-
-            for i in range(seq_len):
-                if response_tokens[i] == pad_id:
-                    break
-
-                # Decode up to this token
-                token_text = tokenizer.decode([response_tokens[i]])
-                accumulated_text += token_text
-
-                # Check if we've passed the </think> tag
-                if len(accumulated_text) >= thinking_end_pos_with_tag:
-                    thinking_token_count = i + 1
-                    break
-
-            # If we couldn't find the boundary properly, fall back to character-based estimate
-            if thinking_token_count == 0 and thinking_end_pos_with_tag > 0:
-                # Rough estimate: assume average token length
-                avg_char_per_token = len(decoded_text) / max(1, seq_len - response_tokens.count(pad_id))
-                thinking_token_count = min(seq_len, int(thinking_end_pos_with_tag / avg_char_per_token) + 1)
-
-            # Set thinking tokens (everything up to and including </think>)
-            for i in range(min(thinking_token_count, seq_len)):
-                if response_tokens[i] != pad_id:
-                    thinking_mask[i] = 1.0
-
-            # Set answer tokens (everything after </think>)
-            answer_token_count = 0
-            for i in range(thinking_token_count, seq_len):
-                if response_tokens[i] != pad_id:
-                    answer_mask[i] = 1.0
-                    answer_token_count += 1
-
-            thinking_lengths.append(thinking_token_count)
-            answer_lengths.append(answer_token_count)
-
-            # Warn about imbalanced token distribution in constrained sequences
-            if thinking_token_count > max_thinking_tokens:
-                logger.warning(f"Sample {batch_idx}: Excessive thinking - {thinking_token_count} tokens (>{max_thinking_tokens} limit), only {answer_token_count} answer tokens remaining")
-
-        thinking_mask_list.append(thinking_mask[None, :])
-        answer_mask_list.append(answer_mask[None, :])
-
-    thinking_mask_batch = mx.concatenate(thinking_mask_list, axis=0)
-    answer_mask_batch = mx.concatenate(answer_mask_list, axis=0)
-
-    # Log aggregate statistics for monitoring
-    if thinking_lengths:
-        avg_thinking = sum(thinking_lengths) / len(thinking_lengths)
-        avg_answer = sum(answer_lengths) / len(answer_lengths)
-        ratio = avg_thinking / (avg_answer + 1e-6)
-
-        logger.debug(f"Mask stats: thinking={avg_thinking:.1f} tokens, answer={avg_answer:.1f} tokens, ratio={ratio:.2f}:1")
-
-        # Alert on severe imbalance
-        if ratio > 4.0:
-            logger.warning(f"SEVERE IMBALANCE: Thinking/answer ratio is {ratio:.2f}:1 - model generating too much thinking!")
-        if missing_answer_count > 0:
-            logger.warning(f"CRITICAL: {missing_answer_count}/{batch_size} samples have NO answer section (no </think> tag)")
-
-    return thinking_mask_batch, answer_mask_batch
-
-
-
-
-def _create_thinking_answer_masks(
+def _create_thinking_answer_masksss(
     responses_mx: mx.array,
     decoded_responses: List[str],
     tokenizer: TokenizerWrapper,
@@ -313,6 +180,263 @@ def _create_thinking_answer_masks(
         f"Masks: thinking={stats['generation/thinking_tokens_avg']:.1f}, "
         f"answer={stats['generation/answer_tokens_avg']:.1f}, "
         f"ratio={stats['generation/thinking_answer_ratio']:.2f}:1"
+    )
+
+    if stats['generation/thinking_answer_ratio'] > 4.0:
+        logger.warning(f"SEVERE IMBALANCE: ratio {stats['generation/thinking_answer_ratio']:.2f}:1")
+    if missing_answer_count > 0:
+        logger.warning(f"CRITICAL: {missing_answer_count}/{batch_size} missing answer")
+
+    return thinking_mask_batch, answer_mask_batch, stats
+
+def _create_thinking_answer_masks(
+    responses_mx: mx.array,
+    decoded_responses: List[str],
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+    pad_id: int,
+) -> Tuple[mx.array, mx.array, Dict[str, Any]]:
+    """
+    Create masks + return statistics for metrics tracking.
+
+    MASK STRATEGIES (New Behavior):
+    - thinking_mask: Complete thinking WITH tags + last N lines of answer
+    - answer_mask: Empty think tags (<think>\n\n</think>) + complete answer
+
+    This enables dual-path learning:
+    - Thinking path: Deep reasoning + answer context/preview
+    - Answer path: Structural format + direct fast response
+
+    Config:
+      thinking_includes_answer_lines: Number of answer lines in thinking mask (default: 1)
+      log_empty_think_patterns: Track empty think tags (default: False)
+    """
+    batch_size, seq_len = responses_mx.shape
+    thinking_mask_list = []
+    answer_mask_list = []
+
+    think_start_tag = '<think>'
+    think_end_tag = '</think>'
+    max_thinking_tokens = getattr(config.trainer, 'max_thinking_tokens', 80)
+
+    # New: Number of answer lines to include in thinking mask (non-breaking default)
+    thinking_includes_answer_lines = getattr(config.trainer, 'thinking_includes_answer_lines', 1)
+
+    # New: Optional flag to log empty think patterns
+    log_empty_think_patterns = getattr(config.trainer, 'log_empty_think_patterns', False)
+
+    thinking_lengths = []
+    answer_lengths = []
+    missing_answer_count = 0
+    missing_thinking_count = 0
+    truncated_count = 0
+    empty_think_in_answer_count = 0
+
+    for batch_idx in range(batch_size):
+        decoded_text = decoded_responses[batch_idx]
+        response_tokens = responses_mx[batch_idx].tolist()
+
+        # Find positions of think tags
+        think_start_pos = decoded_text.find(think_start_tag)
+        think_end_pos = decoded_text.find(think_end_tag)
+        has_think_start = think_start_pos != -1
+
+        thinking_mask = mx.zeros(seq_len, dtype=mx.float32)
+        answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+
+        if think_end_pos == -1:
+            # No </think> found - treat all as thinking (backward compatible)
+            thinking_token_count = 0
+            for i in range(seq_len):
+                if response_tokens[i] != pad_id:
+                    thinking_mask[i] = 1.0
+                    thinking_token_count += 1
+
+            missing_answer_count += 1
+            if not has_think_start:
+                missing_thinking_count += 1
+
+            thinking_lengths.append(thinking_token_count)
+            answer_lengths.append(0)
+
+            logger.warning(
+                f"Sample {batch_idx}: No </think> tag - "
+                f"{thinking_token_count} tokens as thinking (NO ANSWER!)"
+            )
+        else:
+            # ============================================================
+            # Step 1: Map character positions to token positions
+            # ============================================================
+            think_content_start_pos = think_start_pos + len(think_start_tag)
+            think_end_pos_with_tag = think_end_pos + len(think_end_tag)
+
+            # Find where thinking content starts (after opening tag and newlines)
+            think_content_start_pos_actual = think_content_start_pos
+            while think_content_start_pos_actual < think_end_pos and decoded_text[think_content_start_pos_actual] in ['\n', ' ', '\t', '\r']:
+                think_content_start_pos_actual += 1
+
+            # Find where thinking content ends (before closing tag, strip trailing whitespace)
+            think_content_end_pos = think_end_pos
+            while think_content_end_pos > think_content_start_pos_actual and decoded_text[think_content_end_pos - 1] in ['\n', ' ', '\t', '\r']:
+                think_content_end_pos -= 1
+
+            # Map to token indices
+            accumulated_text = ""
+            opening_tag_end_token = 0
+            thinking_content_start_token = 0
+            thinking_content_end_token = 0
+            closing_tag_end_token = 0
+
+            for i in range(seq_len):
+                if response_tokens[i] == pad_id:
+                    break
+                token_text = tokenizer.decode([response_tokens[i]])
+                accumulated_text += token_text
+
+                # Mark token boundaries
+                if opening_tag_end_token == 0 and len(accumulated_text) >= think_content_start_pos:
+                    opening_tag_end_token = i + 1
+
+                if thinking_content_start_token == 0 and len(accumulated_text) >= think_content_start_pos_actual:
+                    thinking_content_start_token = i + 1
+
+                if thinking_content_end_token == 0 and len(accumulated_text) >= think_content_end_pos:
+                    thinking_content_end_token = i + 1
+
+                if closing_tag_end_token == 0 and len(accumulated_text) >= think_end_pos_with_tag:
+                    closing_tag_end_token = i + 1
+                    break
+
+            # Fallback if token mapping incomplete
+            if closing_tag_end_token == 0:
+                non_pad = seq_len - response_tokens.count(pad_id)
+                avg_char_per_token = len(decoded_text) / max(1, non_pad)
+                closing_tag_end_token = min(seq_len, int(think_end_pos_with_tag / avg_char_per_token) + 1)
+                opening_tag_end_token = max(1, min(opening_tag_end_token, closing_tag_end_token))
+                thinking_content_start_token = opening_tag_end_token
+                thinking_content_end_token = closing_tag_end_token
+
+            # ============================================================
+            # Step 2: Create THINKING MASK (complete thinking + last N answer lines)
+            # ============================================================
+            # Start with complete thinking block
+            base_thinking_end = closing_tag_end_token
+
+            # Find last N lines of answer to include
+            answer_portion = decoded_text[think_end_pos_with_tag:].strip()
+
+            if thinking_includes_answer_lines > 0 and answer_portion:
+                answer_lines = answer_portion.split('\n')
+                # Get last N lines
+                last_n_lines = answer_lines[-thinking_includes_answer_lines:] if len(answer_lines) >= thinking_includes_answer_lines else answer_lines
+                last_n_lines_text = '\n'.join(last_n_lines)
+
+                # Find where these lines start in the full text
+                if last_n_lines_text:
+                    last_lines_start_char = decoded_text.rfind(last_n_lines_text)
+
+                    if last_lines_start_char != -1 and last_lines_start_char >= think_end_pos_with_tag:
+                        # Find token position for end of last N lines
+                        target_char_pos = last_lines_start_char + len(last_n_lines_text)
+                        accumulated_text = ""
+                        extended_thinking_end = closing_tag_end_token
+
+                        for i in range(seq_len):
+                            if response_tokens[i] == pad_id:
+                                break
+                            token_text = tokenizer.decode([response_tokens[i]])
+                            accumulated_text += token_text
+
+                            if len(accumulated_text) >= target_char_pos:
+                                extended_thinking_end = i + 1
+                                break
+
+                        base_thinking_end = extended_thinking_end
+
+            # Apply thinking mask
+            for i in range(min(base_thinking_end, seq_len)):
+                if response_tokens[i] != pad_id:
+                    thinking_mask[i] = 1.0
+
+            # ============================================================
+            # Step 3: Create ANSWER MASK (empty think structure + complete answer)
+            # ============================================================
+            # Include: <think> tag + newlines + </think> tag + all answer content
+            # Exclude: thinking content between tags
+
+            # Part 1: Opening tag (up to but not including content)
+            for i in range(min(opening_tag_end_token, seq_len)):
+                if response_tokens[i] != pad_id:
+                    answer_mask[i] = 1.0
+
+            # Part 2: Skip thinking content tokens (leave as 0)
+            # This creates the "empty" think structure
+
+            # Part 3: Closing tag onwards (from where content ends)
+            for i in range(thinking_content_end_token, seq_len):
+                if response_tokens[i] != pad_id:
+                    answer_mask[i] = 1.0
+
+            # Count tokens
+            answer_token_count = int(mx.sum(answer_mask).item())
+            thinking_token_count = int(mx.sum(thinking_mask).item())
+
+            # Detect empty think pattern in answer portion (optional logging)
+            if log_empty_think_patterns and think_start_tag in answer_portion:
+                import re
+                empty_think_pattern = r'<think>\s*</think>'
+                if re.search(empty_think_pattern, answer_portion):
+                    empty_think_in_answer_count += 1
+                    logger.debug(
+                        f"Sample {batch_idx}: Empty think tags in answer portion "
+                        f"(fast mode structure detected)"
+                    )
+
+            thinking_lengths.append(thinking_token_count)
+            answer_lengths.append(answer_token_count)
+
+            if answer_token_count < 10 and thinking_token_count > max_thinking_tokens * 0.8:
+                truncated_count += 1
+
+            if thinking_token_count > max_thinking_tokens:
+                logger.warning(
+                    f"Sample {batch_idx}: Excessive thinking - "
+                    f"{thinking_token_count} tokens, {answer_token_count} answer"
+                )
+
+        thinking_mask_list.append(thinking_mask[None, :])
+        answer_mask_list.append(answer_mask[None, :])
+
+    thinking_mask_batch = mx.concatenate(thinking_mask_list, axis=0)
+    answer_mask_batch = mx.concatenate(answer_mask_list, axis=0)
+
+    # Compile statistics for WandB
+    stats = {
+        'generation/thinking_tokens_avg': sum(thinking_lengths) / len(thinking_lengths) if thinking_lengths else 0,
+        'generation/answer_tokens_avg': sum(answer_lengths) / len(answer_lengths) if answer_lengths else 0,
+        'generation/thinking_tokens_max': max(thinking_lengths) if thinking_lengths else 0,
+        'generation/answer_tokens_min': min(answer_lengths) if answer_lengths else 0,
+        'generation/missing_answer_count': missing_answer_count,
+        'generation/missing_thinking_count': missing_thinking_count,
+        'generation/truncated_count': truncated_count,
+    }
+
+    # Add empty think pattern metric if enabled
+    if log_empty_think_patterns:
+        stats['generation/empty_think_in_answer_count'] = empty_think_in_answer_count
+
+    if stats['generation/answer_tokens_avg'] > 0:
+        stats['generation/thinking_answer_ratio'] = (
+            stats['generation/thinking_tokens_avg'] / stats['generation/answer_tokens_avg']
+        )
+    else:
+        stats['generation/thinking_answer_ratio'] = float('inf')
+
+    logger.debug(
+        f"Masks: thinking={stats['generation/thinking_tokens_avg']:.1f}, "
+        f"answer={stats['generation/answer_tokens_avg']:.1f}, "
+        f"ratio={stats['generation/thinking_answer_ratio']:.2f}:1, "
+        f"answer_lines_in_thinking={thinking_includes_answer_lines}"
     )
 
     if stats['generation/thinking_answer_ratio'] > 4.0:
