@@ -17,6 +17,7 @@ from pydantic import (
 )
 from rich.console import Console
 import random
+
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ THINK_STYLE_PROMPT_LITERAL = """THINKING RULES - Use maximally compressed notati
     ═══ WHEN UNCERTAIN ═══ DO NOT guess or assume. Instead: ? = flag uncertainty w/ question mark ASK: "need clarification on X" or "X not specified - options: A/B/C?" CONSTRAINT: "cannot solve b/c: missing info Y" If problem unsolvable → state why concisely, don\'t elaborate Think like: debugger output, medical chart notes, trading floor shorthand, or military briefing. COMPRESS EVERYTHING. Every word must earn its place."""
 
 THINK_STYLE_PROMPT_LITERAL = ""
+
+
 class RewardConfig(BaseModel):
     name: str = Field(..., description="Registered name of the reward function.")
     weight: float = Field(
@@ -128,6 +131,14 @@ class DataConfig(BaseModel):
     dataset_answer_key: str = Field(
         "completion", description="Key for reference answer/completion."
     )
+
+    data_validation_script_path: Optional[Path] = Field(
+        None, description="Path to a custom Python script for data validation."
+    )
+    data_validation_strict_mode: bool = Field(
+        False, description="If true, discard samples that fail validation."
+    )
+
     dataset_filter_keywords: List[str] = Field(
         default_factory=lambda: [
             "http://",
@@ -178,16 +189,27 @@ class ModelConfig(BaseModel):
 
 class CheckpointConfig(BaseModel):
     save_dir: Path = Field(
-        "./checkpoints", description="Directory relative to  to save checkpoints."
+        Path("./checkpoints"),
+        description="Directory relative to output_dir to save checkpoints.",
     )
     save_every: PositiveInt = Field(
-        5, description="Save a full checkpoint every N training updates."
+        100, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
-        2, description="Number of most recent checkpoints to retain."
+        3, description="Number of most recent checkpoints to retain."
     )
     save_optimizer_state: bool = Field(
-        False, description="Whether to save the optimizer's state."
+        True, description="Whether to save the optimizer's state."
+    )
+    save_best: bool = Field(
+        True,
+        description="Save a copy of the best performing checkpoint based on evaluation metric.",
+    )
+    checkpoint_save_retries: int = Field(
+        3, ge=0, description="Number of retries if checkpoint saving fails."
+    )
+    checkpoint_save_backoff_factor: float = Field(
+        5.0, ge=0, description="Backoff factor in seconds for retries."
     )
 
 
@@ -254,7 +276,6 @@ class GenerationConfig(BaseModel):
     min_answer_tokens_mcq: int = Field(1)
     mcq_answer_end_bias: float = Field(9.0)
 
-
     ban_phrases_for_bias: List[str] = Field(
         default_factory=lambda: [
             "<think>\\n<|im_start|>",
@@ -308,10 +329,13 @@ class GenerationConfig(BaseModel):
             "False assumption",
             "Insufficient information to",
             "Wait, what if",
-            "Wait, "
-            "Wait, another idea:",
+            "Wait, " "Wait, another idea:",
             "Wait, unless...",
-            "Wait, perhaps","Wait, let's see","Wait, here's","Wait, no. Wait,","Wait, wait! Wait,",
+            "Wait, perhaps",
+            "Wait, let's see",
+            "Wait, here's",
+            "Wait, no. Wait,",
+            "Wait, wait! Wait,",
             "Wait, actually no",
             "Wait, on second thought",
             "Hold on, maybe",
@@ -3154,7 +3178,7 @@ class GenerationConfig(BaseModel):
             "retrieval",
             "The answer is undeterminable",
             "The problem does not have any answer given the contradictions and mathematical proof above.",
-            "Hence, There is no solution as we proved it mathematically."
+            "Hence, There is no solution as we proved it mathematically.",
         ]
     )
 
@@ -3181,14 +3205,14 @@ class TrainerParams(BaseModel):
     num_rollout_samples: PositiveInt = Field(2)
     grad_accum_steps: PositiveInt = Field(1)
     # Only enable alternating gradients
-    alternate_dual_gradients:bool = Field(True) #  true
-    use_mixed_precision:bool = Field(True) # false  # Disabled for stability
-    log_memory_usage:bool = Field(False) # false
+    alternate_dual_gradients: bool = Field(True)  #  true
+    use_mixed_precision: bool = Field(True)  # false  # Disabled for stability
+    log_memory_usage: bool = Field(True)  # false
 
-    alternate_dual_gradients:bool = Field(True) #
+    memory_limit_gb: int = Field(80)
+
+    alternate_dual_gradients: bool = Field(True)  #
     # use_mixed_precision: true
-
-
 
     grpo_beta: NonNegativeFloat = Field(0.0025)
     seed: int = Field(-1)
@@ -3250,9 +3274,6 @@ class TrainerParams(BaseModel):
     use_thinking_bonus: bool = Field(False)
     efficiency_bonus_weight: Optional[NonNegativeFloat] = Field(0.1)
 
-
-
-
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
         self.effective_batch_size = (
@@ -3270,7 +3291,7 @@ class TrainerParams(BaseModel):
 
         cfg = self.lr_schedule_config
         if self.seed == -1:
-            self.seed = random.randint(0,5000)
+            self.seed = random.randint(0, 5000)
         init_lr = float(self.learning_rate)
         total_steps = int(self.num_training_steps)
         warmup_steps = int(cfg.get("warmup", 500))
@@ -3288,7 +3309,6 @@ class ExperimentConfig(BaseModel):
 
     use_grad_checkpointing: bool = Field(True)
     grad_checkpoint_layers: PositiveInt = Field(1)
-
 
     trainer: TrainerParams
     model: ModelConfig
@@ -3365,7 +3385,6 @@ COMPRESS EVERYTHING. Every word must earn its place."""
 
     system_prompt: str = Field(_THINK_STYLE_PROMPT)
 
-
     ban_phrases_for_bias: List[str] = Field(
         default_factory=lambda: [
             "<think>\\n<|im_start|>",
@@ -3419,10 +3438,13 @@ COMPRESS EVERYTHING. Every word must earn its place."""
             "False assumption",
             "Insufficient information to",
             "Wait, what if",
-            "Wait, "
-            "Wait, another idea:",
+            "Wait, " "Wait, another idea:",
             "Wait, unless...",
-            "Wait, perhaps","Wait, let's see","Wait, here's","Wait, no. Wait,","Wait, wait! Wait,",
+            "Wait, perhaps",
+            "Wait, let's see",
+            "Wait, here's",
+            "Wait, no. Wait,",
+            "Wait, wait! Wait,",
             "Wait, actually no",
             "Wait, on second thought",
             "Hold on, maybe",
@@ -6265,7 +6287,7 @@ COMPRESS EVERYTHING. Every word must earn its place."""
             "retrieval",
             "The answer is undeterminable",
             "The problem does not have any answer given the contradictions and mathematical proof above.",
-            "Hence, There is no solution as we proved it mathematically."
+            "Hence, There is no solution as we proved it mathematically.",
         ]
     )
 
@@ -6294,10 +6316,10 @@ COMPRESS EVERYTHING. Every word must earn its place."""
 
     # SFT configuration - OPTION 2
     use_sft_on_answer: bool = Field(True)
-    sft_mode:str = Field('weighted')
-    sft_weight:NonNegativeFloat = Field(0.2)
-    sft_thinking_weight:NonNegativeFloat = Field(0.2)      # 10% SFT on thinking layers
-    sft_answer_weight: NonNegativeFloat =  Field(1.7)        # 100% SFT on answer layers
+    sft_mode: str = Field("weighted")
+    sft_weight: NonNegativeFloat = Field(0.2)
+    sft_thinking_weight: NonNegativeFloat = Field(0.2)  # 10% SFT on thinking layers
+    sft_answer_weight: NonNegativeFloat = Field(1.7)  # 100% SFT on answer layers
 
     @model_validator(mode="after")
     def validate_reward_weights_sum(self) -> "ExperimentConfig":

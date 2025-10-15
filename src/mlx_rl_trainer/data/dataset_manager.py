@@ -19,17 +19,13 @@ from mlx_rl_trainer.utils.text_utils import (
     apply_chat_template_wrapper,
     extract_think_region,
     _looks_garbage,
-    clean_completion_string
+    clean_completion_string,
 )
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
 import aiofiles
 
 logger = logging.getLogger(__name__)
-
-
-
-
 
 
 def _normalize_record(
@@ -48,7 +44,7 @@ def _normalize_record(
     completion = _s(
         obj.get(completion_key, obj.get("completion", obj.get("answer", "")))
     )
-    system = "" #_s(obj.get("system", system_prompt_default))
+    system = ""  # _s(obj.get("system", system_prompt_default))
 
     gen_config_default = GenerationConfig()
     completion_cleaned = clean_completion_string(completion)

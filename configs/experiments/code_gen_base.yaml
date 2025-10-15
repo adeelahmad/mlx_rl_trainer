@@ -12,6 +12,7 @@ trainer:
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
   seed: -1
+  memory_limit_gb: 80
 
 model:
   model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"

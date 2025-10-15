@@ -1,7 +1,6 @@
 """Utility module Initialization."""
 
 from .mlx_utils import (
-    _is_metal_internal_error,
     metal_recover,
     metal_safe_apply_gradients,
     _create_4d_attention_mask,
@@ -20,7 +19,7 @@ from .mlx_utils import (
     metal_before_update,
     _global_grad_norm,
     _maybe_clip_grad_norm,
-    limit_memory
+    limit_memory,
 )
 
 from .text_utils import (
@@ -58,7 +57,6 @@ __all__ = [
     # mlx_utils
     "metal_safe_apply_gradients",
     "limit_memory",
-    "_is_metal_internal_error",
     "metal_recover",
     "_create_4d_attention_mask",
     "safe_make_sampler",

@@ -43,7 +43,7 @@ class RewardContext(BaseModel):
         default_factory=dict, description="Additional arbitrary metadata for context."
     )
 
-     # --- FIX START ---
+    # --- FIX START ---
     # Add the update_step so reward functions know the current training progress.
     update_step: int = Field(0, description="The current training update step.")
     # --- FIX END ---

@@ -1,5 +1,3 @@
-"""Core abstractions that define the trainer's architecture."""
-
 from .config import (
     ExperimentConfig,
     RewardConfig,
@@ -19,11 +17,8 @@ from .exceptions import (
     InvalidConfigurationError,
     TrainingRuntimeError,
 )
-from .trainer import (
-    BaseTrainer,
-    TrainingMetrics,
-    EvaluationMetrics,
-)
+from .types import TrainingMetrics, EvaluationMetrics
+from .trainer import BaseTrainer
 from .model_manager import ModelManager
 from .checkpoint_manager import CheckpointManager
 
