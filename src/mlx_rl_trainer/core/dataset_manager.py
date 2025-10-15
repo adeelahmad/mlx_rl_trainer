@@ -1,7 +1,7 @@
 """
 Data pipeline management: Loading, preprocessing, and efficient batching.
 """
-import json, logging, random, re, asyncio
+import json, logging, random, re, asyncio, gc
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Iterator
 from datasets import Dataset, Features, Value, load_dataset
@@ -28,8 +28,6 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 
-
-
 def _normalize_record(
     obj: Dict[str, Any],
     prompt_key: str,
@@ -50,19 +48,13 @@ def _normalize_record(
 
     gen_config_default = GenerationConfig()
     completion_cleaned = clean_completion_string(completion)
-    # if (
-    #     completion_cleaned
-    #     and gen_config_default.think_start_tag not in completion_cleaned
-    # ):
-    #     completion_cleaned = f"{gen_config_default.think_start_tag}\n\n{gen_config_default.think_end_tag}\n{completion_cleaned}"
 
     meta_in = obj.get("meta", {}) if isinstance(obj.get("meta"), dict) else {}
     mcq_meta = _mcq_meta_from_sample(
         {"prompt": prompt, "completion": completion_cleaned, "meta": meta_in}
     )
 
-    # *** START OF FIX ***
-    # Create a final, standardized meta dictionary for EVERY record.
+    # Create a final, standardized meta dictionary for EVERY record
     final_meta = {
         "is_mcq": mcq_meta.get("is_mcq", False),
         "mcq_options": mcq_meta.get("mcq_options", []),
@@ -72,7 +64,6 @@ def _normalize_record(
     }
     # Merge any other original meta keys that don't conflict
     final_meta.update({k: v for k, v in meta_in.items() if k not in final_meta})
-    # *** END OF FIX ***
 
     test_cases = obj.get("test_cases", [])
     if not isinstance(test_cases, list):
@@ -95,74 +86,136 @@ def _normalize_record(
     }
 
 
-
 class DatasetManager:
-    def __init__(self, config: ExperimentConfig):  # Takes full ExperimentConfig now
+    def __init__(self, config: ExperimentConfig):
         self.exp_config = config
         self.config = config.data
         self._tokenizer: Optional[TokenizerWrapper] = None
         self._train_dataset: Optional[Dataset] = None
         self._val_dataset: Optional[Dataset] = None
         self._is_loaded = False
+        # Chunk size for processing large datasets
+        self._processing_chunk_size = 1000
         logger.debug("DatasetManager initialized.")
 
     def set_tokenizer(self, tokenizer: TokenizerWrapper):
         self._tokenizer = tokenizer
 
-    async def _async_read_jsonl(self, path: Path) -> List[Dict[str, Any]]:
+    def _aggressive_memory_cleanup(self):
+        """Aggressively free memory."""
+        try:
+            mx.metal.clear_cache()
+        except:
+            pass
+        mx.clear_cache()
+        gc.collect()
+
+    async def _async_read_jsonl_streaming(self, path: Path) -> Iterator[Dict[str, Any]]:
+        """Stream JSONL file line by line to avoid loading entire file into memory."""
         if not path.is_file():
             raise FileNotFoundError(f"Data file not found: {path}")
-        data = []
+
+        import aiofiles
         async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
                     try:
-                        data.append(json.loads(line.strip()))
+                        yield json.loads(line.strip())
                     except json.JSONDecodeError:
                         logger.warning(
                             f"Malformed JSONL line in {path.name}, skipping."
                         )
+
+    async def _async_read_jsonl(self, path: Path) -> List[Dict[str, Any]]:
+        """Read JSONL file - kept for compatibility but processes in chunks."""
+        if not path.is_file():
+            raise FileNotFoundError(f"Data file not found: {path}")
+
+        data = []
+        chunk = []
+
+        import aiofiles
+        async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
+            async for line in f:
+                if line.strip():
+                    try:
+                        chunk.append(json.loads(line.strip()))
+
+                        # Process in chunks to avoid memory spikes
+                        if len(chunk) >= self._processing_chunk_size:
+                            data.extend(chunk)
+                            chunk = []
+                            # Periodic cleanup
+                            if len(data) % (self._processing_chunk_size * 5) == 0:
+                                gc.collect()
+
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            f"Malformed JSONL line in {path.name}, skipping."
+                        )
+
+            # Add remaining chunk
+            if chunk:
+                data.extend(chunk)
+                del chunk
+
         return data
 
     async def load_datasets(self, force_reload: bool = False):
         if self._is_loaded and not force_reload:
             return
-        loop = asyncio.get_event_loop()
 
         async def load_raw_data_for_split(
             path: Path, split_name: str
         ) -> List[Dict[str, Any]]:
             if not path:
                 return []
+
             if path.suffix.lower() in [".jsonl", ".ndjson"]:
-                return await self._async_read_jsonl(path)
+                raw_data = await self._async_read_jsonl(path)
+                return raw_data
             elif path.suffix.lower() == ".json":
-                raw_content = await aiofiles.open(
+                import aiofiles
+                raw_content = await (await aiofiles.open(
                     path, mode="r", encoding="utf-8"
-                ).read()
-                return json.loads(raw_content)
+                )).read()
+                data = json.loads(raw_content)
+                del raw_content
+                gc.collect()
+                return data
             else:
                 hf_split_name = "train" if split_name == "train" else "test"
                 dataset_obj = await asyncio.to_thread(
                     load_dataset, path.as_posix(), split=hf_split_name
                 )
-                return (
+                data = (
                     dataset_obj.to_list()
                     if hasattr(dataset_obj, "to_list")
                     else list(dataset_obj)
                 )
+                del dataset_obj
+                gc.collect()
+                return data
 
+        # Load train data
         raw_train_data = await load_raw_data_for_split(self.config.train_path, "train")
-        raw_val_data = (
-            await load_raw_data_for_split(self.config.val_path, "val")
-            if self.config.val_path
-            else []
-        )
-
         self._train_dataset = self._process_raw_to_dataset(raw_train_data, "train")
-        self._val_dataset = (
-            self._process_raw_to_dataset(raw_val_data, "val") if raw_val_data else None
-        )
+
+        # Immediately free raw train data
+        del raw_train_data
+        self._aggressive_memory_cleanup()
+
+        # Load validation data
+        if self.config.val_path:
+            raw_val_data = await load_raw_data_for_split(self.config.val_path, "val")
+            self._val_dataset = self._process_raw_to_dataset(raw_val_data, "val")
+
+            # Immediately free raw val data
+            del raw_val_data
+            self._aggressive_memory_cleanup()
+        else:
+            self._val_dataset = None
+
         self._is_loaded = True
         logger.info(
             f"Datasets loaded. Train: {len(self._train_dataset)}, Val: {len(self._val_dataset) if self._val_dataset else 0}"
@@ -171,28 +224,47 @@ class DatasetManager:
     def _process_raw_to_dataset(
         self, raw_data: List[Dict[str, Any]], split_name: str
     ) -> Dataset:
+        """Process raw data in chunks to minimize memory footprint."""
+        if not raw_data:
+            logger.warning(f"No raw data provided for {split_name}.")
+            return Dataset.from_list([])
+
         normalized_records = []
-        for obj in raw_data:
-            rec = _normalize_record(
-                obj,
-                self.config.dataset_prompt_key,
-                self.config.dataset_answer_key,
-                self.exp_config.system_prompt,
-            )
-            if (
-                rec
-                and not _looks_garbage(rec["prompt"])
-                and not _looks_garbage(rec["completion"])
-            ):
-                if not self.config.dataset_filter_keywords or not (
-                    _contains_keywords(
-                        rec["prompt"], self.config.dataset_filter_keywords
-                    )
-                    or _contains_keywords(
-                        rec["completion"], self.config.dataset_filter_keywords
-                    )
+        chunk_size = self._processing_chunk_size
+
+        # Process in chunks
+        for chunk_start in range(0, len(raw_data), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(raw_data))
+            chunk = raw_data[chunk_start:chunk_end]
+
+            for obj in chunk:
+                rec = _normalize_record(
+                    obj,
+                    self.config.dataset_prompt_key,
+                    self.config.dataset_answer_key,
+                    self.exp_config.system_prompt,
+                )
+
+                if (
+                    rec
+                    and not _looks_garbage(rec["prompt"])
+                    and not _looks_garbage(rec["completion"])
                 ):
-                    normalized_records.append(rec)
+                    if not self.config.dataset_filter_keywords or not (
+                        _contains_keywords(
+                            rec["prompt"], self.config.dataset_filter_keywords
+                        )
+                        or _contains_keywords(
+                            rec["completion"], self.config.dataset_filter_keywords
+                        )
+                    ):
+                        normalized_records.append(rec)
+
+            # Cleanup after each chunk
+            del chunk
+            if chunk_start % (chunk_size * 5) == 0:
+                gc.collect()
+
         if not normalized_records:
             logger.warning(f"No valid records found for {split_name}.")
             return Dataset.from_list([])
@@ -213,13 +285,20 @@ class DatasetManager:
                 },
             }
         )
-        return Dataset.from_list(normalized_records, features=features)
+
+        # Create dataset and immediately free normalized_records
+        dataset = Dataset.from_list(normalized_records, features=features)
+        del normalized_records
+        gc.collect()
+
+        return dataset
 
     def get_dataloader(self, split: str, batch_size: int) -> Iterator[Dict[str, Any]]:
         dataset = self._train_dataset if split == "train" else self._val_dataset
         if not dataset or len(dataset) == 0:
             logger.warning(f"Dataloader for '{split}' is empty.")
             return iter([])
+
         indices = list(range(len(dataset)))
         if self.config.shuffle_data and split == "train":
             random.shuffle(indices)
@@ -236,9 +315,20 @@ class DatasetManager:
                 )
 
                 if prompts_mx.size > 0:
-                    yield {
+                    batch_dict = {
                         "prompts_data": prompts_data,
                         "prompts_mx": prompts_mx,
                     }
+                    yield batch_dict
+
+                    # Cleanup after yielding batch
+                    del batch_dict
+                else:
+                    # Clean up even if we don't yield
+                    del prompts_data, prompts_mx
+
+                # Periodic aggressive cleanup every 10 batches
+                if i % (batch_size * 10) == 0:
+                    self._aggressive_memory_cleanup()
 
         return batch_generator()

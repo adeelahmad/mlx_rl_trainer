@@ -16,7 +16,7 @@ from pydantic import (
     ConfigDict,
 )
 from rich.console import Console
-
+import random
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        20, description="Save a full checkpoint every N training updates."
+        5, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         2, description="Number of most recent checkpoints to retain."
@@ -225,8 +225,8 @@ class GenerationConfig(BaseModel):
 
     # Sampling parameters
     think_boost_tokens: int = Field(8)
-    think_temperature: NonNegativeFloat = Field(0.10)
-    answer_temperature: NonNegativeFloat = Field(0.17)
+    think_temperature: NonNegativeFloat = Field(0.08)
+    answer_temperature: NonNegativeFloat = Field(0.05)
     sampling_top_p: NonNegativeFloat = Field(0.6)
     sampling_min_p: NonNegativeFloat = Field(0.00)
     sampling_top_k: int = Field(60)
@@ -3181,7 +3181,7 @@ class TrainerParams(BaseModel):
     num_rollout_samples: PositiveInt = Field(2)
     grad_accum_steps: PositiveInt = Field(1)
     grpo_beta: NonNegativeFloat = Field(0.0025)
-    seed: int = Field(432)
+    seed: int = Field(-1)
 
     # Optimizer Parameters
     optimizer_beta1: NonNegativeFloat = Field(0.9)
@@ -3259,6 +3259,8 @@ class TrainerParams(BaseModel):
                 self.invalid_sample_layers_set = set()
 
         cfg = self.lr_schedule_config
+        if self.seed == -1:
+            self.seed = random.randint(0,5000)
         init_lr = float(self.learning_rate)
         total_steps = int(self.num_training_steps)
         warmup_steps = int(cfg.get("warmup", 500))

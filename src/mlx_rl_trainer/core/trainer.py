@@ -150,6 +150,16 @@ class BaseTrainer(ABC):
                 current_metric=self.checkpoint_manager.best_metric,
             )
 
+    def _aggressive_memory_cleanup(self):
+        """Aggressively free memory."""
+        mx.metal.clear_cache()
+        mx.clear_cache()
+        gc.collect()
+
+    def _scale_gradients_inplace(self, grads: Dict, scale: float):
+        """Scale gradients in-place to avoid creating new arrays."""
+        return tree_map(lambda g: g * scale if isinstance(g, mx.array) else g, grads)
+
     async def run(self, should_shutdown: Callable[[], bool]):
         self.global_step, self.current_epoch = self._setup()
 
@@ -168,6 +178,8 @@ class BaseTrainer(ABC):
         )
 
         train_data_iterator = iter([])
+        grad_accum_steps = self.config.trainer.grad_accum_steps
+        grad_scale = 1.0 / grad_accum_steps
 
         with pbar:
             while self.global_step < self.config.trainer.num_training_steps:
@@ -176,14 +188,17 @@ class BaseTrainer(ABC):
                     self.save_final_checkpoint(reason="signal")
                     break
 
-                (
-                    accumulated_metrics_list,
-                    avg_rewards_list,
-                    raw_reward_components_list,
-                ) = ([], [], [])
+                # Streaming aggregation instead of list accumulation
                 accum_grads = None
+                sum_loss = 0.0
+                sum_reward = 0.0
+                sum_kl = 0.0
+                count_microbatches = 0
+                
+                # Accumulate raw reward components efficiently
+                aggregated_raw_rewards = {}
 
-                for _ in range(self.config.trainer.grad_accum_steps):
+                for accum_idx in range(grad_accum_steps):
                     try:
                         batch_data = next(train_data_iterator)
                     except StopIteration:
@@ -201,10 +216,12 @@ class BaseTrainer(ABC):
                                 "Dataset is empty or has been completely filtered out. Cannot fetch any batches."
                             )
 
+                    # Generate rollouts
                     (
                         rollout_batch,
                         avg_reward_mb,
-                        raw_reward_components_mb, metrics
+                        raw_reward_components_mb,
+                        metrics
                     ) = self.generate_rollouts(batch_data, self.global_step)
 
                     if (
@@ -216,83 +233,106 @@ class BaseTrainer(ABC):
                         logger.warning(
                             f"Micro-batch at step {self.global_step} produced no valid rollouts. Skipping."
                         )
+                        # Clean up batch data immediately
+                        del batch_data, rollout_batch
+                        self._aggressive_memory_cleanup()
                         continue
 
+                    # Train step
                     metrics_mb, grads_mb, step_metrics = self.train_step(
                         rollout_batch, self.global_step
                     )
-                    accumulated_metrics_list.append(metrics_mb)
-                    avg_rewards_list.append(avg_reward_mb)
-                    raw_reward_components_list.append(raw_reward_components_mb)
+                    
+                    # Stream aggregate metrics (avoid storing full metric objects)
+                    sum_loss += metrics_mb.loss
+                    sum_kl += metrics_mb.kl_divergence
+                    sum_reward += avg_reward_mb
+                    count_microbatches += 1
 
+                    # Stream aggregate raw rewards
+                    if raw_reward_components_mb:
+                        for k, v in raw_reward_components_mb.items():
+                            aggregated_raw_rewards[k] = aggregated_raw_rewards.get(k, 0.0) + v
+
+                    # Accumulate gradients efficiently
                     if grads_mb:
-                        accum_grads = (
-                            tree_map(mx.add, accum_grads, grads_mb)
-                            if accum_grads
-                            else grads_mb
-                        )
-                    mx.clear_cache()
-                    gc.collect()
+                        # Scale gradients immediately to avoid storing unscaled versions
+                        grads_mb_scaled = self._scale_gradients_inplace(grads_mb, grad_scale)
+                        
+                        if accum_grads is None:
+                            accum_grads = grads_mb_scaled
+                        else:
+                            # In-place addition to minimize memory
+                            accum_grads = tree_map(mx.add, accum_grads, grads_mb_scaled)
+                            # Force evaluation to free intermediate results
+                            mx.eval(tree_flatten(accum_grads))
+                        
+                        # Clean up immediately
+                        del grads_mb, grads_mb_scaled
+                    
+                    # Clean up batch-specific data immediately
+                    del batch_data, rollout_batch, metrics_mb, step_metrics
+                    
+                    # Aggressive cleanup after each microbatch
+                    self._aggressive_memory_cleanup()
 
-                if accum_grads and self.optimizer:
+                # Only proceed if we have valid gradients
+                if accum_grads and self.optimizer and count_microbatches > 0:
+                    # Compute grad norm efficiently (force evaluation first)
+                    flat_grads = [v for _, v in tree_flatten(accum_grads) if isinstance(v, mx.array)]
+                    mx.eval(flat_grads)
+                    
                     grad_norm = np.linalg.norm(
-                        [
-                            np.linalg.norm(np.array(v.flatten().astype(mx.float32)))
-                            for _, v in tree_flatten(accum_grads)
-                            if isinstance(v, mx.array)
-                        ]
+                        [np.linalg.norm(np.array(v.flatten().astype(mx.float32))) for v in flat_grads]
                     )
+                    del flat_grads
 
-                    # --- FIX START ---
-                    # To update the learning rate in MLX, assign it directly to the attribute.
+                    # Update learning rate
                     self.optimizer.learning_rate = self.lr_scheduler(self.global_step)
-                    # --- FIX END ---
 
+                    # Apply gradients
                     self.optimizer.apply_gradients(
                         accum_grads, self.actor_model.trainable_parameters()
                     )
                     mx.eval(self.actor_model.parameters(), self.optimizer.state)
 
-                    avg_loss = np.mean([m.loss for m in accumulated_metrics_list])
-                    avg_reward_mean = np.mean(avg_rewards_list)
-                    avg_lr = (
-                        self.optimizer.learning_rate
-                    )  # Get the current LR from the optimizer
+                    # Clean up gradients immediately after application
+                    del accum_grads
+                    self._aggressive_memory_cleanup()
 
-                    aggregated_raw_rewards = (
-                        {
-                            k: np.mean(
-                                [
-                                    comp.get(k, 0.0)
-                                    for comp in raw_reward_components_list
-                                ]
-                            )
-                            for k in raw_reward_components_list[0]
-                        }
-                        if raw_reward_components_list
-                        else {}
-                    )
+                    # Compute averages
+                    avg_loss = sum_loss / count_microbatches
+                    avg_reward_mean = sum_reward / count_microbatches
+                    avg_kl = sum_kl / count_microbatches
+                    avg_lr = self.optimizer.learning_rate
 
+                    # Average raw reward components
+                    if aggregated_raw_rewards:
+                        for k in aggregated_raw_rewards:
+                            aggregated_raw_rewards[k] /= count_microbatches
+
+                    # Log metrics
                     if self.metrics_logger:
-                        self.metrics_logger.log_metrics(
-                            {
-                                "train/loss": avg_loss,
-                                "train/reward_mean": avg_reward_mean,
-                                "train/grad_norm": grad_norm,
-                                "train/learning_rate": float(avg_lr),
-                                "train/kl_divergence": np.mean(
-                                    [m.kl_divergence for m in accumulated_metrics_list]
-                                ),
-                                "train/epoch": self.current_epoch,
-                                "train/step": self.global_step,
-                                **{
-                                    f"train/rewards/raw_{k}": v
-                                    for k, v in aggregated_raw_rewards.items()
-                                },
-                            },
-                            step=self.global_step,
-                        )
+                        log_dict = {
+                            "train/loss": avg_loss,
+                            "train/reward_mean": avg_reward_mean,
+                            "train/grad_norm": grad_norm,
+                            "train/learning_rate": float(avg_lr),
+                            "train/kl_divergence": avg_kl,
+                            "train/epoch": self.current_epoch,
+                            "train/step": self.global_step,
+                        }
+                        
+                        # Add raw rewards if available
+                        if aggregated_raw_rewards:
+                            log_dict.update({
+                                f"train/rewards/raw_{k}": v
+                                for k, v in aggregated_raw_rewards.items()
+                            })
+                        
+                        self.metrics_logger.log_metrics(log_dict, step=self.global_step)
 
+                    # Update progress bar
                     pbar.set_postfix(
                         {
                             "Loss": f"{avg_loss:.4f}",
@@ -303,6 +343,7 @@ class BaseTrainer(ABC):
                     )
                     pbar.update(1)
 
+                    # Determine if we need to evaluate or save
                     is_eval = (
                         self.config.trainer.eval_every > 0
                         and (self.global_step + 1) % self.config.trainer.eval_every == 0
@@ -318,7 +359,12 @@ class BaseTrainer(ABC):
                     )
 
                     primary_metric = -float("inf")
+                    
+                    # Evaluation with memory cleanup
                     if is_eval or is_final:
+                        # Clear caches before evaluation
+                        self._aggressive_memory_cleanup()
+                        
                         eval_results = self.evaluate(self.global_step)
                         for metric in eval_results:
                             if self.metrics_logger:
@@ -327,11 +373,19 @@ class BaseTrainer(ABC):
                                 )
                             if metric.pass_rate > primary_metric:
                                 primary_metric = metric.pass_rate
+                        
+                        # Clean up after evaluation
+                        del eval_results
+                        self._aggressive_memory_cleanup()
 
+                    # Checkpoint saving
                     should_save_best = self.checkpoint_manager.is_best_metric(
                         primary_metric
                     )
                     if is_save or is_final or should_save_best:
+                        # Clear caches before saving
+                        self._aggressive_memory_cleanup()
+                        
                         self.checkpoint_manager.save_checkpoint(
                             step=self.global_step,
                             model=self.actor_model,
@@ -343,9 +397,18 @@ class BaseTrainer(ABC):
                             },
                             current_metric=primary_metric,
                         )
+                        
+                        # Cleanup after checkpoint
+                        self._aggressive_memory_cleanup()
 
                 self.global_step += 1
+                
+                # Periodic aggressive cleanup every N steps
+                if self.global_step % 10 == 0:
+                    self._aggressive_memory_cleanup()
 
+        # Final cleanup and checkpoint
+        self._aggressive_memory_cleanup()
         self.save_final_checkpoint(
             reason="completed" if not should_shutdown() else "interrupted"
         )

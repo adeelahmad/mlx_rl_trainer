@@ -1,8 +1,10 @@
 import logging
 import json
+import gc
 from typing import Dict, Any, List, Tuple, Optional, Union
 from datasets import Dataset
 import mlx.core as mx
+import numpy as np
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
@@ -20,7 +22,6 @@ from mlx_rl_trainer.rewards.format.tag_structure import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 
 def _compose_prompt_from_sample(
@@ -50,20 +51,33 @@ def build_rollout_batch(
     indices: List[int],
     config: Union[ExperimentConfig, DataConfig],
 ) -> Tuple[List[Dict[str, Any]], mx.array, int]:
-    prompts_data: List[Dict[str, Any]] = []
-    max_len_in_batch = 0
-    pad_id = tokenizer.pad_token_id
+    """
+    Build a batch of rollout prompts with memory-optimized processing.
+
+    Memory optimizations:
+    - Pre-allocate output array to avoid list growth
+    - Use numpy for intermediate operations
+    - Minimize intermediate allocations
+    - Clean up temporary variables immediately
+    """
+    if not indices:
+        return [], mx.array([], dtype=mx.int32), 0
 
     # Extract data_config and system_prompt based on config type
     if isinstance(config, ExperimentConfig):
-        # It's the full ExperimentConfig
         data_config = config.data
         system_prompt = getattr(config, 'system_prompt', None) or ""
     else:
-        # It's just the DataConfig
         data_config = config
-        # Use a default system prompt or empty string
         system_prompt = getattr(config, 'system_prompt', None) or ""
+
+    pad_id = tokenizer.pad_token_id
+
+    # First pass: collect tokens and find max length
+    # Use a more memory-efficient approach by not storing everything at once
+    prompts_data: List[Dict[str, Any]] = []
+    token_lists: List[List[int]] = []
+    max_len_in_batch = 0
 
     for i in indices:
         try:
@@ -79,8 +93,6 @@ def build_rollout_batch(
             )
 
             # Apply chat template with system prompt
-            # The apply_chat_template_wrapper should format as:
-            # [system message][user message] ready for the model
             formatted_prompt = apply_chat_template_wrapper(
                 tokenizer, prompt_text, ""
             )
@@ -94,33 +106,58 @@ def build_rollout_batch(
 
             if not p_tokens:
                 logger.warning(f"Skipping empty prompt (idx {i}).")
+                # Clean up immediately
+                del raw, prompt_text, ref_ans, ref_think, mcq_meta, formatted_prompt, p_tokens
                 continue
 
+            # Store only essential data in prompts_data (no tokens to avoid duplication)
             entry = {
                 "original_index": i,
                 "text": formatted_prompt,
-                "tokens": p_tokens,
+                "tokens": p_tokens,  # Keep for now, will be padded version
                 "ref_answer_str": ref_ans,
                 "ref_think_str": ref_think,
-                "ref":raw,
+                "ref": raw,
                 "is_invalid_sample": raw.get("is_invalid_sample", False),
             }
             entry.update(mcq_meta)
-            prompts_data.append(entry)
+
+            token_lists.append(p_tokens)
             max_len_in_batch = max(max_len_in_batch, len(p_tokens))
+            prompts_data.append(entry)
+
+            # Clean up intermediate variables
+            del raw, prompt_text, ref_ans, ref_think, mcq_meta, formatted_prompt
 
         except Exception as e:
             logger.warning(f"Skipping sample idx {i} due to error: {e}")
+            continue
 
     if not prompts_data:
+        # Clean up
+        del token_lists
         return [], mx.array([], dtype=mx.int32), 0
 
-    # Pad all sequences to max_len_in_batch
-    padded_tokens = []
-    for p in prompts_data:
-        tok = p["tokens"]
-        pad_len = max_len_in_batch - len(tok)
-        # Left-pad with pad_id
-        padded_tokens.append([pad_id] * pad_len + tok)
+    # Pre-allocate numpy array for padded tokens (more memory efficient than list)
+    batch_size = len(token_lists)
+    padded_array = np.full((batch_size, max_len_in_batch), pad_id, dtype=np.int32)
 
-    return prompts_data, mx.array(padded_tokens, dtype=mx.int32), max_len_in_batch
+    # Fill the pre-allocated array with left-padding
+    for idx, tok in enumerate(token_lists):
+        tok_len = len(tok)
+        pad_len = max_len_in_batch - tok_len
+        # Left-pad: fill from pad_len onwards
+        padded_array[idx, pad_len:] = tok
+
+        # Update prompts_data with padded tokens (keep original tokens for reference)
+        # Note: We keep tokens in prompts_data for compatibility
+        prompts_data[idx]["tokens"] = [pad_id] * pad_len + tok
+
+    # Convert to mlx array
+    prompts_mx = mx.array(padded_array, dtype=mx.int32)
+
+    # Clean up intermediate structures
+    del token_lists, padded_array
+    gc.collect()
+
+    return prompts_data, prompts_mx, max_len_in_batch

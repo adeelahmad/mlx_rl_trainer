@@ -11,7 +11,7 @@ trainer:
   grad_accum_steps: 1
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
-  seed: 4291
+  seed: -1
 
 model:
   model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
@@ -24,7 +24,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 128
+  max_gen_len: 256
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -41,11 +41,11 @@ rewards:
     config:
       timeout: 3
       # NEW: Length constraints for 128 token budget
-      target_length_min: 30
-      target_length_max: 80
-      optimal_length_min: 40
-      optimal_length_max: 60
-      excessive_length_threshold: 90
+      target_length_min: 60
+      target_length_max: 160
+      optimal_length_min: 80
+      optimal_length_max: 120
+      excessive_length_threshold: 180
       excessive_length_penalty: 0.5
       conciseness_bonus: 0.15
       use_trainer_thinking_limits: true # Use trainer max_thinking_tokens
