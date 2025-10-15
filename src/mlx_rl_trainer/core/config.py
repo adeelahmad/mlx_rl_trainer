@@ -181,7 +181,7 @@ class CheckpointConfig(BaseModel):
         "./checkpoints", description="Directory relative to  to save checkpoints."
     )
     save_every: PositiveInt = Field(
-        5, description="Save a full checkpoint every N training updates."
+        10, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         2, description="Number of most recent checkpoints to retain."
@@ -194,7 +194,7 @@ class CheckpointConfig(BaseModel):
 class MonitoringConfig(BaseModel):
     use_wandb: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
     wandb_project: Optional[str] = Field(
-        "mlx-grpo-qwen3-v3", description="W&B project name."
+        "mlx-grpo-qwen3-v4", description="W&B project name."
     )
     wandb_entity: Optional[str] = Field(
         None, description="Your W&B entity (username or team name)."
@@ -225,12 +225,12 @@ class GenerationConfig(BaseModel):
 
     # Sampling parameters
     think_boost_tokens: int = Field(8)
-    think_temperature: NonNegativeFloat = Field(0.08)
-    answer_temperature: NonNegativeFloat = Field(0.05)
+    think_temperature: NonNegativeFloat = Field(0.15)
+    answer_temperature: NonNegativeFloat = Field(0.1)
     sampling_top_p: NonNegativeFloat = Field(0.6)
     sampling_min_p: NonNegativeFloat = Field(0.00)
     sampling_top_k: int = Field(60)
-    repetition_penalty: Optional[float] = Field(1.4)
+    repetition_penalty: Optional[float] = Field(1.1)
     repetition_context_size: Optional[int] = Field(20)
 
     # Dynamic Bias Controls (from BEFORE_STATE)
@@ -3182,8 +3182,8 @@ class TrainerParams(BaseModel):
     grad_accum_steps: PositiveInt = Field(1)
     # Only enable alternating gradients
     alternate_dual_gradients:bool = Field(True) #  true
-    use_mixed_precision:bool = Field(True) # false  # Disabled for stability
-    log_memory_usage:bool = Field(False) # false
+    use_mixed_precision:bool = Field(False) # false  # Disabled for stability
+    log_memory_usage:bool = Field(True) # false
 
     alternate_dual_gradients:bool = Field(True) #
     # use_mixed_precision: true
