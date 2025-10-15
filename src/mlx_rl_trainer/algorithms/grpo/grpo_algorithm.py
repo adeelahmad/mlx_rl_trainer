@@ -1,34 +1,117 @@
-#-----------#
-# <FILE name="./grpo_algorithm.py">
-# Complete File with Dual Gradient (Thinking vs Answer) Support
-#
-# FIXES APPLIED:
-# 1. Optimized gradient computation - reduced from 3 forward passes to 2
-# 2. Better error handling and fallback to standard training
-# 3. Improved metrics collection efficiency
-#
-# CONFIGURATION REQUIRED (add to your config):
-# trainer:
-#   use_dual_gradients: true
-#   thinking_layer_start: 22
-#   thinking_layer_end: 30
-#   answer_layer_start: 31  # Starts AFTER thinking to avoid overlap
-#   answer_layer_end: 36
-#   answer_gradient_weight: 2.0  # 2x emphasis on fast answer path
-#
-# DEFAULT BEHAVIOR (non-breaking):
-# - If masks not present or use_dual_gradients=false: Falls back to standard training
-# - If answer_layer_start not specified: Auto-sets to thinking_layer_end + 1
-# - This creates separate pathways: thinking (slow) vs answer (fast)
-#
+"""
+GRPO Algorithm with Dual Gradient + SFT Layer Control
+
+FEATURES:
+1. Dual gradient computation (thinking vs answer paths)
+2. SFT loss computation with layer-specific control
+3. Three configurable SFT modes:
+   - 'all': Apply SFT to all layers (backward compatible)
+   - 'answer_only': SFT only on answer layers
+   - 'weighted': Different weights for thinking vs answer layers
+   - 'exclude_thinking': No SFT on thinking layers (DEFAULT for System 1/2)
+
+CONFIGURATION:
+trainer:
+  # Dual gradients for System 1/2
+  use_dual_gradients: true
+  thinking_layer_start: 22
+  thinking_layer_end: 30
+  answer_layer_start: 31
+  answer_layer_end: 36
+  answer_gradient_weight: 2.0
+
+  # SFT configuration
+  use_sft_on_answer: true
+  sft_mode: 'exclude_thinking'  # Recommended for System 1/2
+  sft_weight: 0.1
+  sft_thinking_weight: 0.0  # For 'weighted' mode
+  sft_answer_weight: 1.0    # For 'weighted' mode
+
+DEFAULT BEHAVIOR (non-breaking):
+- If sft_mode not specified: 'all' (backward compatible)
+- If layer boundaries not specified: Applies to all layers
+- 'exclude_thinking' prevents thinking layers from being constrained by SFT
+"""
 import logging
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_flatten
 from mlx_rl_trainer.core.config import ExperimentConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_layer_number(param_path: str) -> Optional[int]:
+    """Extract layer number from parameter path."""
+    import re
+    match = re.search(r'\.layers\.(\d+)\.', param_path)
+    return int(match.group(1)) if match else None
+
+
+def _mask_gradients_by_layers(
+    grads: Dict,
+    config: ExperimentConfig,
+    sft_mode: str,
+) -> Dict:
+    """
+    Mask SFT gradients based on layer configuration.
+
+    Modes:
+    - 'all': No masking (apply SFT to all layers)
+    - 'answer_only': Only answer layers get SFT gradients
+    - 'weighted': Different weights for thinking vs answer layers
+    - 'exclude_thinking': Zero out thinking layer gradients (DEFAULT)
+    """
+    # Get layer boundaries
+    thinking_start = getattr(config.trainer, 'thinking_layer_start', None)
+    thinking_end = getattr(config.trainer, 'thinking_layer_end', None)
+    answer_start = getattr(config.trainer, 'answer_layer_start', None)
+    answer_end = getattr(config.trainer, 'answer_layer_end', None)
+
+    # If layer boundaries not specified or mode is 'all', return gradients as-is
+    if sft_mode == 'all' or thinking_start is None or answer_start is None:
+        return grads
+
+    # Get weights for weighted mode
+    thinking_weight = getattr(config.trainer, 'sft_thinking_weight', 0.0)
+    answer_weight = getattr(config.trainer, 'sft_answer_weight', 1.0)
+
+    # Process gradients
+    masked_grads = {}
+    for key, grad in tree_flatten(grads):
+        layer_num = _extract_layer_number(key)
+
+        if layer_num is None:
+            # Non-layer parameters (embeddings, lm_head, etc.)
+            masked_grads[key] = grad
+        else:
+            # Layer-specific parameters
+            if sft_mode == 'answer_only':
+                if answer_start <= layer_num <= answer_end:
+                    masked_grads[key] = grad
+                else:
+                    masked_grads[key] = mx.zeros_like(grad)
+
+            elif sft_mode == 'weighted':
+                if thinking_start <= layer_num <= thinking_end:
+                    masked_grads[key] = grad * thinking_weight
+                elif answer_start <= layer_num <= answer_end:
+                    masked_grads[key] = grad * answer_weight
+                else:
+                    masked_grads[key] = grad
+
+            elif sft_mode == 'exclude_thinking':
+                if thinking_start <= layer_num <= thinking_end:
+                    masked_grads[key] = mx.zeros_like(grad)
+                else:
+                    masked_grads[key] = grad
+
+            else:
+                masked_grads[key] = grad
+
+    return masked_grads
+
 
 class GRPOAlgorithm:
     def __init__(self, config, actor_model, ref_model):
@@ -106,7 +189,7 @@ class GRPOAlgorithm:
         - Answer gradients: From answer tokens only
 
         These can be applied with different weights and to different layers
-        to create fast vs deep reasoning modes.
+        to create fast vs deep reasoning modes (System 1 vs System 2).
         """
         A = rollout_batch
 
@@ -178,12 +261,16 @@ class GRPOAlgorithm:
 
     def calculate_sft_loss_and_grads(self, rollout_batch, reference_tokens, full_config, pad_token_id):
         """
-        Compute SFT (supervised fine-tuning) loss and gradients on answer tokens only.
+        Compute SFT (supervised fine-tuning) loss and gradients with layer-specific control.
 
-        This provides a supervised signal to keep answers aligned with reference completions
-        while RL optimizes for rewards. Used in hybrid training where:
-        - Thinking tokens: RL only
-        - Answer tokens: RL + SFT
+        SFT provides supervised signal to keep answers aligned with reference completions
+        while RL optimizes for rewards.
+
+        NEW: Layer-specific SFT control for System 1/2 architecture:
+        - Mode 'exclude_thinking': No SFT on thinking layers (DEFAULT)
+        - Mode 'answer_only': SFT only on answer layers
+        - Mode 'weighted': Different weights for thinking vs answer layers
+        - Mode 'all': Apply to all layers (backward compatible)
 
         Args:
             rollout_batch: Batch containing tokens and masks
@@ -193,10 +280,26 @@ class GRPOAlgorithm:
 
         Returns:
             loss: SFT loss value
-            grads: Gradients from SFT loss
+            grads: Gradients from SFT loss (layer-masked if configured)
             metrics_dict: Dictionary with loss breakdown
         """
         A = rollout_batch
+
+        # Get SFT mode
+        sft_mode = getattr(full_config.trainer, 'sft_mode', 'all')
+
+        # Log SFT mode on first call
+        if not hasattr(self, '_sft_mode_logged'):
+            logger.info(f"SFT layer control mode: {sft_mode}")
+            if sft_mode == 'exclude_thinking':
+                logger.info("System 2 (thinking) layers will NOT receive SFT gradients - only RL signal")
+            elif sft_mode == 'answer_only':
+                logger.info("Only System 1 (answer) layers will receive SFT gradients")
+            elif sft_mode == 'weighted':
+                thinking_w = getattr(full_config.trainer, 'sft_thinking_weight', 0.0)
+                answer_w = getattr(full_config.trainer, 'sft_answer_weight', 1.0)
+                logger.info(f"Weighted SFT: thinking={thinking_w}, answer={answer_w}")
+            self._sft_mode_logged = True
 
         # Check if we have answer mask
         if 'answer_mask' not in A:
@@ -217,7 +320,6 @@ class GRPOAlgorithm:
             logits = logits.astype(mx.float32)
 
             # Extract response portion logits
-            # offset tells us where response starts in the full sequence
             offset = A[tokens_key].shape[1] - A[response_mask_key].shape[1]
 
             # Shift logits for next-token prediction: logits[t] predicts token[t+1]
@@ -258,12 +360,12 @@ class GRPOAlgorithm:
         try:
             loss_grad_fn = nn.value_and_grad(self.actor, compute_sft_loss)
             (loss, metrics), grads = loss_grad_fn(self.actor)
+
+            # Apply layer-specific masking to gradients
+            grads = _mask_gradients_by_layers(grads, full_config, sft_mode)
+
             metrics_dict = {k: float(v.item()) for k, v in metrics.items()}
             return loss, grads, metrics_dict
         except Exception as e:
             logger.error(f"Error during SFT loss computation: {e}", exc_info=True)
             return mx.array(0.0), {}, {'sft_loss': 0.0}
-
-# End of File: ./grpo_algorithm.py
-#</FILE>
-#-----------#
