@@ -20,7 +20,7 @@ from .mlx_utils import (
     metal_before_update,
     _global_grad_norm,
     _maybe_clip_grad_norm,
-    _is_metal_internal_error,
+    limit_memory
 )
 
 from .text_utils import (
@@ -57,6 +57,7 @@ from .distributed import DistributedUtil
 __all__ = [
     # mlx_utils
     "metal_safe_apply_gradients",
+    "limit_memory",
     "_is_metal_internal_error",
     "metal_recover",
     "_create_4d_attention_mask",

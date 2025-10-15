@@ -8,6 +8,7 @@ from rich.logging import RichHandler
 from rich import print as rprint, traceback as rich_traceback
 import numpy as np
 
+
 # Add src to path for local imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -28,6 +29,7 @@ from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.monitoring.metrics_logger import MetricsLogger, _emit_plots_from_csv
+from mlx_rl_trainer.utils import limit_memory
 
 # Import rewards and evaluators to register them
 import mlx_rl_trainer.rewards
@@ -205,6 +207,7 @@ async def _async_main():
 
 def main():
     rprint(f"MLX using device: [bold cyan]{mx.default_device()}[/bold cyan]")
+    limit_memory(80)
     asyncio.run(_async_main())
 
 

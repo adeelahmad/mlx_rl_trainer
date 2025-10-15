@@ -17,6 +17,7 @@ from mlx.utils import tree_flatten, tree_map, tree_unflatten
 
 from mlx_rl_trainer.core.config import ExperimentConfig, GenerationConfig
 from mlx_rl_trainer.core.exceptions import CheckpointError
+import sys
 
 try:
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
@@ -43,6 +44,48 @@ _TOOL_LIKE_MARKERS = [
     "<scratchpad",
     "</scratchpad",
 ]
+
+
+
+def limit_memory(max_memory_gb: float) -> Optional[int]:
+    """Sets the MLX memory limit using updated API with error handling."""
+    try:
+        # Check for mx.get_peak_memory() existence
+        if hasattr(mx, "get_peak_memory"):
+            logging.info(f"Initial peak memory: {mx.get_peak_memory() / 1e9:.3f} GB")
+        else:
+            logging.warning("mx.get_peak_memory() not found in this MLX version.")
+
+        max_memory_bytes = int(max_memory_gb * 1024 * 1024 * 1024)
+
+        # Add try/except around mx.set_memory_limit()
+        if hasattr(mx, "set_memory_limit"):
+            previous_limit = mx.set_memory_limit(max_memory_bytes)
+            logging.info(
+                f"MLX memory limit set to {max_memory_gb} GB. Previous limit: {(previous_limit / (1024**3)):.2f} GB"
+            )
+            return previous_limit
+        elif hasattr(mx.metal, "set_memory_limit"):  # Check older API location
+            previous_limit = mx.metal.set_memory_limit(max_memory_bytes)
+            logging.info(
+                f"MLX memory limit set to {max_memory_gb} GB (using mx.metal). Previous limit: {(previous_limit / (1024**3)):.2f} GB"
+            )
+            sys.exit(0)
+            return previous_limit
+        else:
+            logging.warning(
+                "mx.set_memory_limit() not found in this MLX version. Cannot limit memory."
+            )
+            return None
+    except AttributeError:
+        logging.warning(
+            "MLX memory management functions (get_peak_memory/set_memory_limit) not found. Check MLX version."
+        )
+        return None
+    except Exception as e:
+        logging.error(f"Failed to set MLX memory limit: {e}", exc_info=True)
+        return None
+
 
 
 def _is_metal_internal_error(err: BaseException) -> bool:

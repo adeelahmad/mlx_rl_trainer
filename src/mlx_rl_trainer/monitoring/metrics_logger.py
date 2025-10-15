@@ -1,5 +1,5 @@
 """Handles logging to CSV, NDJSON, and Weights & Biases."""
-import logging, csv, json, threading, time
+import logging, csv, json, threading, time, gc
 from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 import mlx.core as mx
@@ -21,6 +21,16 @@ from mlx_rl_trainer.utils.text_utils import _preview, _extract_think_answer_leng
 
 logger = logging.getLogger(__name__)
 wandb_run: Any = None
+
+
+def _aggressive_memory_cleanup():
+    """Aggressively free memory."""
+    try:
+        mx.metal.clear_cache()
+    except:
+        pass
+    mx.clear_cache()
+    gc.collect()
 
 
 def _calculate_mcq_accuracy(
@@ -50,6 +60,8 @@ class MetricsLogger:
         self._writer: Optional[csv.DictWriter] = None
         self._headers: List[str] = []
         self._lock = threading.Lock()
+        self._write_count = 0
+        self._cleanup_interval = 100  # Cleanup every N writes
 
         try:
             self._file = open(self.file_path, "a", newline="", encoding="utf-8")
@@ -59,7 +71,10 @@ class MetricsLogger:
     def log_metrics(self, metrics: Dict[str, Any], step: int):
         if not self._file or self._file.closed:
             return
+
         loggable: Dict[str, Any] = {"update_step": step, "run_id": self.run_id}
+
+        # Convert metrics to loggable format
         for k, v in metrics.items():
             if isinstance(v, (mx.array, np.ndarray)):
                 loggable[k] = v.item() if v.size == 1 else str(v.tolist())
@@ -71,6 +86,8 @@ class MetricsLogger:
         with self._lock:
             try:
                 current_headers = sorted(loggable.keys())
+
+                # Recreate writer if headers changed
                 if self._writer is None or self._headers != current_headers:
                     is_empty = (
                         not self.file_path.exists()
@@ -82,33 +99,62 @@ class MetricsLogger:
                     )
                     if is_empty:
                         self._writer.writeheader()
+
+                # Write the row
                 self._writer.writerow(loggable)
                 self._file.flush()
+
+                # Increment write counter
+                self._write_count += 1
+
+                # Periodic memory cleanup
+                if self._write_count % self._cleanup_interval == 0:
+                    _aggressive_memory_cleanup()
+
             except Exception as e:
                 logger.error(f"Error writing metrics CSV: {e}", exc_info=True)
 
     def close(self):
         with self._lock:
             if self._file and not self._file.closed:
+                self._file.flush()
                 self._file.close()
                 self._file = None
+                self._writer = None
+        # Final cleanup
+        _aggressive_memory_cleanup()
 
 
 def _emit_plots_from_csv(
     csv_path: Path, out_dir: Path, config: ExperimentConfig = None, run_id = None
 ):
+    """
+    Generate plots from CSV metrics file.
+    Memory optimized: Uses chunked processing and explicit cleanup.
+    """
     if (
         not (PANDAS_AVAILABLE and MPL_AVAILABLE)
         or not csv_path.exists()
         or csv_path.stat().st_size < 100
     ):
         return
+
     try:
-        # FIX 1: Added on_bad_lines='skip' to prevent ParserError (saw in logs)
-        # when corrupted lines (with too many fields) are encountered.
+        # Read CSV with error handling for corrupted lines
         df = pd.read_csv(csv_path, on_bad_lines='skip')
+
         if df.empty:
+            del df
             return
+
+        # Remove duplicate update_steps, keeping the last entry
+        x_col = "update_step"
+        if x_col in df.columns:
+            # Keep the last entry (most recent log) for each unique 'update_step' value
+            df = df.drop_duplicates(subset=[x_col], keep='last')
+
+            # Sort by update_step for proper plotting
+            df = df.sort_values(by=x_col).reset_index(drop=True)
 
         # Define all meaningful plot columns (Y-axes)
         plot_metrics = {
@@ -123,51 +169,74 @@ def _emit_plots_from_csv(
             "train/rewards/raw_CodeExecutionReward": "reward_CodeExecution",
         }
 
-        # --- FIX 2: Ensure only the latest metric value per update_step is used for plotting ---
-        x_col = "update_step"
-        if x_col in df.columns:
-            # Keep the last entry (most recent log) for each unique 'update_step' value.
-            df = df.drop_duplicates(subset=[x_col], keep='last')
-        # -----------------------------------------------------------------------------------
-
         # Use run_id if available, otherwise use a generic 'plots' directory structure
         plots_dir = out_dir / "plots"
         if run_id:
-             plots_dir = plots_dir / run_id
+            plots_dir = plots_dir / run_id
 
         plots_dir.mkdir(exist_ok=True, parents=True)
 
         def _plot(y_col: str, fname_suffix: str, x_col: str = "update_step"):
-            if y_col in df.columns:
-                plt.figure(figsize=(10, 6))
+            """Generate a single plot with memory cleanup."""
+            if y_col not in df.columns or x_col not in df.columns:
+                return
 
-                # Use raw NumPy arrays from the filtered DataFrame for plotting
-                plt.plot(df[x_col].values, df[y_col].values)
+            try:
+                # Create figure
+                fig, ax = plt.subplots(figsize=(10, 6))
+
+                # Extract data as numpy arrays for efficient plotting
+                x_data = df[x_col].values
+                y_data = df[y_col].values
+
+                # Plot
+                ax.plot(x_data, y_data)
 
                 # Formatting
                 x_label = x_col.replace("_", " ").title()
                 y_label = y_col.replace("_", " ").title()
 
-                plt.xlabel(x_label)
-                plt.ylabel(y_label)
-                plt.title(
-                    f"{y_label} vs {x_label}"
-                )
-                plt.grid(True, alpha=0.5)
-                plt.tight_layout()
+                ax.set_xlabel(x_label)
+                ax.set_ylabel(y_label)
+                ax.set_title(f"{y_label} vs {x_label}")
+                ax.grid(True, alpha=0.5)
 
-                # Use the safer suffix for the filename
+                fig.tight_layout()
+
+                # Use safe filename
                 safe_y_col = y_col.replace('/', '_').replace('.', '_')
-                plt.savefig(plots_dir / f"{safe_y_col}_{fname_suffix}.png")
-                plt.close()
+                plot_path = plots_dir / f"{safe_y_col}_{fname_suffix}.png"
 
+                # Save and close
+                fig.savefig(plot_path, dpi=100, bbox_inches='tight')
+                plt.close(fig)
+
+                # Clean up references
+                del fig, ax, x_data, y_data
+
+            except Exception as e:
+                logger.warning(f"Failed to plot {y_col}: {e}")
+                # Ensure figure is closed even on error
+                plt.close('all')
+
+        # Generate each plot
         for col, name in plot_metrics.items():
             _plot(col, name)
+            # Periodic cleanup after every few plots
+            gc.collect()
+
+        # Final cleanup
+        del df
+        plt.close('all')
+        _aggressive_memory_cleanup()
 
         logger.info(f"Plots generated in: {plots_dir}")
+
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
-
+        # Ensure all figures are closed on error
+        plt.close('all')
+        _aggressive_memory_cleanup()
 
 
 def _maybe_log_samples(
@@ -180,6 +249,10 @@ def _maybe_log_samples(
     run_id: str,
     is_invalid_batch: bool,
 ):
+    """
+    Log sample generations to JSONL file.
+    Memory optimized: Process samples one at a time and cleanup.
+    """
     if (
         config.monitoring.log_samples_every <= 0
         or update_idx % config.monitoring.log_samples_every != 0
@@ -194,6 +267,7 @@ def _maybe_log_samples(
         )
         k = min(config.monitoring.max_logged_samples, len(decoded_responses))
 
+        # Use context manager for automatic file closing
         with open(out_path, "a", encoding="utf-8") as f:
             for i in range(k):
                 p_idx = i // config.trainer.num_rollout_samples
@@ -202,8 +276,14 @@ def _maybe_log_samples(
 
                 original_sample = prompts_data[p_idx]
                 gen_text = decoded_responses[i]
-                ref_text =  original_sample.get('ref', {"completion":f"{config.generation.think_start_tag}\n{original_sample.get('ref_think_str','')}{config.generation.think_end_tag}\n{original_sample.get('ref_answer_str','')}"})["completion"]
 
+                # Construct reference text
+                ref_dict = original_sample.get('ref', {
+                    "completion": f"{config.generation.think_start_tag}\n{original_sample.get('ref_think_str','')}{config.generation.think_end_tag}\n{original_sample.get('ref_answer_str','')}"
+                })
+                ref_text = ref_dict.get("completion", "") if isinstance(ref_dict, dict) else str(ref_dict)
+
+                # Extract lengths
                 gen_think_len, gen_ans_len = _extract_think_answer_lengths(
                     gen_text, config.generation
                 )
@@ -211,6 +291,7 @@ def _maybe_log_samples(
                     ref_text, config.generation
                 )
 
+                # Build entry
                 entry = {
                     "update": update_idx,
                     "is_invalid_batch": is_invalid_batch,
@@ -227,10 +308,20 @@ def _maybe_log_samples(
                     "ref_ans_len": ref_ans_len,
                     "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
+
+                # Add individual reward components
                 for r_name, r_vals in rewards_data.items():
                     if r_name != "total":
                         entry[f"reward_{r_name}"] = r_vals[i]
 
+                # Write entry
                 f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+                # Clean up entry to free memory
+                del entry
+
+        # Periodic cleanup after logging samples
+        _aggressive_memory_cleanup()
+
     except Exception as e:
         logger.error(f"Sample NDJSON logging failed: {e}", exc_info=True)

@@ -161,7 +161,16 @@ class BaseTrainer(ABC):
         return tree_map(lambda g: g * scale if isinstance(g, mx.array) else g, grads)
 
     async def run(self, should_shutdown: Callable[[], bool]):
-        self.global_step, self.current_epoch = self._setup()
+        resumed_step, self.current_epoch = self._setup()
+
+        # Fix #1: If we resumed from a checkpoint, start at the NEXT step
+        # to avoid re-training and re-saving the same step
+        if resumed_step > 0:
+            self.global_step = resumed_step + 1
+            logger.info(f"Resumed from checkpoint at step {resumed_step}, continuing from step {self.global_step}")
+        else:
+            self.global_step = 0
+            logger.info("Starting training from scratch at step 0")
 
         if self.tokenizer:
             self.data_manager.set_tokenizer(self.tokenizer)
@@ -181,11 +190,13 @@ class BaseTrainer(ABC):
         grad_accum_steps = self.config.trainer.grad_accum_steps
         grad_scale = 1.0 / grad_accum_steps
 
+        # Track if we already saved a final checkpoint
+        training_completed = False
+
         with pbar:
             while self.global_step < self.config.trainer.num_training_steps:
                 if should_shutdown():
                     logger.info("Shutdown requested. Breaking training loop.")
-                    self.save_final_checkpoint(reason="signal")
                     break
 
                 # Streaming aggregation instead of list accumulation
@@ -194,9 +205,12 @@ class BaseTrainer(ABC):
                 sum_reward = 0.0
                 sum_kl = 0.0
                 count_microbatches = 0
-                
+
                 # Accumulate raw reward components efficiently
                 aggregated_raw_rewards = {}
+
+                # Fix #2: Track whether we actually performed training this iteration
+                training_performed = False
 
                 for accum_idx in range(grad_accum_steps):
                     try:
@@ -242,7 +256,7 @@ class BaseTrainer(ABC):
                     metrics_mb, grads_mb, step_metrics = self.train_step(
                         rollout_batch, self.global_step
                     )
-                    
+
                     # Stream aggregate metrics (avoid storing full metric objects)
                     sum_loss += metrics_mb.loss
                     sum_kl += metrics_mb.kl_divergence
@@ -258,7 +272,7 @@ class BaseTrainer(ABC):
                     if grads_mb:
                         # Scale gradients immediately to avoid storing unscaled versions
                         grads_mb_scaled = self._scale_gradients_inplace(grads_mb, grad_scale)
-                        
+
                         if accum_grads is None:
                             accum_grads = grads_mb_scaled
                         else:
@@ -266,13 +280,13 @@ class BaseTrainer(ABC):
                             accum_grads = tree_map(mx.add, accum_grads, grads_mb_scaled)
                             # Force evaluation to free intermediate results
                             mx.eval(tree_flatten(accum_grads))
-                        
+
                         # Clean up immediately
                         del grads_mb, grads_mb_scaled
-                    
+
                     # Clean up batch-specific data immediately
                     del batch_data, rollout_batch, metrics_mb, step_metrics
-                    
+
                     # Aggressive cleanup after each microbatch
                     self._aggressive_memory_cleanup()
 
@@ -281,7 +295,7 @@ class BaseTrainer(ABC):
                     # Compute grad norm efficiently (force evaluation first)
                     flat_grads = [v for _, v in tree_flatten(accum_grads) if isinstance(v, mx.array)]
                     mx.eval(flat_grads)
-                    
+
                     grad_norm = np.linalg.norm(
                         [np.linalg.norm(np.array(v.flatten().astype(mx.float32))) for v in flat_grads]
                     )
@@ -295,6 +309,9 @@ class BaseTrainer(ABC):
                         accum_grads, self.actor_model.trainable_parameters()
                     )
                     mx.eval(self.actor_model.parameters(), self.optimizer.state)
+
+                    # Mark that training was actually performed
+                    training_performed = True
 
                     # Clean up gradients immediately after application
                     del accum_grads
@@ -322,14 +339,14 @@ class BaseTrainer(ABC):
                             "train/epoch": self.current_epoch,
                             "train/step": self.global_step,
                         }
-                        
+
                         # Add raw rewards if available
                         if aggregated_raw_rewards:
                             log_dict.update({
                                 f"train/rewards/raw_{k}": v
                                 for k, v in aggregated_raw_rewards.items()
                             })
-                        
+
                         self.metrics_logger.log_metrics(log_dict, step=self.global_step)
 
                     # Update progress bar
@@ -358,34 +375,59 @@ class BaseTrainer(ABC):
                         self.global_step == self.config.trainer.num_training_steps - 1
                     )
 
-                    primary_metric = -float("inf")
-                    
+                    # Mark if this is the final training step
+                    if is_final:
+                        training_completed = True
+
+                    primary_metric = None
+                    eval_performed = False
+
                     # Evaluation with memory cleanup
                     if is_eval or is_final:
                         # Clear caches before evaluation
                         self._aggressive_memory_cleanup()
-                        
+
                         eval_results = self.evaluate(self.global_step)
+                        best_metric = -float("inf")
                         for metric in eval_results:
                             if self.metrics_logger:
                                 self.metrics_logger.log_metrics(
                                     metric.to_dict(), step=self.global_step
                                 )
-                            if metric.pass_rate > primary_metric:
-                                primary_metric = metric.pass_rate
-                        
+                            if metric.pass_rate > best_metric:
+                                best_metric = metric.pass_rate
+
+                        primary_metric = best_metric
+                        eval_performed = True
+
                         # Clean up after evaluation
                         del eval_results
                         self._aggressive_memory_cleanup()
 
                     # Checkpoint saving
-                    should_save_best = self.checkpoint_manager.is_best_metric(
-                        primary_metric
+                    # Only check if this is the best metric when we actually performed evaluation
+                    should_save_best = (
+                        eval_performed
+                        and primary_metric is not None
+                        and self.checkpoint_manager.is_best_metric(primary_metric)
                     )
-                    if is_save or is_final or should_save_best:
+
+                    # Fix #2: Only save if we actually performed training this iteration
+                    # Exception: Always save the final checkpoint regardless
+                    would_save = is_save or is_final or should_save_best
+                    should_save = would_save and (training_performed or is_final)
+
+                    if should_save:
                         # Clear caches before saving
                         self._aggressive_memory_cleanup()
-                        
+
+                        # Use the metric from evaluation if available, otherwise use current best
+                        checkpoint_metric = (
+                            primary_metric
+                            if eval_performed and primary_metric is not None
+                            else self.checkpoint_manager.best_metric
+                        )
+
                         self.checkpoint_manager.save_checkpoint(
                             step=self.global_step,
                             model=self.actor_model,
@@ -395,20 +437,30 @@ class BaseTrainer(ABC):
                                 "epoch": self.current_epoch,
                                 "save_optimizer_state": self.config.checkpointing.save_optimizer_state,
                             },
-                            current_metric=primary_metric,
+                            current_metric=checkpoint_metric,
                         )
-                        
+
                         # Cleanup after checkpoint
                         self._aggressive_memory_cleanup()
+                    elif would_save and not training_performed:
+                        # Log when we skip saving due to no training
+                        logger.info(
+                            f"Skipping checkpoint save at step {self.global_step} - no training performed this iteration"
+                        )
 
                 self.global_step += 1
-                
+
                 # Periodic aggressive cleanup every N steps
                 if self.global_step % 10 == 0:
                     self._aggressive_memory_cleanup()
 
         # Final cleanup and checkpoint
         self._aggressive_memory_cleanup()
-        self.save_final_checkpoint(
-            reason="completed" if not should_shutdown() else "interrupted"
-        )
+
+        # Save final checkpoint only if:
+        # 1. Training was interrupted (shutdown requested), OR
+        # 2. We never reached the final step (edge case: resumed at or past end)
+        # The is_final condition in the loop already handles normal completion
+        if should_shutdown() or (not training_completed and self.global_step > resumed_step):
+            reason = "interrupted" if should_shutdown() else "completed"
+            self.save_final_checkpoint(reason=reason)
