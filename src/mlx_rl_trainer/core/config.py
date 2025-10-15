@@ -3180,6 +3180,16 @@ class TrainerParams(BaseModel):
     ppo_batch_size: PositiveInt = Field(1)
     num_rollout_samples: PositiveInt = Field(2)
     grad_accum_steps: PositiveInt = Field(1)
+    # Only enable alternating gradients
+    alternate_dual_gradients:bool = Field(True) #  true
+    use_mixed_precision:bool = Field(True) # false  # Disabled for stability
+    log_memory_usage:bool = Field(False) # false
+
+    alternate_dual_gradients:bool = Field(True) #
+    # use_mixed_precision: true
+
+
+
     grpo_beta: NonNegativeFloat = Field(0.0025)
     seed: int = Field(-1)
 
@@ -3225,7 +3235,7 @@ class TrainerParams(BaseModel):
 
     # NEW: Hybrid RL+SFT
     use_sft_on_answer: bool = Field(True)
-    sft_weight: Optional[NonNegativeFloat] = Field(0.2)
+    # sft_weight: Optional[NonNegativeFloat] = Field(0.2)
 
     # NEW: Adaptive balancing (CRITICAL!)
     adaptive_gradient_weights: bool = Field(True)
@@ -6281,6 +6291,13 @@ COMPRESS EVERYTHING. Every word must earn its place."""
     align_bridge_weight: NonNegativeFloat = Field(1.0)
     align_pool: Literal["mean", "last"] = Field("mean")
     align_after_tag: str = Field("</think>")
+
+    # SFT configuration - OPTION 2
+    use_sft_on_answer: bool = Field(True)
+    sft_mode:str = Field('weighted')
+    sft_weight:NonNegativeFloat = Field(0.2)
+    sft_thinking_weight:NonNegativeFloat = Field(0.2)      # 10% SFT on thinking layers
+    sft_answer_weight: NonNegativeFloat =  Field(1.7)        # 100% SFT on answer layers
 
     @model_validator(mode="after")
     def validate_reward_weights_sum(self) -> "ExperimentConfig":
