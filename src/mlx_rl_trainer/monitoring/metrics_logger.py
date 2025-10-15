@@ -36,10 +36,6 @@ wandb_run = None  # Global variable to hold the wandb run object
 
 
 def _aggressive_memory_cleanup():
-    try:
-        mx.metal.clear_cache()
-    except Exception:
-        pass
     mx.clear_cache()
     gc.collect()
 
@@ -103,25 +99,31 @@ def _emit_plots_from_csv(
     config: ExperimentConfig,
     run_id: Optional[str] = None,
 ):
-    if not (PANDAS_AVAILABLE and MPL_AVAILABLE) or not csv_path.exists():
+    if (
+        not (PANDAS_AVAILABLE and MPL_AVAILABLE)
+        or not csv_path.exists()
+        or csv_path.stat().st_size == 0
+    ):
         return
     try:
-        df = (
-            pd.read_csv(csv_path, on_bad_lines="skip")
-            .sort_values("step")
-            .drop_duplicates("step", keep="last")
-        )
-        if df.empty:
+        df = pd.read_csv(csv_path, on_bad_lines="skip")
+        # **THE FIX**: Check if 'step' column exists before proceeding
+        if df.empty or "step" not in df.columns:
+            logger.warning(
+                "Metrics CSV is empty or missing 'step' column. Skipping plot generation."
+            )
             return
 
+        df = df.sort_values("step").drop_duplicates("step", keep="last")
+
         plot_dir = out_dir / "plots"
-        plot_dir.mkdir(exist_ok=True)
+        plot_dir.mkdir(exist_ok=True, parents=True)
         wandb_images = {}
         for col in df.columns:
             if (
                 "step" != col
                 and "run_id" != col
-                and df[col].dtype in ["float64", "int64"]
+                and pd.api.types.is_numeric_dtype(df[col])
                 and not df[col].isnull().all()
             ):
                 fig, ax = plt.subplots()
@@ -169,7 +171,7 @@ def _maybe_log_samples(
         }
         samples.append(sample)
 
-    if WANDB_AVAILABLE and wandb_run:
+    if WANDB_AVAILABLE and wandb_run and samples:
         try:
             table = wandb.Table(
                 columns=list(samples[0].keys()),
