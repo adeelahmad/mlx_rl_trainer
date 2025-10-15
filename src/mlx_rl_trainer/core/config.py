@@ -193,7 +193,7 @@ class CheckpointConfig(BaseModel):
         description="Directory relative to output_dir to save checkpoints.",
     )
     save_every: PositiveInt = Field(
-        100, description="Save a full checkpoint every N training updates."
+        10, description="Save a full checkpoint every N training updates."
     )
     keep_last_n: PositiveInt = Field(
         3, description="Number of most recent checkpoints to retain."
