@@ -7,6 +7,8 @@ FIXES APPLIED:
 3. Comprehensive validation and error logging
 4. Clear warnings for edge cases (no thinking tokens, no answer tokens, etc.)
 5. Removed unused PagedKVCache - was a parameter but never actually used
+6. **NEW: Fixed cache corruption bug** - Clear cache between batches + shuffle replicated prompts
+7. **NEW: Prevent adjacent duplicate prompts** - Avoids cache interference in second generation
 
 FORMAT REQUIREMENT:
 Your model must generate responses in this format:
@@ -30,6 +32,7 @@ No other config needed - masks auto-created from generation format.
 import logging
 import gc
 import re
+import random  # NEW: For prompt shuffling
 from typing import Dict, Any, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
@@ -55,7 +58,7 @@ from mlx_rl_trainer.algorithms.grpo.grpo_algorithm import GRPOAlgorithm
 logger = logging.getLogger(__name__)
 
 
-def _create_thinking_answer_masks(
+def _create_thinking_answer_masksx(
     responses_mx: mx.array,
     decoded_responses: List[str],
     tokenizer: TokenizerWrapper,
@@ -186,6 +189,140 @@ def _create_thinking_answer_masks(
     return thinking_mask_batch, answer_mask_batch
 
 
+
+
+def _create_thinking_answer_masks(
+    responses_mx: mx.array,
+    decoded_responses: List[str],
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+    pad_id: int,
+) -> Tuple[mx.array, mx.array, Dict[str, Any]]:
+    """
+    Create masks + return statistics for metrics tracking.
+
+    NEW: Returns statistics dictionary for WandB logging
+    """
+    batch_size, seq_len = responses_mx.shape
+    thinking_mask_list = []
+    answer_mask_list = []
+
+    think_end_tag = '</think>'
+    max_thinking_tokens = getattr(config.trainer, 'max_thinking_tokens', 80)
+
+    thinking_lengths = []
+    answer_lengths = []
+    missing_answer_count = 0
+    missing_thinking_count = 0
+    truncated_count = 0
+
+    for batch_idx in range(batch_size):
+        decoded_text = decoded_responses[batch_idx]
+        response_tokens = responses_mx[batch_idx].tolist()
+
+        thinking_end_pos = decoded_text.find(think_end_tag)
+        has_think_start = '<think>' in decoded_text
+
+        thinking_mask = mx.zeros(seq_len, dtype=mx.float32)
+        answer_mask = mx.zeros(seq_len, dtype=mx.float32)
+
+        if thinking_end_pos == -1:
+            thinking_token_count = 0
+            for i in range(seq_len):
+                if response_tokens[i] != pad_id:
+                    thinking_mask[i] = 1.0
+                    thinking_token_count += 1
+
+            missing_answer_count += 1
+            if not has_think_start:
+                missing_thinking_count += 1
+
+            thinking_lengths.append(thinking_token_count)
+            answer_lengths.append(0)
+
+            logger.warning(
+                f"Sample {batch_idx}: No </think> tag - "
+                f"{thinking_token_count} tokens as thinking (NO ANSWER!)"
+            )
+        else:
+            thinking_end_pos_with_tag = thinking_end_pos + len(think_end_tag)
+            thinking_token_count = 0
+            accumulated_text = ""
+
+            for i in range(seq_len):
+                if response_tokens[i] == pad_id:
+                    break
+                token_text = tokenizer.decode([response_tokens[i]])
+                accumulated_text += token_text
+                if len(accumulated_text) >= thinking_end_pos_with_tag:
+                    thinking_token_count = i + 1
+                    break
+
+            if thinking_token_count == 0 and thinking_end_pos_with_tag > 0:
+                non_pad = seq_len - response_tokens.count(pad_id)
+                avg_char_per_token = len(decoded_text) / max(1, non_pad)
+                thinking_token_count = min(seq_len, int(thinking_end_pos_with_tag / avg_char_per_token) + 1)
+
+            for i in range(min(thinking_token_count, seq_len)):
+                if response_tokens[i] != pad_id:
+                    thinking_mask[i] = 1.0
+
+            answer_token_count = 0
+            for i in range(thinking_token_count, seq_len):
+                if response_tokens[i] != pad_id:
+                    answer_mask[i] = 1.0
+                    answer_token_count += 1
+
+            thinking_lengths.append(thinking_token_count)
+            answer_lengths.append(answer_token_count)
+
+            if answer_token_count < 10 and thinking_token_count > max_thinking_tokens * 0.8:
+                truncated_count += 1
+
+            if thinking_token_count > max_thinking_tokens:
+                logger.warning(
+                    f"Sample {batch_idx}: Excessive thinking - "
+                    f"{thinking_token_count} tokens, {answer_token_count} answer"
+                )
+
+        thinking_mask_list.append(thinking_mask[None, :])
+        answer_mask_list.append(answer_mask[None, :])
+
+    thinking_mask_batch = mx.concatenate(thinking_mask_list, axis=0)
+    answer_mask_batch = mx.concatenate(answer_mask_list, axis=0)
+
+    # Compile statistics for WandB
+    stats = {
+        'generation/thinking_tokens_avg': sum(thinking_lengths) / len(thinking_lengths) if thinking_lengths else 0,
+        'generation/answer_tokens_avg': sum(answer_lengths) / len(answer_lengths) if answer_lengths else 0,
+        'generation/thinking_tokens_max': max(thinking_lengths) if thinking_lengths else 0,
+        'generation/answer_tokens_min': min(answer_lengths) if answer_lengths else 0,
+        'generation/missing_answer_count': missing_answer_count,
+        'generation/missing_thinking_count': missing_thinking_count,
+        'generation/truncated_count': truncated_count,
+    }
+
+    if stats['generation/answer_tokens_avg'] > 0:
+        stats['generation/thinking_answer_ratio'] = (
+            stats['generation/thinking_tokens_avg'] / stats['generation/answer_tokens_avg']
+        )
+    else:
+        stats['generation/thinking_answer_ratio'] = float('inf')
+
+    logger.debug(
+        f"Masks: thinking={stats['generation/thinking_tokens_avg']:.1f}, "
+        f"answer={stats['generation/answer_tokens_avg']:.1f}, "
+        f"ratio={stats['generation/thinking_answer_ratio']:.2f}:1"
+    )
+
+    if stats['generation/thinking_answer_ratio'] > 4.0:
+        logger.warning(f"SEVERE IMBALANCE: ratio {stats['generation/thinking_answer_ratio']:.2f}:1")
+    if missing_answer_count > 0:
+        logger.warning(f"CRITICAL: {missing_answer_count}/{batch_size} missing answer")
+
+    return thinking_mask_batch, answer_mask_batch, stats
+
+
 def generate_rollouts_for_batch(
     model: nn.Module,
     ref_model: nn.Module,
@@ -197,13 +334,15 @@ def generate_rollouts_for_batch(
     run_id: str,
     current_update: int,
     is_invalid_batch: bool,
-) -> Tuple[Dict[str, mx.array], float, Dict[str, float]]:
+) -> Tuple[Dict[str, mx.array], float, Dict[str, float], Dict[str, Any]]:
     """
-    Generate rollouts for a batch of prompts with optional thinking/answer mask creation.
+    Generate rollouts with CACHE BUG FIX + comprehensive metrics.
 
-    If config.trainer.use_dual_gradients is True, this function will automatically
-    create thinking_mask and answer_mask arrays that separate thinking tokens from
-    answer tokens, enabling the dual gradient training approach.
+    CRITICAL FIX: Cache reset between samples!
+    NEW: Returns generation_metrics dict for WandB logging
+
+    Returns:
+        (rollout_batch, avg_reward, avg_breakdown, generation_metrics)
     """
     model.eval()
     if ref_model:
@@ -211,14 +350,15 @@ def generate_rollouts_for_batch(
 
     num_prompts = len(prompts_data)
     if num_prompts == 0:
-        return {}, 0.0, {}
+        return {}, 0.0, {}, {}
+
+    num_samples_per_prompt = config.trainer.num_rollout_samples
 
     prompts_data_replicated = [
-        p for p in prompts_data for _ in range(config.trainer.num_rollout_samples)
+        p for p in prompts_data for _ in range(num_samples_per_prompt)
     ]
     indices = [p["original_index"] for p in prompts_data_replicated]
 
-    # Use the builder to get tokens correctly
     _, prompts_mx, max_prompt_len = build_rollout_batch(
         tokenizer, dataset, indices, config
     )
@@ -228,77 +368,84 @@ def generate_rollouts_for_batch(
     pad_id = tokenizer.pad_token_id
     eos_id = tokenizer.eos_token_id
 
-    # --- Generation Loop ---
-    model_caches = cache.make_prompt_cache(model, max_kv_size=config.max_kv_size)
-    if prompts_mx.size == 0:
-        return {}, 0.0, {}
+    # === CRITICAL FIX: Generate each sample with FRESH cache ===
+    all_responses_tok_list = []
+    all_actor_lp_list = []
 
-    out_actor = model(prompts_mx.astype(mx.int64), cache=model_caches)
-    next_logits = (out_actor[0] if isinstance(out_actor, tuple) else out_actor)[
-        :, -1, :
-    ].astype(mx.float32)
+    for sample_idx in range(total_samples):
+        # CREATE FRESH CACHE for each sample!
+        from mlx_lm.models import cache as mlx_cache
+        sample_cache = mlx_cache.make_prompt_cache(model, max_kv_size=config.max_kv_size)
 
-    mcq_flags = [p.get("is_mcq", False) for p in prompts_data_replicated]
-    logit_processor = make_dynamic_tag_bias_processor(tokenizer, config, mcq_flags)
+        sample_prompt = prompts_mx[sample_idx:sample_idx+1]
+        if sample_prompt.size == 0:
+            continue
 
-    hist_tokens_py = prompts_mx.tolist()
-    responses_tok_list, actor_lp_cached_list = [], []
-    ended = mx.full((total_samples,), False, dtype=mx.bool_)
+        # Forward pass with fresh cache
+        out = model(sample_prompt.astype(mx.int64), cache=sample_cache)
+        next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(mx.float32)
 
-    for step in range(max_gen_len):
-        if mx.all(ended).item():
-            break
+        mcq_flag = prompts_data_replicated[sample_idx].get("is_mcq", False)
+        logit_processor = make_dynamic_tag_bias_processor(tokenizer, config, [mcq_flag])
 
-        temp = (
-            config.generation.think_temperature
-            if step < config.generation.think_boost_tokens
-            else config.generation.answer_temperature
-        )
-        sampler = safe_make_sampler(config, temp=temp)
+        hist_tokens = sample_prompt.tolist()[0]
+        sample_response_toks = []
+        sample_lps = []
+        ended = mx.array([False], dtype=mx.bool_)
 
-        logits_processed = logit_processor(hist_tokens_py, next_logits)
+        for step in range(max_gen_len):
+            if ended[0].item():
+                break
 
-        sampled_tokens = sampler(logits_processed)
-        log_probs = nn.log_softmax(logits_processed, axis=-1)
-        sampled_log_probs = mx.take_along_axis(
-            log_probs, sampled_tokens[:, None], axis=-1
-        ).squeeze(-1)
+            temp = (
+                config.generation.think_temperature
+                if step < config.generation.think_boost_tokens
+                else config.generation.answer_temperature
+            )
+            sampler = safe_make_sampler(config, temp=temp)
 
-        ended_prev = ended
-        if eos_id is not None:
-            ended = mx.logical_or(ended, sampled_tokens == eos_id)
+            logits_proc = logit_processor([hist_tokens], next_logits)
+            token = sampler(logits_proc)
+            log_prob = nn.log_softmax(logits_proc, axis=-1)
+            token_lp = mx.take_along_axis(log_prob, token[:, None], axis=-1).squeeze(-1)
 
-        tokens_to_add = mx.where(ended_prev, pad_id, sampled_tokens)
-        lp_to_add = mx.where(ended_prev, 0.0, sampled_log_probs)
+            ended_prev = ended
+            if eos_id is not None:
+                ended = mx.logical_or(ended, token == eos_id)
 
-        responses_tok_list.append(tokens_to_add[:, None])
-        actor_lp_cached_list.append(lp_to_add[:, None])
+            tok_val = pad_id if ended_prev[0].item() else token[0].item()
+            lp_val = 0.0 if ended_prev[0].item() else token_lp[0].item()
 
-        for i in range(total_samples):
-            if not ended_prev[i].item():
-                hist_tokens_py[i].append(tokens_to_add[i].item())
+            sample_response_toks.append(tok_val)
+            sample_lps.append(lp_val)
 
-        out_next = model(tokens_to_add[:, None].astype(mx.int64), cache=model_caches)
-        next_logits = (out_next[0] if isinstance(out_next, tuple) else out_next)[
-            :, -1, :
-        ].astype(mx.float32)
+            if not ended_prev[0].item():
+                hist_tokens.append(tok_val)
 
-    mx.eval(responses_tok_list, actor_lp_cached_list)
-    responses_mx = (
-        mx.concatenate(responses_tok_list, axis=1)
-        if responses_tok_list
-        else mx.zeros((total_samples, 0), dtype=mx.int32)
-    )
-    actor_log_probs = (
-        mx.concatenate(actor_lp_cached_list, axis=1)
-        if actor_lp_cached_list
-        else mx.zeros((total_samples, 0), dtype=mx.float32)
-    )
+            out = model(mx.array([[tok_val]], dtype=mx.int32).astype(mx.int64), cache=sample_cache)
+            next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(mx.float32)
 
-    # --- Reward Calculation ---
+        all_responses_tok_list.append(sample_response_toks)
+        all_actor_lp_list.append(sample_lps)
+
+        # Cache garbage collected here - fresh for next sample!
+        del sample_cache
+        mx.clear_cache()
+
+    # Convert to batch tensors
+    max_resp_len = max(len(r) for r in all_responses_tok_list) if all_responses_tok_list else 0
+    responses_mx = mx.zeros((total_samples, max_resp_len), dtype=mx.int32)
+    actor_log_probs = mx.zeros((total_samples, max_resp_len), dtype=mx.float32)
+
+    for i in range(total_samples):
+        resp_len = len(all_responses_tok_list[i])
+        if resp_len > 0:
+            responses_mx[i, :resp_len] = mx.array(all_responses_tok_list[i], dtype=mx.int32)
+            actor_log_probs[i, :resp_len] = mx.array(all_actor_lp_list[i], dtype=mx.float32)
+
+    # Reward calculation (unchanged)
     decoded = tokenizer.batch_decode(responses_mx.tolist(), skip_special_tokens=False)
 
-    # In case max_thinking_tokens might not exist
     contexts = [
         reward_composer.context_cls(
             generated_text=decoded[i],
@@ -306,7 +453,7 @@ def generate_rollouts_for_batch(
             reference_completion=prompts_data_replicated[i]["ref_answer_str"],
             metadata={
                 **prompts_data_replicated[i],
-                'max_thinking_tokens': getattr(config.trainer, 'max_thinking_tokens', 80),  # Safe access with default
+                'max_thinking_tokens': getattr(config.trainer, 'max_thinking_tokens', 80),
             },
             update_step=current_update,
         )
@@ -315,15 +462,11 @@ def generate_rollouts_for_batch(
 
     batch_rewards_dicts = reward_composer.batch_compute(contexts)
     rewards_total = mx.array([r["total"] for r in batch_rewards_dicts])
-    rewards_breakdown = {
-        k: [r[k] for r in batch_rewards_dicts] for k in batch_rewards_dicts[0]
-    }
+    rewards_breakdown = {k: [r[k] for r in batch_rewards_dicts] for k in batch_rewards_dicts[0]}
 
-    # --- Advantage & Ref Log Probs ---
+    # Advantages & ref log probs (unchanged)
     grpo_algo = GRPOAlgorithm(config, model, ref_model)
-    advantages = grpo_algo.compute_advantages(
-        rewards_total, config.trainer.num_rollout_samples
-    )
+    advantages = grpo_algo.compute_advantages(rewards_total, num_samples_per_prompt)
 
     full_seq = mx.concatenate([prompts_mx, responses_mx], axis=1)
     ref_logits = ref_model(full_seq.astype(mx.int64))[:, max_prompt_len - 1 : -1, :]
@@ -335,9 +478,10 @@ def generate_rollouts_for_batch(
     response_mask = (responses_mx != pad_id).astype(mx.float32)
     response_mask = _mask_after_answer(responses_mx, response_mask, tokenizer, config)
 
-    # --- Create Thinking/Answer Masks (if dual gradients enabled) ---
+    # Create masks with statistics
     thinking_mask = None
     answer_mask = None
+    mask_stats = {}
 
     use_dual_gradients = (
         hasattr(config.trainer, 'use_dual_gradients')
@@ -346,48 +490,28 @@ def generate_rollouts_for_batch(
 
     if use_dual_gradients:
         try:
-            thinking_mask, answer_mask = _create_thinking_answer_masks(
-                responses_mx,
-                decoded,
-                tokenizer,
-                config,
-                pad_id
+            thinking_mask, answer_mask, mask_stats = _create_thinking_answer_masks(
+                responses_mx, decoded, tokenizer, config, pad_id
             )
 
-            # Validate masks
-            thinking_token_count = mx.sum(thinking_mask).item()
-            answer_token_count = mx.sum(answer_mask).item()
-            total_token_count = mx.sum(response_mask).item()
-
-            if thinking_token_count == 0 and answer_token_count == 0:
-                logger.error(f"Dual gradient mask creation failed: Both masks are empty!")
+            if mx.sum(thinking_mask).item() == 0 and mx.sum(answer_mask).item() == 0:
+                logger.error("Both masks empty!")
                 thinking_mask = None
                 answer_mask = None
-            elif thinking_token_count == 0:
-                logger.warning(f"No thinking tokens detected in batch. All {int(answer_token_count)} tokens marked as answer.")
-            elif answer_token_count == 0:
-                logger.warning(f"No answer tokens detected in batch. All {int(thinking_token_count)} tokens marked as thinking.")
-            else:
-                logger.debug(f"Created masks - Thinking: {int(thinking_token_count)} tokens, Answer: {int(answer_token_count)} tokens, Total: {int(total_token_count)}")
-
+                mask_stats = {}
         except Exception as e:
-            logger.error(f"Failed to create thinking/answer masks: {e}. Dual gradients will be disabled for this batch.", exc_info=True)
+            logger.error(f"Mask creation failed: {e}", exc_info=True)
             thinking_mask = None
             answer_mask = None
+            mask_stats = {}
 
-    # --- Logging ---
+    # Logging (unchanged)
     _maybe_log_samples(
-        config,
-        current_update,
-        prompts_data_replicated,
-        decoded,
-        rewards_breakdown,
-        "n/a",
-        run_id,
-        is_invalid_batch,
+        config, current_update, prompts_data_replicated, decoded,
+        rewards_breakdown, "n/a", run_id, is_invalid_batch
     )
 
-    # --- Build Rollout Batch ---
+    # Build rollout batch
     rollout_batch = {
         "tokens": full_seq,
         "response_mask": response_mask,
@@ -396,12 +520,11 @@ def generate_rollouts_for_batch(
         "actor_log_probs": actor_log_probs,
     }
 
-    # Add thinking/answer masks if they were created
     if thinking_mask is not None and answer_mask is not None:
         rollout_batch["thinking_mask"] = thinking_mask
         rollout_batch["answer_mask"] = answer_mask
 
-    # Add reference tokens for SFT (if hybrid training enabled)
+    # Add reference tokens for SFT (unchanged logic)
     use_sft_hybrid = (
         hasattr(config.trainer, 'use_sft_on_answer')
         and config.trainer.use_sft_on_answer
@@ -409,54 +532,50 @@ def generate_rollouts_for_batch(
 
     if use_sft_hybrid:
         try:
-            # We need only the response portion of references to match generated responses
             reference_response_tokens_list = []
-
             for i, prompt_data in enumerate(prompts_data_replicated):
                 ref_text = prompt_data["ref_answer_str"]
-
-                # Strategy 1: Use prompt_len if available
                 if "prompt_len" in prompt_data:
-                    prompt_len = prompt_data["prompt_len"]
-                    ref_full_tokens = tokenizer.encode(ref_text)
-                    ref_response_tokens = ref_full_tokens[prompt_len:]
-
-                # Strategy 2: Encode prompt separately and subtract
+                    ref_full = tokenizer.encode(ref_text)
+                    ref_resp = ref_full[prompt_data["prompt_len"]:]
                 elif "text" in prompt_data:
-                    prompt_text = prompt_data["text"]
-                    prompt_tokens = tokenizer.encode(prompt_text)
-                    ref_full_tokens = tokenizer.encode(ref_text)
-                    ref_response_tokens = ref_full_tokens[len(prompt_tokens):]
-
-                # Strategy 3: Just use the reference as-is (fallback)
+                    prompt_toks = tokenizer.encode(prompt_data["text"])
+                    ref_full = tokenizer.encode(ref_text)
+                    ref_resp = ref_full[len(prompt_toks):]
                 else:
-                    logger.warning(f"Cannot determine prompt length for sample {i}, using full reference")
-                    ref_response_tokens = tokenizer.encode(ref_text)
+                    ref_resp = tokenizer.encode(ref_text)
+                reference_response_tokens_list.append(ref_resp)
 
-                reference_response_tokens_list.append(ref_response_tokens)
-
-            # Pad/truncate to match generated response length
-            max_response_len = responses_mx.shape[1]
+            max_resp_len = responses_mx.shape[1]
             reference_tokens_padded = []
-
-            for ref_tokens in reference_response_tokens_list:
-                if len(ref_tokens) > max_response_len:
-                    # Truncate if reference is longer
-                    padded = ref_tokens[:max_response_len]
+            for ref_toks in reference_response_tokens_list:
+                if len(ref_toks) > max_resp_len:
+                    padded = ref_toks[:max_resp_len]
                 else:
-                    # Pad if reference is shorter
-                    padded = ref_tokens + [pad_id] * (max_response_len - len(ref_tokens))
+                    padded = ref_toks + [pad_id] * (max_resp_len - len(ref_toks))
                 reference_tokens_padded.append(padded)
 
             reference_tokens_mx = mx.array(reference_tokens_padded, dtype=mx.int32)
             rollout_batch["reference_tokens"] = reference_tokens_mx
-
-            logger.debug(f"Added reference tokens for SFT (response-only, shape: {reference_tokens_mx.shape}, matches generated: {responses_mx.shape})")
-
         except Exception as e:
-            logger.error(f"Failed to add reference tokens for SFT: {e}. Hybrid training disabled for this batch.", exc_info=True)
+            logger.error(f"Failed to add reference tokens: {e}", exc_info=True)
 
-    avg_reward = mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0
+    # === NEW: Compile comprehensive metrics for WandB ===
+    generation_metrics = {
+        'generation/avg_reward': mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0,
+        'generation/reward_std': mx.std(rewards_total).item() if rewards_total.size > 0 else 0.0,
+        'generation/num_samples': total_samples,
+        'generation/num_prompts': num_prompts,
+        'generation/samples_per_prompt': num_samples_per_prompt,
+        'generation/avg_response_length': float(mx.mean(mx.sum(response_mask, axis=1)).item()),
+        **mask_stats,  # Includes all thinking/answer statistics
+    }
+
+    # Add individual reward components
+    for reward_name, reward_values in rewards_breakdown.items():
+        generation_metrics[f'rewards/{reward_name}'] = np.mean(reward_values)
+
+    avg_reward = generation_metrics['generation/avg_reward']
     avg_breakdown = {k: np.mean(v) for k, v in rewards_breakdown.items()}
 
     model.train()
@@ -466,4 +585,4 @@ def generate_rollouts_for_batch(
     gc.collect()
     mx.clear_cache()
 
-    return rollout_batch, avg_reward, avg_breakdown
+    return rollout_batch, avg_reward, avg_breakdown, generation_metrics

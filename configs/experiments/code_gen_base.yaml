@@ -58,7 +58,7 @@ rewards:
   - name: "steps_coverage"
     weight: 0.05
     config:
-      required_steps: 2
+      required_steps: 1
 
 evaluation:
   - name: "human_eval"
