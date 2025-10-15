@@ -15,10 +15,10 @@ src/mlx_rl_trainer/algorithms/grpo/grpo_trainer.py
 src/mlx_rl_trainer/core/__init__.py
 src/mlx_rl_trainer/core/checkpoint_manager.py
 src/mlx_rl_trainer/core/config.py
-src/mlx_rl_trainer/core/dataset_manager.py
 src/mlx_rl_trainer/core/exceptions.py
 src/mlx_rl_trainer/core/model_manager.py
 src/mlx_rl_trainer/core/trainer.py
+src/mlx_rl_trainer/core/types.py
 src/mlx_rl_trainer/data/__init__.py
 src/mlx_rl_trainer/data/batch_builder.py
 src/mlx_rl_trainer/data/dataset_manager.py
@@ -34,8 +34,6 @@ src/mlx_rl_trainer/evaluation/reasoning/__init__.py
 src/mlx_rl_trainer/evaluation/reasoning/arc.py
 src/mlx_rl_trainer/evaluation/reasoning/gsm8k.py
 src/mlx_rl_trainer/generation/__init__.py
-src/mlx_rl_trainer/generation/async_server.py
-src/mlx_rl_trainer/generation/caching.py
 src/mlx_rl_trainer/generation/generator.py
 src/mlx_rl_trainer/generation/sampler_utils.py
 src/mlx_rl_trainer/generation/processors/__init__.py
@@ -50,6 +48,7 @@ src/mlx_rl_trainer/rewards/content/__init__.py
 src/mlx_rl_trainer/rewards/content/mcq_accuracy.py
 src/mlx_rl_trainer/rewards/content/semantic_similarity.py
 src/mlx_rl_trainer/rewards/content/steps_coverage.py
+src/mlx_rl_trainer/rewards/content/verify_response.py
 src/mlx_rl_trainer/rewards/format/__init__.py
 src/mlx_rl_trainer/rewards/format/tag_structure.py
 src/mlx_rl_trainer/rewards/programming/__init__.py
@@ -58,12 +57,13 @@ src/mlx_rl_trainer/rewards/reasoning/__init__.py
 src/mlx_rl_trainer/rewards/reasoning/thinking_quality.py
 src/mlx_rl_trainer/scripts/__init__.py
 src/mlx_rl_trainer/scripts/data_preprocessing.py
+src/mlx_rl_trainer/scripts/dump_config.py
 src/mlx_rl_trainer/scripts/evaluate.py
-src/mlx_rl_trainer/scripts/serve.py
 src/mlx_rl_trainer/scripts/train.py
 src/mlx_rl_trainer/utils/__init__.py
 src/mlx_rl_trainer/utils/distributed.py
 src/mlx_rl_trainer/utils/math_utils.py
 src/mlx_rl_trainer/utils/mcq_utils.py
 src/mlx_rl_trainer/utils/mlx_utils.py
+src/mlx_rl_trainer/utils/reward_shaping_utils.py
 src/mlx_rl_trainer/utils/text_utils.py

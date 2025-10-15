@@ -1,4 +1,3 @@
-"""Abstract interface for all evaluation benchmarks."""
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import logging
@@ -7,15 +6,13 @@ from pathlib import Path
 from datasets import Dataset, load_dataset
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
-from mlx_rl_trainer.core.trainer import EvaluationMetrics
-from mlx_rl_trainer.core.exceptions import DataLoadError  # CORRECTED IMPORT
+from mlx_rl_trainer.core.types import EvaluationMetrics
+from mlx_rl_trainer.core.exceptions import DataLoadError
 
 logger = logging.getLogger(__name__)
 
 
 class BaseEvaluator(ABC):
-    """Abstract base class for all evaluation benchmarks."""
-
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.name = self.__class__.__name__
@@ -28,7 +25,6 @@ class BaseEvaluator(ABC):
         dataset_subset: Optional[str] = None,
         split: str = "test",
     ) -> Dataset:
-        """Loads an evaluation dataset from HuggingFace Hub or a local JSONL file."""
         try:
             path = Path(dataset_path)
             if path.exists() and path.suffix == ".jsonl":
@@ -37,6 +33,7 @@ class BaseEvaluator(ABC):
                 self.dataset = Dataset.from_list(data)
             else:
                 self.dataset = load_dataset(dataset_path, dataset_subset, split=split)
+
             logger.info(
                 f"Loaded dataset for {self.name}: {dataset_path} (split: {split}) with {len(self.dataset)} samples."
             )
@@ -48,10 +45,20 @@ class BaseEvaluator(ABC):
 
     @abstractmethod
     def evaluate(
-        self, model: Any, tokenizer: TokenizerWrapper, dataset: Dataset
-    ) -> Any:
-        """Abstract method to run evaluation on the model."""
-        pass
+        self, model, tokenizer: TokenizerWrapper, dataset: Dataset
+    ) -> EvaluationMetrics:
+        """
+        Runs the evaluation for a given model and tokenizer on the loaded dataset.
+
+        Args:
+            model: The MLX model to evaluate.
+            tokenizer: The tokenizer associated with the model.
+            dataset: The dataset to evaluate on.
+
+        Returns:
+            An EvaluationMetrics object containing the results.
+        """
+        ...
 
     def __repr__(self) -> str:
         return f"{self.name}(config={self.config})"

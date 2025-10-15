@@ -1,20 +1,18 @@
-"""MLX-specific utility functions."""
-
-import logging
-import mlx.core as mx
-import mlx.nn as nn
-import mlx.optimizers as optim
-import gc
-import re
-import string
-import random
+_I = "answer_start"
+_H = "think_end"
+_G = "think_start"
+_F = "answer_end"
+_E = "head"
+_D = True
+_C = False
+_B = 0.0
+_A = None
+import logging, mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim, gc, re, string, random
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 from pathlib import Path
-
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_lm.sample_utils import make_sampler, make_logits_processors
 from mlx.utils import tree_flatten, tree_map, tree_unflatten
-
 from mlx_rl_trainer.core.config import ExperimentConfig, GenerationConfig
 from mlx_rl_trainer.core.exceptions import CheckpointError
 import sys
@@ -24,11 +22,10 @@ try:
 except ImportError:
 
     class MLXLoRALinear:
-        pass
+        0
 
 
 logger = logging.getLogger(__name__)
-
 TARGET_FLOAT_DTYPE = mx.bfloat16
 LETTER_ALPH = string.ascii_uppercase
 _TOOL_LIKE_MARKERS = [
@@ -46,58 +43,53 @@ _TOOL_LIKE_MARKERS = [
 ]
 
 
-
-def limit_memory(max_memory_gb: float) -> Optional[int]:
-    """Sets the MLX memory limit using updated API with error handling."""
+def limit_memory(max_memory_gb):
+    D = "set_memory_limit"
+    B = max_memory_gb
     try:
-        # Check for mx.get_peak_memory() existence
         if hasattr(mx, "get_peak_memory"):
-            logging.info(f"Initial peak memory: {mx.get_peak_memory() / 1e9:.3f} GB")
+            logging.info(f"Initial peak memory: {mx.get_peak_memory()/1e9:.3f} GB")
         else:
             logging.warning("mx.get_peak_memory() not found in this MLX version.")
-
-        max_memory_bytes = int(max_memory_gb * 1024 * 1024 * 1024)
-
-        # Add try/except around mx.set_memory_limit()
-        if hasattr(mx, "set_memory_limit"):
-            previous_limit = mx.set_memory_limit(max_memory_bytes)
+        C = int(B * 1024 * 1024 * 1024)
+        if hasattr(mx, D):
+            A = mx.set_memory_limit(C)
             logging.info(
-                f"MLX memory limit set to {max_memory_gb} GB. Previous limit: {(previous_limit / (1024**3)):.2f} GB"
+                f"MLX memory limit set to {B} GB. Previous limit: {A/1024**3:.2f} GB"
             )
-            return previous_limit
-        elif hasattr(mx.metal, "set_memory_limit"):  # Check older API location
-            previous_limit = mx.metal.set_memory_limit(max_memory_bytes)
+            return A
+        elif hasattr(mx.metal, D):
+            A = mx.metal.set_memory_limit(C)
             logging.info(
-                f"MLX memory limit set to {max_memory_gb} GB (using mx.metal). Previous limit: {(previous_limit / (1024**3)):.2f} GB"
+                f"MLX memory limit set to {B} GB (using mx.metal). Previous limit: {A/1024**3:.2f} GB"
             )
             sys.exit(0)
-            return previous_limit
+            return A
         else:
             logging.warning(
                 "mx.set_memory_limit() not found in this MLX version. Cannot limit memory."
             )
-            return None
+            return
     except AttributeError:
         logging.warning(
             "MLX memory management functions (get_peak_memory/set_memory_limit) not found. Check MLX version."
         )
-        return None
-    except Exception as e:
-        logging.error(f"Failed to set MLX memory limit: {e}", exc_info=True)
-        return None
+        return
+    except Exception as E:
+        logging.error(f"Failed to set MLX memory limit: {E}", exc_info=_D)
+        return
 
 
-
-def _is_metal_internal_error(err: BaseException) -> bool:
-    s = str(err)
+def _is_metal_internal_error(err):
+    A = str(err)
     return (
-        "Command buffer execution failed" in s
-        or "[METAL]" in s
-        or "Internal Error" in s
+        "Command buffer execution failed" in A
+        or "[METAL]" in A
+        or "Internal Error" in A
     )
 
 
-def metal_recover(stage: str):
+def metal_recover(stage):
     logging.warning(f"[METAL] Recovering after error at stage: {stage}")
     try:
         mx.synchronize()
@@ -107,13 +99,11 @@ def metal_recover(stage: str):
     gc.collect()
 
 
-def metal_safe_apply_gradients(
-    optimizer: optim.Optimizer, grads: Dict[str, mx.array], params: Dict[str, mx.array]
-):
+def metal_safe_apply_gradients(optimizer, grads, params):
     try:
         optimizer.apply_gradients(grads, params)
-    except Exception as e:
-        if _is_metal_internal_error(e):
+    except Exception as A:
+        if _is_metal_internal_error(A):
             metal_recover("apply_gradients")
             return
         raise
@@ -122,270 +112,241 @@ def metal_safe_apply_gradients(
         gc.collect()
 
 
-def _find_embedding_layer(root: nn.Module) -> Tuple[str, nn.Module]:
-    for name, mod in root.named_modules():
-        if isinstance(mod, (nn.Embedding, nn.QuantizedEmbedding)):
-            return name, mod
+def _find_embedding_layer(root):
+    for B, A in root.named_modules():
+        if isinstance(A, (nn.Embedding, nn.QuantizedEmbedding)):
+            return B, A
     raise RuntimeError("No nn.Embedding layer found.")
 
 
-def _freeze_module(module: nn.Module):
-    if module:
-        for p in module.parameters():
-            p.flags.train = False
+def _freeze_module(module):
+    A = module
+    if A:
+        for B in A.parameters():
+            B.flags.train = _C
 
 
 class ContentAlignBridge(nn.Module):
     def __init__(
-        self,
-        teacher_model: nn.Module,
-        student_model: nn.Module,
-        teacher_tokenizer: TokenizerWrapper,
-        student_tokenizer: TokenizerWrapper,
-        bridge_path: str,
-        pool: str = "mean",
-        scale: float = 1.0,
-        gen_cfg: Optional[GenerationConfig] = None,
+        A,
+        teacher_model,
+        student_model,
+        teacher_tokenizer,
+        student_tokenizer,
+        bridge_path,
+        pool="mean",
+        scale=1.0,
+        gen_cfg=_A,
     ):
         super().__init__()
-        from mlx_rl_trainer.utils.text_utils import (
-            extract_answer_region,
-        )  # Local import
+        from mlx_rl_trainer.utils.text_utils import extract_answer_region
 
-        self.tok_t, self.tok_s, self.pool, self.scale = (
+        A.tok_t, A.tok_s, A.pool, A.scale = (
             teacher_tokenizer,
             student_tokenizer,
             pool,
             float(scale),
         )
-        self.gen_cfg = gen_cfg or GenerationConfig()
-        _, self.t_emb = _find_embedding_layer(teacher_model)
-        _, self.s_emb = _find_embedding_layer(student_model)
-        t_dim, s_dim = int(self.t_emb.weight.shape[1]), int(self.s_emb.weight.shape[1])
-        hidden = max(t_dim, s_dim)
-        self.bridge = nn.Sequential(
-            nn.Linear(t_dim, hidden, bias=False),
-            nn.ReLU(),
-            nn.Linear(hidden, s_dim, bias=False),
+        A.gen_cfg = gen_cfg or GenerationConfig()
+        E, A.t_emb = _find_embedding_layer(teacher_model)
+        E, A.s_emb = _find_embedding_layer(student_model)
+        B, C = int(A.t_emb.weight.shape[1]), int(A.s_emb.weight.shape[1])
+        D = max(B, C)
+        A.bridge = nn.Sequential(
+            nn.Linear(B, D, bias=_C), nn.ReLU(), nn.Linear(D, C, bias=_C)
         )
         try:
-            w = mx.load(str(bridge_path))
-            self.bridge.update(tree_unflatten(list(w.items())))
-        except Exception as e:
-            logger.warning(f"Could not load align bridge weights: {e}")
-        self.bridge.eval()
-        _freeze_module(self.t_emb)
-        _freeze_module(self.s_emb)
-        self.bridge.freeze()
+            F = mx.load(str(bridge_path))
+            A.bridge.update(tree_unflatten(list(F.items())))
+        except Exception as G:
+            logger.warning(f"Could not load align bridge weights: {G}")
+        A.bridge.eval()
+        _freeze_module(A.t_emb)
+        _freeze_module(A.s_emb)
+        A.bridge.freeze()
 
     @staticmethod
-    def _pool_vec(tok_emb: mx.array, pool: str) -> mx.array:
-        if tok_emb.size == 0:
-            return mx.zeros((tok_emb.shape[-1],), dtype=tok_emb.dtype)
-        return tok_emb[-1] if pool == "last" else tok_emb.mean(axis=0)
+    def _pool_vec(tok_emb, pool):
+        A = tok_emb
+        if A.size == 0:
+            return mx.zeros((A.shape[-1],), dtype=A.dtype)
+        return A[-1] if pool == "last" else A.mean(axis=0)
 
-    def __call__(self, texts: List[str]) -> List[float]:
-        from mlx_rl_trainer.utils.text_utils import extract_answer_region
+    def __call__(A, texts):
+        from mlx_rl_trainer.utils.text_utils import extract_answer_region as H
 
-        scores: List[float] = []
-        for s in texts:
-            ans = extract_answer_region(s or "", self.gen_cfg)
-            if not ans.strip():
-                scores.append(0.0)
+        B = []
+        for I in texts:
+            C = H(I or "", A.gen_cfg)
+            if not C.strip():
+                B.append(_B)
                 continue
-            t_ids, s_ids = (
-                self.tok_t.encode(ans, add_special_tokens=False) or [],
-                self.tok_s.encode(ans, add_special_tokens=False) or [],
+            D, E = (
+                A.tok_t.encode(C, add_special_tokens=_C) or [],
+                A.tok_s.encode(C, add_special_tokens=_C) or [],
             )
-            if not t_ids or not s_ids:
-                scores.append(0.0)
+            if not D or not E:
+                B.append(_B)
                 continue
-            t_vec = self._pool_vec(
-                self.t_emb(mx.array(t_ids, dtype=mx.int32)), self.pool
-            )
-            s_vec = self._pool_vec(
-                self.s_emb(mx.array(s_ids, dtype=mx.int32)), self.pool
-            )
-            mapped = self.bridge(t_vec)
-            a = mapped / (mx.norm(mapped) + 1e-8)
-            b = s_vec / (mx.norm(s_vec) + 1e-8)
-            cos = mx.sum(a * b)
-            score = 0.5 * (1.0 + cos)
-            scores.append(
-                max(0.0, min(1.0, float(mx.clip(score, 0.0, 1.0).item()) * self.scale))
-            )
-        return scores
+            J = A._pool_vec(A.t_emb(mx.array(D, dtype=mx.int32)), A.pool)
+            F = A._pool_vec(A.s_emb(mx.array(E, dtype=mx.int32)), A.pool)
+            G = A.bridge(J)
+            K = G / (mx.norm(G) + 1e-08)
+            L = F / (mx.norm(F) + 1e-08)
+            M = mx.sum(K * L)
+            N = 0.5 * (1.0 + M)
+            B.append(max(_B, min(1.0, float(mx.clip(N, _B, 1.0).item()) * A.scale)))
+        return B
 
 
-_LAYER_PAT = re.compile(r"(?:^|[^a-zA-Z0-9_])layers\.(\d+)(?:[^0-9_]|$)")
-_HEAD_PAT = re.compile(r"\blm_head\b", re.I)
+_LAYER_PAT = re.compile("(?:^|[^a-zA-Z0-9_])layers\\.(\\d+)(?:[^0-9_]|$)")
+_HEAD_PAT = re.compile("\\blm_head\\b", re.I)
 
 
-def _find_layer_index(name: str) -> Optional[int]:
-    m = _LAYER_PAT.search(name)
-    if m:
-        return int(m.group(1))
-    parts = re.split(r"[\.\/]", name)
-    for i, p in enumerate(parts):
-        if p == "layers" and i + 1 < len(parts):
+def _find_layer_index(name):
+    B = _LAYER_PAT.search(name)
+    if B:
+        return int(B.group(1))
+    A = re.split("[\\.\\/]", name)
+    for C, D in enumerate(A):
+        if D == "layers" and C + 1 < len(A):
             try:
-                return int(parts[i + 1])
+                return int(A[C + 1])
             except Exception:
                 pass
-    return None
 
 
-def _band_for_name(
-    name: str,
-    low_band: Tuple[int, int],
-    mid_band: Tuple[int, int],
-    top_band: Tuple[int, int],
-) -> str:
-    li = _find_layer_index(name)
+def _band_for_name(name, low_band, mid_band, top_band):
+    A = _find_layer_index(name)
 
-    def _in_range(layer_idx, band_range):
-        if band_range is None or layer_idx is None:
-            return False
-        s, e = band_range
-        return (s is None or layer_idx >= s) and (e is None or layer_idx <= e)
+    def B(layer_idx, band_range):
+        B = band_range
+        A = layer_idx
+        if B is _A or A is _A:
+            return _C
+        C, D = B
+        return (C is _A or A >= C) and (D is _A or A <= D)
 
-    if li is not None:
-        if _in_range(li, low_band):
+    if A is not _A:
+        if B(A, low_band):
             return "low"
-        if _in_range(li, mid_band):
+        if B(A, mid_band):
             return "mid"
-        if _in_range(li, top_band):
+        if B(A, top_band):
             return "top"
     if _HEAD_PAT.search(name):
-        return "head"
+        return _E
     return "other"
 
 
-def scale_grads_by_band(
-    grads_tree: Dict[str, mx.array], config: ExperimentConfig
-) -> Dict[str, mx.array]:
-    t_cfg = config.trainer
-    g_flat = tree_flatten(grads_tree)
-    out = []
-    for name, g in g_flat:
-        if not isinstance(g, mx.array):
-            out.append((name, g))
+def scale_grads_by_band(grads_tree, config):
+    A = config.trainer
+    E = tree_flatten(grads_tree)
+    B = []
+    for C, D in E:
+        if not isinstance(D, mx.array):
+            B.append((C, D))
             continue
-        band = _band_for_name(name, t_cfg.low_band, t_cfg.mid_band, t_cfg.top_band)
-        mul = {
-            "low": t_cfg.low_mul,
-            "mid": t_cfg.mid_mul,
-            "top": t_cfg.top_mul,
-            "head": t_cfg.head_mul,
-        }.get(band, 1.0)
-        out.append((name, g * mul))
-    return tree_unflatten(out)
+        F = _band_for_name(C, A.low_band, A.mid_band, A.top_band)
+        G = {"low": A.low_mul, "mid": A.mid_mul, "top": A.top_mul, _E: A.head_mul}.get(
+            F, 1.0
+        )
+        B.append((C, D * G))
+    return tree_unflatten(B)
 
 
 def mask_grads_to_layer_band(
-    grads_tree,
-    start,
-    end,
-    *,
-    include_embed=True,
-    include_head=True,
-    include_final_norm=True,
+    grads_tree, start, end, *, include_embed=_D, include_head=_D, include_final_norm=_D
 ):
-    flat = tree_flatten(grads_tree)
-    kept = []
-    for name, g in flat:
-        if not isinstance(g, mx.array):
-            kept.append((name, g))
+    G = start
+    H = tree_flatten(grads_tree)
+    E = []
+    for B, C in H:
+        if not isinstance(C, mx.array):
+            E.append((B, C))
             continue
-        li = _find_layer_index(name)
-        keep = False
-        if li is not None:
-            keep = (start is None or li >= start) and (end is None or li <= end)
+        F = _find_layer_index(B)
+        A = _C
+        if F is not _A:
+            A = (G is _A or F >= G) and (end is _A or F <= end)
         else:
-            lname = name.lower()
-            if "embed" in lname or "embedding" in lname:
-                keep = include_embed
-            elif "norm" in lname:
-                keep = include_final_norm
-            elif "head" in lname:
-                keep = include_head
-        kept.append((name, g if keep else mx.zeros_like(g)))
-    return tree_unflatten(kept)
+            D = B.lower()
+            if "embed" in D or "embedding" in D:
+                A = include_embed
+            elif "norm" in D:
+                A = include_final_norm
+            elif _E in D:
+                A = include_head
+        E.append((B, C if A else mx.zeros_like(C)))
+    return tree_unflatten(E)
 
 
-def mask_grads_to_specific_layers(
-    grads_tree: Dict[str, mx.array], layer_indices: Set[int]
-) -> Dict[str, mx.array]:
-    flat = tree_flatten(grads_tree)
-    kept = []
-    for name, g in flat:
-        if not isinstance(g, mx.array):
-            kept.append((name, g))
+def mask_grads_to_specific_layers(grads_tree, layer_indices):
+    D = tree_flatten(grads_tree)
+    A = []
+    for B, C in D:
+        if not isinstance(C, mx.array):
+            A.append((B, C))
             continue
-        if (
-            layer_idx := _find_layer_index(name)
-        ) is not None and layer_idx in layer_indices:
-            kept.append((name, g))
+        if (E := _find_layer_index(B)) is not _A and E in layer_indices:
+            A.append((B, C))
         else:
-            kept.append((name, mx.zeros_like(g)))
-    return tree_unflatten(kept)
+            A.append((B, mx.zeros_like(C)))
+    return tree_unflatten(A)
 
 
-def _global_grad_norm(grads: Dict[str, mx.array]) -> float:
+def _global_grad_norm(grads):
     try:
-        flat = [g for _, g in tree_flatten(grads) if isinstance(g, mx.array)]
-        if not flat:
-            return 0.0
-        sq_sum = sum(mx.sum(g.astype(mx.float32) ** 2) for g in flat)
-        total = mx.sqrt(sq_sum)
-        mx.eval(total)
-        return float(total.item())
+        A = [A for (B, A) in tree_flatten(grads) if isinstance(A, mx.array)]
+        if not A:
+            return _B
+        C = sum(mx.sum(A.astype(mx.float32) ** 2) for A in A)
+        B = mx.sqrt(C)
+        mx.eval(B)
+        return float(B.item())
     except Exception:
-        return 0.0
+        return _B
 
 
-def _maybe_clip_grad_norm(
-    grads_tree: Dict[str, mx.array], max_norm: Optional[float]
-) -> Tuple[Dict[str, mx.array], float]:
-    if max_norm is None or max_norm <= 0:
-        grad_norm = _global_grad_norm(grads_tree)
-        return grads_tree, grad_norm
+def _maybe_clip_grad_norm(grads_tree, max_norm):
+    C = max_norm
+    A = grads_tree
+    if C is _A or C <= 0:
+        B = _global_grad_norm(A)
+        return A, B
     try:
-        clipped_grads, grad_norm_mx = optim.clip_grad_norm(grads_tree, float(max_norm))
-        mx.eval(clipped_grads, grad_norm_mx)
-        return clipped_grads, float(grad_norm_mx.item())
-    except Exception as e:
+        D, E = optim.clip_grad_norm(A, float(C))
+        mx.eval(D, E)
+        return D, float(E.item())
+    except Exception as F:
         logger.warning(
-            f"mlx.optim.clip_grad_norm failed: {e}. Falling back to manual clipping."
+            f"mlx.optim.clip_grad_norm failed: {F}. Falling back to manual clipping."
         )
-        grad_norm = _global_grad_norm(grads_tree)
-        if grad_norm > max_norm:
-            scale = max_norm / (grad_norm + 1e-8)
-            clipped_grads = tree_map(lambda g: g.astype(mx.float32) * scale, grads_tree)
-            return clipped_grads, grad_norm
-        return grads_tree, grad_norm
+        B = _global_grad_norm(A)
+        if B > C:
+            G = C / (B + 1e-08)
+            D = tree_map(lambda g: g.astype(mx.float32) * G, A)
+            return D, B
+        return A, B
 
 
-def metal_before_update(num_updates: int, config: ExperimentConfig):
-    if not hasattr(config.generation, "_orig_max_gen_len"):
-        setattr(config.generation, "_orig_max_gen_len", config.data.max_gen_len)
-        setattr(config, "_orig_max_kv_size", config.max_kv_size)
-        setattr(
-            config.trainer,
-            "_orig_num_rollout_samples",
-            config.trainer.num_rollout_samples,
-        )
-    if num_updates < 32:
-        config.data.max_gen_len = min(config.generation._orig_max_gen_len, 160)
-        config.max_kv_size = min(config._orig_max_kv_size, 768)
-        config.trainer.num_rollout_samples = min(
-            config.trainer._orig_num_rollout_samples, 4
-        )
+def metal_before_update(num_updates, config):
+    C = "_orig_max_gen_len"
+    B = num_updates
+    A = config
+    if not hasattr(A.generation, C):
+        setattr(A.generation, C, A.data.max_gen_len)
+        setattr(A, "_orig_max_kv_size", A.max_kv_size)
+        setattr(A.trainer, "_orig_num_rollout_samples", A.trainer.num_rollout_samples)
+    if B < 32:
+        A.data.max_gen_len = min(A.generation._orig_max_gen_len, 160)
+        A.max_kv_size = min(A._orig_max_kv_size, 768)
+        A.trainer.num_rollout_samples = min(A.trainer._orig_num_rollout_samples, 4)
     else:
-        config.data.max_gen_len = config.generation._orig_max_gen_len
-        config.max_kv_size = config._orig_max_kv_size
-        config.trainer.num_rollout_samples = config.trainer._orig_num_rollout_samples
-    if num_updates % 5 == 0:
+        A.data.max_gen_len = A.generation._orig_max_gen_len
+        A.max_kv_size = A._orig_max_kv_size
+        A.trainer.num_rollout_samples = A.trainer._orig_num_rollout_samples
+    if B % 5 == 0:
         try:
             mx.synchronize()
         except Exception:
@@ -394,267 +355,201 @@ def metal_before_update(num_updates: int, config: ExperimentConfig):
         gc.collect()
 
 
-def _create_4d_attention_mask(
-    tokens: mx.array, pad_token_id: int, dtype: mx.Dtype = TARGET_FLOAT_DTYPE
-) -> mx.array:
-    if tokens.ndim != 2:
-        raise ValueError(f"tokens must be 2D, got {tokens.shape}")
-    B, T = tokens.shape
-    causal_mask = nn.MultiHeadAttention.create_additive_causal_mask(T, dtype=dtype)
-    padding_mask = (tokens == pad_token_id)[:, None, None, :]
-    neg_inf = mx.array(-1e9, dtype=dtype)
-    return mx.minimum(causal_mask, mx.where(padding_mask, neg_inf, 0.0))
+def _create_4d_attention_mask(tokens, pad_token_id, dtype=TARGET_FLOAT_DTYPE):
+    B = dtype
+    A = tokens
+    if A.ndim != 2:
+        raise ValueError(f"tokens must be 2D, got {A.shape}")
+    G, C = A.shape
+    D = nn.MultiHeadAttention.create_additive_causal_mask(C, dtype=B)
+    E = (A == pad_token_id)[:, _A, _A, :]
+    F = mx.array(-1e9, dtype=B)
+    return mx.minimum(D, mx.where(E, F, _B))
 
 
-def safe_make_sampler(
-    config_or_args: Union[ExperimentConfig, GenerationConfig], temp: float
-) -> Callable:
-    gen_cfg = (
-        config_or_args.generation
-        if isinstance(config_or_args, ExperimentConfig)
-        else config_or_args
-    )
+def safe_make_sampler(config_or_args, temp):
+    B = config_or_args
+    A = B.generation if isinstance(B, ExperimentConfig) else B
     try:
         return make_sampler(
             temp=temp,
-            top_p=gen_cfg.sampling_top_p,
-            min_p=gen_cfg.sampling_min_p,
-            top_k=gen_cfg.sampling_top_k,
+            top_p=A.sampling_top_p,
+            min_p=A.sampling_min_p,
+            top_k=A.sampling_top_k,
         )
     except TypeError:
-        return make_sampler(temp=temp, top_p=gen_cfg.sampling_top_p)
+        return make_sampler(temp=temp, top_p=A.sampling_top_p)
 
 
-def _first_token_ids_for_lexemes(
-    tokenizer: TokenizerWrapper, lexemes: Sequence[str]
-) -> List[int]:
-    ids: List[int] = []
-    for lx in lexemes:
-        if (
-            (t := tokenizer.encode(lx, add_special_tokens=False))
-            and t
-            and t[0] not in ids
-        ):
-            ids.append(t[0])
-        if (
-            (t_space := tokenizer.encode(" " + lx, add_special_tokens=False))
-            and t_space
-            and t_space[0] not in ids
-        ):
-            ids.append(t_space[0])
-    return ids
+def _first_token_ids_for_lexemes(tokenizer, lexemes):
+    D = tokenizer
+    A = []
+    for E in lexemes:
+        if (B := D.encode(E, add_special_tokens=_C)) and B and B[0] not in A:
+            A.append(B[0])
+        if (C := D.encode(" " + E, add_special_tokens=_C)) and C and C[0] not in A:
+            A.append(C[0])
+    return A
 
 
-def _letter_token_ids(
-    tokenizer: TokenizerWrapper, letters: Sequence[str] = LETTER_ALPH
-) -> Dict[str, List[int]]:
-    out = {}
-    for L in letters:
-        cand = []
-        for suf in ["", " ", ")", ".", " )", " ."]:
-            ids = tokenizer.encode(L + suf, add_special_tokens=False)
-            if len(ids) == 1 and ids[0] not in cand:
-                cand.append(ids[0])
-        out[L] = cand
-    return out
+def _letter_token_ids(tokenizer, letters=LETTER_ALPH):
+    C = {}
+    for D in letters:
+        A = []
+        for E in ["", " ", ")", ".", " )", " ."]:
+            B = tokenizer.encode(D + E, add_special_tokens=_C)
+            if len(B) == 1 and B[0] not in A:
+                A.append(B[0])
+        C[D] = A
+    return C
 
 
-def _resolve_tag_ids(
-    tokenizer: TokenizerWrapper, gen_config: GenerationConfig
-) -> Dict[str, Optional[int]]:
-    def _one_id(tok_str):
-        if not tok_str:
-            return None
+def _resolve_tag_ids(tokenizer, gen_config):
+    C = tokenizer
+    A = gen_config
+
+    def B(tok_str):
+        A = tok_str
+        if not A:
+            return
         try:
-            ids = tokenizer.encode(tok_str, add_special_tokens=False)
-            return int(ids[0]) if len(ids) == 1 else None
+            B = C.encode(A, add_special_tokens=_C)
+            return int(B[0]) if len(B) == 1 else _A
         except Exception:
-            return None
+            return
 
     return {
-        "think_start": _one_id(gen_config.think_start_tag),
-        "think_end": _one_id(gen_config.think_end_tag),
-        "answer_start": _one_id(gen_config.answer_start_tag),
-        "answer_end": _one_id(gen_config.answer_end_tag),
-        "eos": tokenizer.eos_token_id,
+        _G: B(A.think_start_tag),
+        _H: B(A.think_end_tag),
+        _I: B(A.answer_start_tag),
+        _F: B(A.answer_end_tag),
+        "eos": C.eos_token_id,
     }
 
 
-def make_dynamic_tag_bias_processor(
-    tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
-) -> Callable:
-    gen_cfg = config.generation
-    tag_ids = _resolve_tag_ids(tokenizer, gen_cfg)
-    mcq_letter_ids = sorted(set(sum(_letter_token_ids(tokenizer).values(), [])))
-    ban_ids = _first_token_ids_for_lexemes(tokenizer, gen_cfg.ban_phrases_for_bias)
-    encourage_ids = _first_token_ids_for_lexemes(
-        tokenizer, gen_cfg.encourage_phrases_for_bias
+def make_dynamic_tag_bias_processor(tokenizer, config, mcq_flags):
+    B = tokenizer
+    A = config.generation
+    C = _resolve_tag_ids(B, A)
+    W = sorted(set(sum(_letter_token_ids(B).values(), [])))
+    G = _first_token_ids_for_lexemes(B, A.ban_phrases_for_bias)
+    X = _first_token_ids_for_lexemes(B, A.encourage_phrases_for_bias)
+    Y = _first_token_ids_for_lexemes(B, _TOOL_LIKE_MARKERS)
+    H, O, E, I, Z = (C.get(A) for A in (_H, _G, _I, _F, "eos"))
+    l, m, n, o, p, q = (
+        A.bias_close_think,
+        A.bias_answer_start,
+        A.punish_reopen_think,
+        A.punish_extra_think_end,
+        A.punish_reopen_answer,
+        A.bias_eos_after_answer,
     )
-    tool_ids = _first_token_ids_for_lexemes(tokenizer, _TOOL_LIKE_MARKERS)
-
-    te, ts, as_id, ae, eos_tok = (
-        tag_ids.get(k)
-        for k in ("think_end", "think_start", "answer_start", "answer_end", "eos")
+    r, s, t, u, v, a = (
+        A.min_answer_tokens,
+        A.min_answer_tokens_mcq,
+        A.hard_mask_mcq_first_token,
+        A.mcq_letter_lift,
+        A.mcq_ban_first_bias,
+        A.nonmcq_ban_first_bias,
     )
-    B_CLOSE, B_AS, P_REOPEN_THINK, P_EXTRA_TE, P_REOPEN_ANS, B_EOS_ANS = (
-        gen_cfg.bias_close_think,
-        gen_cfg.bias_answer_start,
-        gen_cfg.punish_reopen_think,
-        gen_cfg.punish_extra_think_end,
-        gen_cfg.punish_reopen_answer,
-        gen_cfg.bias_eos_after_answer,
+    w, x, b, y, c = (
+        A.mcq_close_after_k,
+        A.mcq_answer_end_bias,
+        A.min_think_tokens,
+        A.think_end_early_bias,
+        A.bias_answer_start_after_min_think,
     )
-    MIN_ANS, MIN_ANS_MCQ, HARD_MASK, LIFT_MCQ, BAN_MCQ, BAN_NONMCQ = (
-        gen_cfg.min_answer_tokens,
-        gen_cfg.min_answer_tokens_mcq,
-        gen_cfg.hard_mask_mcq_first_token,
-        gen_cfg.mcq_letter_lift,
-        gen_cfg.mcq_ban_first_bias,
-        gen_cfg.nonmcq_ban_first_bias,
-    )
-    MCQ_CLOSE_K, B_MCQ_CLOSE, MIN_THINK, B_END_EARLY, B_AS_MIN_THINK = (
-        gen_cfg.mcq_close_after_k,
-        gen_cfg.mcq_answer_end_bias,
-        gen_cfg.min_think_tokens,
-        gen_cfg.think_end_early_bias,
-        gen_cfg.bias_answer_start_after_min_think,
-    )
-    B_ENCOURAGE, P_TOOL = (
-        gen_cfg.encourage_think_bias,
-        gen_cfg.tool_call_penalty * -10.0,
-    )
+    d, e = A.encourage_think_bias, A.tool_call_penalty * -1e1
 
-    def _proc_vectorized(hist_list: List[List[int]], logits: mx.array) -> mx.array:
-        if logits.ndim != 2:
-            return logits
-        B, V = logits.shape
-        neg_inf, pad_id = mx.array(-1e9, dtype=logits.dtype), tokenizer.pad_token_id
-        max_hist_len = max(len(row) for row in hist_list) if hist_list else 0
-        if max_hist_len == 0:
-            return logits
+    def D(hist_list, logits):
+        J = hist_list
+        A = logits
+        if A.ndim != 2:
+            return A
+        z, A0 = A.shape
+        A1, A2 = mx.array(-1e9, dtype=A.dtype), B.pad_token_id
+        P = max(len(A) for A in J) if J else 0
+        if P == 0:
+            return A
+        f = mx.array([A + [A2] * (P - len(A)) for A in J], dtype=mx.int32)
+        if Y and e < 0:
+            A = A.at[:, Y].add(e)
 
-        history_mx = mx.array(
-            [row + [pad_id] * (max_hist_len - len(row)) for row in hist_list],
-            dtype=mx.int32,
-        )
-        if tool_ids and P_TOOL < 0:
-            logits = logits.at[:, tool_ids].add(P_TOOL)
+        def A3(tag_id):
+            A = tag_id
+            if A is _A:
+                return mx.full((z,), -1, dtype=mx.int32)
+            B = f == A
+            C = mx.argmax(B[:, ::-1], axis=1).astype(mx.int32)
+            return mx.where(mx.any(B, axis=1), P - 1 - C, -1)
 
-        def find_last_pos_mx(tag_id):
-            if tag_id is None:
-                return mx.full((B,), -1, dtype=mx.int32)
-            matches = history_mx == tag_id
-            rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+        K, Q, C, R = (A3(A) for A in (O, H, E, I))
+        g = mx.array([len(A) for A in J], dtype=mx.int32)
+        L = mx.logical_and(K != -1, mx.logical_and(Q < K, C < K))
+        D = mx.logical_and(C != -1, R < C)
+        A4 = R != -1
+        h = mx.where(L, g - (K + 1), 0)
+        M = mx.where(D, g - (C + 1), 0)
+        N = mx.array(mcq_flags, dtype=mx.bool_)
+        if O is not _A and H is not _A:
+            A = A.at[:, O].add(mx.where(Q != -1, n, _B))
+            if E is not _A:
+                A = A.at[:, E].add(mx.where(R > C, p, _B))
+            A5 = mx.sum(f == H, axis=1)
+            S = mx.where(A5 == 0, l, o)
+            A6 = mx.logical_and(L, h < b)
+            S = mx.where(A6, y, S)
+            A = A.at[:, H].add(S)
+            T = mx.logical_and(Q > C, mx.logical_not(D))
+            i = mx.logical_not(c)
+            if c:
+                i = h >= b
+            T = mx.logical_and(T, i)
+            if E is not _A:
+                A = A.at[:, E].add(mx.where(T, m, _B))
+        if Z is not _A:
+            A = A.at[:, Z].add(mx.where(A4, q, _B))
+        if X and d > 0 and mx.any(L).item():
+            U = mx.zeros_like(A)
+            U = U.at[:, X].add(d)
+            A = A + U * L[:, _A]
+        j = mx.logical_and(N, mx.logical_and(D, M == 0))
+        if mx.any(j).item() and t:
+            F = mx.full((A0,), A1, dtype=A.dtype)
+            if W:
+                F = F.at[W].add(u)
+            if G:
+                F = F.at[G].add(v)
+            A = mx.where(j[:, _A], F[_A, :], A)
+        k = mx.logical_and(mx.logical_not(N), mx.logical_and(D, M == 0))
+        if G and a != 0 and mx.any(k).item():
+            V = mx.zeros_like(A)
+            V = V.at[:, G].add(a)
+            A = A + V * k[:, _A]
+        if I is not _A:
+            A7 = mx.where(N, s, r)
+            A8 = mx.logical_and(D, M < A7)
+            A = A.at[:, I].add(mx.where(A8, -8.0, _B))
+            A9 = mx.logical_and(N, mx.logical_and(D, M >= w))
+            A = A.at[:, I].add(mx.where(A9, x, _B))
+        return A
 
-        last_ts, last_te, last_as, last_ae = (
-            find_last_pos_mx(t) for t in (ts, te, as_id, ae)
-        )
-        history_len_mx = mx.array([len(row) for row in hist_list], dtype=mx.int32)
-
-        inside_think = mx.logical_and(
-            last_ts != -1, mx.logical_and(last_te < last_ts, last_as < last_ts)
-        )
-        inside_answer = mx.logical_and(last_as != -1, last_ae < last_as)
-        ae_seen = last_ae != -1
-        k_think = mx.where(inside_think, history_len_mx - (last_ts + 1), 0)
-        k_answer = mx.where(inside_answer, history_len_mx - (last_as + 1), 0)
-        is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
-
-        if ts is not None and te is not None:
-            logits = logits.at[:, ts].add(mx.where(last_te != -1, P_REOPEN_THINK, 0.0))
-            if as_id is not None:
-                logits = logits.at[:, as_id].add(
-                    mx.where(last_ae > last_as, P_REOPEN_ANS, 0.0)
-                )
-            te_count = mx.sum(history_mx == te, axis=1)
-            bias_at_te = mx.where(te_count == 0, B_CLOSE, P_EXTRA_TE)
-            min_think_penalty_mask = mx.logical_and(inside_think, (k_think < MIN_THINK))
-            bias_at_te = mx.where(min_think_penalty_mask, B_END_EARLY, bias_at_te)
-            logits = logits.at[:, te].add(bias_at_te)
-            can_start_answer = mx.logical_and(
-                last_te > last_as, mx.logical_not(inside_answer)
-            )
-            min_think_ok = mx.logical_not(B_AS_MIN_THINK)
-            if B_AS_MIN_THINK:
-                min_think_ok = k_think >= MIN_THINK
-            can_start_answer = mx.logical_and(can_start_answer, min_think_ok)
-            if as_id is not None:
-                logits = logits.at[:, as_id].add(mx.where(can_start_answer, B_AS, 0.0))
-
-        if eos_tok is not None:
-            logits = logits.at[:, eos_tok].add(mx.where(ae_seen, B_EOS_ANS, 0.0))
-
-        # --- FIX START ---
-        # The .at[mask, list] indexing is ambiguous and can cause backend errors.
-        # This new method is more robust: create a full bias matrix and apply it with a mask.
-        if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
-            # Create a bias array of the same shape as logits, initially all zeros.
-            encourage_bias = mx.zeros_like(logits)
-            # Set the bias value for the target token IDs (columns) across all rows.
-            encourage_bias = encourage_bias.at[:, encourage_ids].add(B_ENCOURAGE)
-            # Apply the bias only to the rows where `inside_think` is True by broadcasting the mask.
-            logits = logits + (encourage_bias * inside_think[:, None])
-        # --- FIX END ---
-
-        mcq_first_token_mask = mx.logical_and(
-            is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
-        )
-        if mx.any(mcq_first_token_mask).item() and HARD_MASK:
-            mcq_allowed_logits = mx.full((V,), neg_inf, dtype=logits.dtype)
-            if mcq_letter_ids:
-                mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].add(LIFT_MCQ)
-            if ban_ids:
-                mcq_allowed_logits = mcq_allowed_logits.at[ban_ids].add(BAN_MCQ)
-            logits = mx.where(
-                mcq_first_token_mask[:, None], mcq_allowed_logits[None, :], logits
-            )
-
-        non_mcq_first_answer = mx.logical_and(
-            mx.logical_not(is_mcq_mask), mx.logical_and(inside_answer, (k_answer == 0))
-        )
-        # --- FIX START ---
-        # Applying the same robust pattern here to avoid potential indexing errors.
-        if ban_ids and BAN_NONMCQ != 0 and mx.any(non_mcq_first_answer).item():
-            ban_bias = mx.zeros_like(logits)
-            ban_bias = ban_bias.at[:, ban_ids].add(BAN_NONMCQ)
-            logits = logits + (ban_bias * non_mcq_first_answer[:, None])
-        # --- FIX END ---
-
-        if ae is not None:
-            min_ans_len = mx.where(is_mcq_mask, MIN_ANS_MCQ, MIN_ANS)
-            min_len_penalty_mask = mx.logical_and(
-                inside_answer, (k_answer < min_ans_len)
-            )
-            logits = logits.at[:, ae].add(mx.where(min_len_penalty_mask, -8.0, 0.0))
-            mcq_close_mask = mx.logical_and(
-                is_mcq_mask, mx.logical_and(inside_answer, (k_answer >= MCQ_CLOSE_K))
-            )
-            logits = logits.at[:, ae].add(mx.where(mcq_close_mask, B_MCQ_CLOSE, 0.0))
-
-        return logits
-
-    return _proc_vectorized
+    return D
 
 
-def _mask_after_answer(
-    responses_mx: mx.array,
-    initial_mask: mx.array,
-    tokenizer: TokenizerWrapper,
-    config: ExperimentConfig,
-) -> mx.array:
-    if responses_mx.ndim != 2:
-        return initial_mask
-    B, L_gen = responses_mx.shape
-    initial_mask = initial_mask.astype(mx.float32)
-    answer_end_id = _resolve_tag_ids(tokenizer, config.generation).get("answer_end")
-    if answer_end_id is None:
-        return initial_mask
-    indices = mx.arange(L_gen)
-    is_answer_end = responses_mx == answer_end_id
-    first_end_indices = mx.argmin(mx.where(is_answer_end, indices, L_gen + 1), axis=1)
-    boundary_index = first_end_indices + 1
-    end_mask = (
-        mx.broadcast_to(indices[None, :], responses_mx.shape) < boundary_index[:, None]
-    )
-    return initial_mask * end_mask.astype(mx.float32)
+def _mask_after_answer(responses_mx, initial_mask, tokenizer, config):
+    B = responses_mx
+    A = initial_mask
+    if B.ndim != 2:
+        return A
+    J, C = B.shape
+    A = A.astype(mx.float32)
+    D = _resolve_tag_ids(tokenizer, config.generation).get(_F)
+    if D is _A:
+        return A
+    E = mx.arange(C)
+    F = B == D
+    G = mx.argmin(mx.where(F, E, C + 1), axis=1)
+    H = G + 1
+    I = mx.broadcast_to(E[_A, :], B.shape) < H[:, _A]
+    return A * I.astype(mx.float32)

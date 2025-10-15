@@ -14,7 +14,7 @@ from mlx_rl_trainer.core.config import ExperimentConfig, DataConfig, GenerationC
 from mlx_rl_trainer.utils.text_utils import (
     _mcq_meta_from_sample,
     apply_chat_template_wrapper,
-    clean_completion_string
+    clean_completion_string,
 )
 from mlx_rl_trainer.rewards.format.tag_structure import (
     extract_think_region,
@@ -36,7 +36,9 @@ def _compose_prompt_from_sample(
     else:
         prompt_text = json.dumps(sample, ensure_ascii=False)
 
-    completion = clean_completion_string(sample.get("completion", sample.get("answer", "")))
+    completion = clean_completion_string(
+        sample.get("completion", sample.get("answer", ""))
+    )
     if isinstance(completion, str):
         gen_config = GenerationConfig()
         ref_think = extract_think_region(completion, gen_config)
@@ -66,10 +68,10 @@ def build_rollout_batch(
     # Extract data_config and system_prompt based on config type
     if isinstance(config, ExperimentConfig):
         data_config = config.data
-        system_prompt = getattr(config, 'system_prompt', None) or ""
+        system_prompt = getattr(config, "system_prompt", None) or ""
     else:
         data_config = config
-        system_prompt = getattr(config, 'system_prompt', None) or ""
+        system_prompt = getattr(config, "system_prompt", None) or ""
 
     pad_id = tokenizer.pad_token_id
 
@@ -93,21 +95,27 @@ def build_rollout_batch(
             )
 
             # Apply chat template with system prompt
-            formatted_prompt = apply_chat_template_wrapper(
-                tokenizer, prompt_text, ""
-            )
+            formatted_prompt = apply_chat_template_wrapper(tokenizer, prompt_text, "")
 
             # Encode without adding special tokens since they should be in the template
             p_tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
             # Truncate if necessary (keeping the end, which is the actual prompt)
             if len(p_tokens) > data_config.max_prompt_len:
-                p_tokens = p_tokens[-data_config.max_prompt_len:]
+                p_tokens = p_tokens[-data_config.max_prompt_len :]
 
             if not p_tokens:
                 logger.warning(f"Skipping empty prompt (idx {i}).")
                 # Clean up immediately
-                del raw, prompt_text, ref_ans, ref_think, mcq_meta, formatted_prompt, p_tokens
+                del (
+                    raw,
+                    prompt_text,
+                    ref_ans,
+                    ref_think,
+                    mcq_meta,
+                    formatted_prompt,
+                    p_tokens,
+                )
                 continue
 
             # Store only essential data in prompts_data (no tokens to avoid duplication)

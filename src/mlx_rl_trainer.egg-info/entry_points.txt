@@ -1,2 +1,4 @@
 [console_scripts]
+mlx-dump-config = mlx_rl_trainer.scripts.dump_config:main
+mlx-evaluate = mlx_rl_trainer.scripts.evaluate:main
 mlx-train = mlx_rl_trainer.scripts.train:main

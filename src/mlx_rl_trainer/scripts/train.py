@@ -1,15 +1,21 @@
 #!/usr/bin/env python
-import sys, logging, asyncio, uuid, random, signal, time, json
+import asyncio
+import logging
+import random
+import signal
+import sys
+import time
+import uuid
 from pathlib import Path
+
 import argparse
 import mlx.core as mx
+import numpy as np
+from rich import print as rprint
 from rich.console import Console
 from rich.logging import RichHandler
-from rich import print as rprint, traceback as rich_traceback
-import numpy as np
+from rich.traceback import install as rich_traceback
 
-
-# Add src to path for local imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 try:
@@ -19,23 +25,25 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
 
-from mlx_rl_trainer.core.config import ExperimentConfig
-from mlx_rl_trainer.core.model_manager import ModelManager
-from mlx_rl_trainer.data.dataset_manager import DatasetManager
-from mlx_rl_trainer.core.checkpoint_manager import CheckpointManager
-from mlx_rl_trainer.core.exceptions import CustomBaseException, TrainingRuntimeError
 from mlx_rl_trainer.algorithms.grpo.grpo_trainer import GRPOTrainer
-from mlx_rl_trainer.rewards.registry import RewardRegistry
+from mlx_rl_trainer.core.checkpoint_manager import CheckpointManager
+from mlx_rl_trainer.core.config import ExperimentConfig
+from mlx_rl_trainer.data.dataset_manager import DatasetManager
+from mlx_rl_trainer.core.exceptions import CustomBaseException
+from mlx_rl_trainer.core.model_manager import ModelManager
+from mlx_rl_trainer.monitoring.metrics_logger import MetricsLogger, _emit_plots_from_csv
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
 from mlx_rl_trainer.rewards.context import RewardContext
-from mlx_rl_trainer.monitoring.metrics_logger import MetricsLogger, _emit_plots_from_csv
-from mlx_rl_trainer.utils import limit_memory
+from mlx_rl_trainer.rewards.registry import RewardRegistry
+from mlx_rl_trainer.utils.mlx_utils import limit_memory
 
-# Import rewards and evaluators to register them
-import mlx_rl_trainer.rewards
 import mlx_rl_trainer.evaluation
+import mlx_rl_trainer.rewards
 
-rich_traceback.install(show_locals=False)
+from rich.traceback import install
+
+install(show_locals=False)
+
 console = Console(stderr=True, force_terminal=True)
 logger = logging.getLogger(__name__)
 
@@ -47,7 +55,7 @@ def handle_signal(signum, frame):
     global shutdown_requested
     if not shutdown_requested:
         rprint(
-            "\n[bold yellow]Shutdown requested. Finishing current step and saving checkpoint...[/bold yellow]"
+            "\n[bold yellow]Shutdown requested. Finishing current step and saving...[/bold yellow]"
         )
         shutdown_requested = True
 
@@ -56,7 +64,7 @@ def path_to_str(d):
     if isinstance(d, dict):
         return {k: path_to_str(v) for k, v in d.items()}
     if isinstance(d, list):
-        return [path_to_str(v) for v in d]
+        return [path_to_str(i) for i in d]
     if isinstance(d, Path):
         return str(d)
     return d
@@ -66,56 +74,41 @@ async def _async_main():
     global shutdown_requested, wandb_run
     parser = argparse.ArgumentParser(description="MLX RL Trainer")
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to configuration YAML file"
+        "--config", type=str, required=True, help="Path to config YAML file"
     )
     parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Path to checkpoint to resume from (overrides auto-resume)",
+        "--resume", type=str, default=None, help="Path to checkpoint to resume from"
     )
     parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     args = parser.parse_args()
 
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    handlers = [
-        RichHandler(markup=True, rich_tracebacks=True, console=console, level=log_level)
-    ]
-    logging.basicConfig(level=log_level, handlers=handlers, force=True)
+    logging.basicConfig(
+        level=log_level, handlers=[RichHandler(markup=True)], force=True
+    )
 
-    try:
-        config = ExperimentConfig.load_from_yaml(Path(args.config))
-    except Exception as e:
-        logger.critical(f"FATAL CONFIGURATION ERROR: {e}")
-        sys.exit(1)
+    config = ExperimentConfig.load_from_yaml(Path(args.config))
+    if config.trainer.memory_limit_gb:
+        limit_memory(config.trainer.memory_limit_gb)
 
     run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
-    # config.trainer.output_dir = config.trainer.output_dir / run_id
     config.trainer.output_dir.mkdir(parents=True, exist_ok=True)
 
     file_handler = logging.FileHandler(
-        config.trainer.output_dir / f"training_debug_{run_id}.log",
-        mode="a",
-        encoding="utf-8",
+        config.trainer.output_dir / f"training_{run_id}.log"
     )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
     )
     logging.getLogger().addHandler(file_handler)
 
-    logger.info(
-        f"Starting run with ID: [bold magenta]{run_id}[/bold magenta], output to {config.trainer.output_dir}"
-    )
-
+    logger.info(f"Starting run ID: [bold magenta]{run_id}[/bold magenta]")
     random.seed(config.trainer.seed)
     np.random.seed(config.trainer.seed)
     mx.random.seed(config.trainer.seed)
@@ -124,13 +117,11 @@ async def _async_main():
 
     if config.monitoring.use_wandb and WANDB_AVAILABLE:
         try:
-            wandb_cfg = path_to_str(config.model_dump())
-            wandb_cfg["run_id"] = run_id
             wandb_run = wandb.init(
                 project=config.monitoring.wandb_project,
                 entity=config.monitoring.wandb_entity,
                 name=config.monitoring.wandb_run_name or run_id,
-                config=wandb_cfg,
+                config=path_to_str(config.model_dump()),
                 resume="allow",
                 id=run_id,
             )
@@ -139,62 +130,40 @@ async def _async_main():
 
             metrics_logger.wandb_run = wandb_run
         except Exception as e:
-            logger.error(
-                f"W&B initialization failed: {e}. Disabling W&B.", exc_info=True
-            )
+            logger.error(f"W&B initialization failed: {e}. Disabling.", exc_info=True)
             config.monitoring.use_wandb = False
-            wandb_run = None
 
-    rewards = [
-        (RewardRegistry.create(rc.name, rc.config), rc.weight) for rc in config.rewards
-    ]
-    reward_composer = RewardComposer(rewards, context_cls=RewardContext)
-
-    model_manager = ModelManager(config.model)
-    data_manager = DatasetManager(config.data, tokenizer=None)
-    checkpoint_manager = CheckpointManager(
+    composer = RewardComposer(
+        [(RewardRegistry.create(r.name, r.config), r.weight) for r in config.rewards]
+    )
+    model_mngr = ModelManager(config.model)
+    data_mngr = DatasetManager(config)
+    ckpt_mngr = CheckpointManager(
         config.trainer.output_dir / config.checkpointing.save_dir,
-        keep_last_n=config.checkpointing.keep_last_n,  # CORRECTED from keep_best_n
-        save_best=True,
-        base_model_path=config.model.model_path
+        config.checkpointing.keep_last_n,
+        config.checkpointing.save_best,
+        config.model.model_path,
+        config.checkpointing.checkpoint_save_retries,
+        config.checkpointing.checkpoint_save_backoff_factor,
     )
     if args.resume:
-        checkpoint_manager.resume_from_path = Path(args.resume)
+        ckpt_mngr.resume_from_path = Path(args.resume)
 
     metrics_logger = MetricsLogger(config, run_id)
-
-    paged_kv_cache = None
-
-    if config.trainer.algorithm == "grpo":
-        trainer = GRPOTrainer(
-            config,
-            model_manager,
-            data_manager,
-            checkpoint_manager,
-            reward_composer,
-            paged_kv_cache,
-            metrics_logger,
-        )
-    else:
-        raise ValueError(f"Unknown algorithm: {config.trainer.algorithm}")
+    trainer = GRPOTrainer(
+        config, model_mngr, data_mngr, ckpt_mngr, composer, None, metrics_logger
+    )
 
     try:
-        await trainer.run(lambda: shutdown_requested)
+        await trainer.run(should_shutdown=lambda: shutdown_requested)
         logger.info("[bold green]Training completed successfully![/bold green]")
     except CustomBaseException as e:
         logger.critical(f"A predictable error halted training: {e}", exc_info=True)
         if trainer and trainer.global_step > 0:
-            trainer.save_final_checkpoint(reason="error_halt")
-        sys.exit(1)
-    except Exception as e:
-        logger.critical(
-            f"An unexpected error occurred during training: {e}", exc_info=True
-        )
-        if trainer and trainer.global_step > 0:
-            trainer.save_final_checkpoint(reason="unexpected_crash")
+            trainer.save_final_checkpoint("error_halt")
         sys.exit(1)
     finally:
-        logger.info("Application shutdown sequence initiated.")
+        logger.info("Shutdown sequence initiated.")
         if metrics_logger:
             metrics_logger.close()
             _emit_plots_from_csv(
@@ -202,12 +171,11 @@ async def _async_main():
             )
         if wandb_run:
             wandb_run.finish()
-        logger.info("[bold blue]All resources released. Shutdown complete.[/bold blue]")
+        logger.info("[bold blue]Shutdown complete.[/bold blue]")
 
 
 def main():
     rprint(f"MLX using device: [bold cyan]{mx.default_device()}[/bold cyan]")
-    limit_memory(80)
     asyncio.run(_async_main())
 
 
