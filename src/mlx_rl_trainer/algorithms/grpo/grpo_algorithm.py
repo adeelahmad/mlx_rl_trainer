@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 def _extract_layer_number(param_path: str) -> Optional[int]:
     """Extract layer number from parameter path."""
     import re
-    match = re.search(r'\.layers\.(\d+)\.', param_path)
+
+    match = re.search(r"\.layers\.(\d+)\.", param_path)
     return int(match.group(1)) if match else None
 
 
@@ -64,18 +65,18 @@ def _mask_gradients_by_layers(
     - 'exclude_thinking': Zero out thinking layer gradients (DEFAULT)
     """
     # Get layer boundaries
-    thinking_start = getattr(config.trainer, 'thinking_layer_start', None)
-    thinking_end = getattr(config.trainer, 'thinking_layer_end', None)
-    answer_start = getattr(config.trainer, 'answer_layer_start', None)
-    answer_end = getattr(config.trainer, 'answer_layer_end', None)
+    thinking_start = getattr(config.trainer, "thinking_layer_start", None)
+    thinking_end = getattr(config.trainer, "thinking_layer_end", None)
+    answer_start = getattr(config.trainer, "answer_layer_start", None)
+    answer_end = getattr(config.trainer, "answer_layer_end", None)
 
     # If layer boundaries not specified or mode is 'all', return gradients as-is
-    if sft_mode == 'all' or thinking_start is None or answer_start is None:
+    if sft_mode == "all" or thinking_start is None or answer_start is None:
         return grads
 
     # Get weights for weighted mode
-    thinking_weight = getattr(config.trainer, 'sft_thinking_weight', 0.0)
-    answer_weight = getattr(config.trainer, 'sft_answer_weight', 1.0)
+    thinking_weight = getattr(config.trainer, "sft_thinking_weight", 0.0)
+    answer_weight = getattr(config.trainer, "sft_answer_weight", 1.0)
 
     # Process gradients
     masked_grads = {}
@@ -87,13 +88,13 @@ def _mask_gradients_by_layers(
             masked_grads[key] = grad
         else:
             # Layer-specific parameters
-            if sft_mode == 'answer_only':
+            if sft_mode == "answer_only":
                 if answer_start <= layer_num <= answer_end:
                     masked_grads[key] = grad
                 else:
                     masked_grads[key] = mx.zeros_like(grad)
 
-            elif sft_mode == 'weighted':
+            elif sft_mode == "weighted":
                 if thinking_start <= layer_num <= thinking_end:
                     masked_grads[key] = grad * thinking_weight
                 elif answer_start <= layer_num <= answer_end:
@@ -101,7 +102,7 @@ def _mask_gradients_by_layers(
                 else:
                     masked_grads[key] = grad
 
-            elif sft_mode == 'exclude_thinking':
+            elif sft_mode == "exclude_thinking":
                 if thinking_start <= layer_num <= thinking_end:
                     masked_grads[key] = mx.zeros_like(grad)
                 else:
@@ -130,12 +131,18 @@ def grpo_loss(
 ) -> Tuple[mx.array, Tuple[mx.array, mx.array, Dict[str, mx.array]]]:
     """Computes the GRPO loss, including RL and SFT components."""
     # RL Loss (PPO-like clipped objective)
-    logits_actor = actor_model(tokens, attention_mask)
+    logits_actor = actor_model(tokens)
     log_probs_actor = nn.log_softmax(logits_actor, axis=-1)
-    gathered_log_probs_actor = mx.take_along_axis(log_probs_actor, tokens[..., None], axis=-1).squeeze(-1)
+    gathered_log_probs_actor = mx.take_along_axis(
+        log_probs_actor, tokens[..., None], axis=-1
+    ).squeeze(-1)
 
     ratio = mx.exp(gathered_log_probs_actor - log_probs_ref)
-    clipped_ratio = mx.clip(ratio, 1 - full_config.trainer.ppo_clip_param, 1 + full_config.trainer.ppo_clip_param)
+    clipped_ratio = mx.clip(
+        ratio,
+        1 - full_config.trainer.ppo_clip_param,
+        1 + full_config.trainer.ppo_clip_param,
+    )
 
     # Policy loss
     policy_loss1 = -advantages * ratio
@@ -147,7 +154,9 @@ def grpo_loss(
     # value_loss = 0.5 * mx.mean((actor_model.value(tokens) - returns)**2)
 
     # KL divergence penalty
-    kl_div = (ratio - 1) - gathered_log_probs_actor + log_probs_ref # This is actually (ratio - 1) - log_ratio
+    kl_div = (
+        (ratio - 1) - gathered_log_probs_actor + log_probs_ref
+    )  # This is actually (ratio - 1) - log_ratio
     kl_penalty = grpo_beta * kl_div
 
     # Combine RL loss components
@@ -161,24 +170,26 @@ def grpo_loss(
         # and `attention_mask` covers the relevant parts.
         # For simplicity, let's assume SFT targets are `tokens` itself for now.
         # In a real scenario, `reference_completion_tokens` would be passed.
-        sft_logits = actor_model(tokens, attention_mask)
+        sft_logits = actor_model(tokens)
         sft_log_probs = nn.log_softmax(sft_logits, axis=-1)
-        sft_gathered_log_probs = mx.take_along_axis(sft_log_probs, tokens[..., None], axis=-1).squeeze(-1)
+        sft_gathered_log_probs = mx.take_along_axis(
+            sft_log_probs, tokens[..., None], axis=-1
+        ).squeeze(-1)
 
         # Apply SFT weights based on thinking/answer masks
         sft_loss_think = -sft_gathered_log_probs * thinking_mask
         sft_loss_answer = -sft_gathered_log_probs * answer_mask
 
-        sft_loss = (
-            sft_think_weight * (mx.sum(sft_loss_think) / (mx.sum(thinking_mask) + 1e-8)) +
-            sft_answer_weight * (mx.sum(sft_loss_answer) / (mx.sum(answer_mask) + 1e-8))
-        )
+        sft_loss = sft_think_weight * (
+            mx.sum(sft_loss_think) / (mx.sum(thinking_mask) + 1e-8)
+        ) + sft_answer_weight * (mx.sum(sft_loss_answer) / (mx.sum(answer_mask) + 1e-8))
 
     total_loss = rl_loss + sft_loss
 
     metrics = {
         "reward_mean": mx.mean(returns),
-        "kl_divergence": mx.mean(kl_div * attention_mask) / (mx.sum(attention_mask) + 1e-8),
+        "kl_divergence": mx.mean(kl_div * attention_mask)
+        / (mx.sum(attention_mask) + 1e-8),
     }
 
     return total_loss, (rl_loss, sft_loss, metrics)
@@ -194,7 +205,9 @@ class GRPOAlgorithm:
     def compute_advantages(self, rewards_flat, samples_per_prompt):
         """Compute advantages with optional baseline normalization."""
         if samples_per_per_prompt <= 1:
-            return (rewards_flat - mx.mean(rewards_flat)) / (mx.std(rewards_flat) + 1e-8)
+            return (rewards_flat - mx.mean(rewards_flat)) / (
+                mx.std(rewards_flat) + 1e-8
+            )
 
         batch_size = rewards_flat.shape[0] // samples_per_prompt
         rewards_reshaped = rewards_flat.reshape(batch_size, samples_per_prompt)
@@ -206,7 +219,9 @@ class GRPOAlgorithm:
     def calculate_loss_and_grads(self, rollout_batch, full_config, pad_token_id):
         """Original single gradient computation method."""
         # This method is now deprecated and replaced by grpo_loss
-        raise NotImplementedError("calculate_loss_and_grads is deprecated. Use grpo_loss instead.")
+        raise NotImplementedError(
+            "calculate_loss_and_grads is deprecated. Use grpo_loss instead."
+        )
 
     def calculate_dual_gradient_loss(self, rollout_batch, full_config, pad_token_id):
         """
@@ -214,12 +229,18 @@ class GRPOAlgorithm:
 
         This method is now deprecated and replaced by grpo_loss.
         """
-        raise NotImplementedError("calculate_dual_gradient_loss is deprecated. Use grpo_loss instead.")
+        raise NotImplementedError(
+            "calculate_dual_gradient_loss is deprecated. Use grpo_loss instead."
+        )
 
-    def calculate_sft_loss_and_grads(self, rollout_batch, reference_tokens, full_config, pad_token_id):
+    def calculate_sft_loss_and_grads(
+        self, rollout_batch, reference_tokens, full_config, pad_token_id
+    ):
         """
         Compute SFT (supervised fine-tuning) loss and gradients with layer-specific control.
 
         This method is now deprecated and replaced by grpo_loss.
         """
-        raise NotImplementedError("calculate_sft_loss_and_grads is deprecated. Use grpo_loss instead.")
+        raise NotImplementedError(
+            "calculate_sft_loss_and_grads is deprecated. Use grpo_loss instead."
+        )

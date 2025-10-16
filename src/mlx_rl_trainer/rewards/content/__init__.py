@@ -8,4 +8,9 @@ from .mcq_accuracy import MCQAccuracyReward
 from .steps_coverage import StepsCoverageReward
 from .verify_response import VerifyResponseReward
 
-__all__ = ["SemanticSimilarityReward", "MCQAccuracyReward", "StepsCoverageReward", "VerifyResponseReward"]
+__all__ = [
+    "SemanticSimilarityReward",
+    "MCQAccuracyReward",
+    "StepsCoverageReward",
+    "VerifyResponseReward",
+]

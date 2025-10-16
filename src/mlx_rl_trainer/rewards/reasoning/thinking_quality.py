@@ -22,7 +22,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@register_reward('thinking_quality')
+@register_reward("thinking_quality")
 class ThinkingQualityReward(BaseReward):
     """
     Evaluates thinking section quality with adaptive length penalties.
@@ -38,42 +38,73 @@ class ThinkingQualityReward(BaseReward):
         super().__init__(config)
 
         # Length targets (adjusted for 128 token budget)
-        self.target_length_min = config.get('target_length_min', 30)
-        self.target_length_max = config.get('target_length_max', 80)
-        self.optimal_length_min = config.get('optimal_length_min', 40)
-        self.optimal_length_max = config.get('optimal_length_max', 60)
+        self.target_length_min = config.get("target_length_min", 30)
+        self.target_length_max = config.get("target_length_max", 80)
+        self.optimal_length_min = config.get("optimal_length_min", 40)
+        self.optimal_length_max = config.get("optimal_length_max", 60)
 
         # Penalties and bonuses
-        self.conciseness_bonus = config.get('conciseness_bonus', 0.15)
-        self.excessive_length_threshold = config.get('excessive_length_threshold', 90)
-        self.excessive_length_penalty = config.get('excessive_length_penalty', 0.5)
+        self.conciseness_bonus = config.get("conciseness_bonus", 0.15)
+        self.excessive_length_threshold = config.get("excessive_length_threshold", 90)
+        self.excessive_length_penalty = config.get("excessive_length_penalty", 0.5)
 
         # Use trainer limits if available
-        self.use_trainer_limits = config.get('use_trainer_thinking_limits', True)
+        self.use_trainer_limits = config.get("use_trainer_thinking_limits", True)
 
         # Special tokens to penalize
-        self.special_tokens = config.get('special_tokens', [
-            '<|endoftext|>', '<|im_start|>', '<think><think>',
-            '<|im_end|>', '<|end|>', '<|begin|>',
-            '<|system|>', '<|user|>', '<|assistant|>',
-            '[INST]', '[/INST]', '<s>', '</s>',
-            '<pad>', '<unk>', '<bos>', '<eos>'
-        ])
-        self.special_token_penalty = config.get('special_token_penalty', 0.4)
+        self.special_tokens = config.get(
+            "special_tokens",
+            [
+                "<|endoftext|>",
+                "<|im_start|>",
+                "<think><think>",
+                "<|im_end|>",
+                "<|end|>",
+                "<|begin|>",
+                "<|system|>",
+                "<|user|>",
+                "<|assistant|>",
+                "[INST]",
+                "[/INST]",
+                "<s>",
+                "</s>",
+                "<pad>",
+                "<unk>",
+                "<bos>",
+                "<eos>",
+            ],
+        )
+        self.special_token_penalty = config.get("special_token_penalty", 0.4)
 
         # Bad phrases indicating poor reasoning
-        self.bad_phrases = config.get('bad_phrases', [
-            'i think', 'i believe', 'maybe', "i'm not sure",
-            'i will now', "i'll start by", "let's see",
-            'confused', 'stuck', 'frustrated',
-            'wait, wait', 'hmm, perhaps', 'or wait',
-            'to be completely honest', 'basically what happens',
-            'long story short', 'at the end of the day',
-            'circular reasoning', 'insufficient information',
-            'too complicated', 'for some unknown reason'
-        ])
+        self.bad_phrases = config.get(
+            "bad_phrases",
+            [
+                "i think",
+                "i believe",
+                "maybe",
+                "i'm not sure",
+                "i will now",
+                "i'll start by",
+                "let's see",
+                "confused",
+                "stuck",
+                "frustrated",
+                "wait, wait",
+                "hmm, perhaps",
+                "or wait",
+                "to be completely honest",
+                "basically what happens",
+                "long story short",
+                "at the end of the day",
+                "circular reasoning",
+                "insufficient information",
+                "too complicated",
+                "for some unknown reason",
+            ],
+        )
 
-        self.tag_misuse_penalty = config.get('tag_misuse_penalty', 0.3)
+        self.tag_misuse_penalty = config.get("tag_misuse_penalty", 0.3)
 
         logger.info(
             f"ThinkingQualityReward initialized: "
@@ -82,7 +113,9 @@ class ThinkingQualityReward(BaseReward):
             f"excessive_threshold={self.excessive_length_threshold}"
         )
 
-    def _check_tag_misuse_penalty(self, text: str, gen_config: GenerationConfig) -> float:
+    def _check_tag_misuse_penalty(
+        self, text: str, gen_config: GenerationConfig
+    ) -> float:
         """Check for tag misuse (duplicate tags, nested tags)."""
         start_tag = gen_config.think_start_tag
         end_tag = gen_config.think_end_tag
@@ -102,7 +135,7 @@ class ThinkingQualityReward(BaseReward):
         # Nested tags within thinking region
         if start_count == 1 and end_count == 1:
             think_content = extract_think_region(text, gen_config)
-            if re.search(r'<think>|<\/think>', think_content, flags=re.I):
+            if re.search(r"<think>|<\/think>", think_content, flags=re.I):
                 penalty = self.tag_misuse_penalty
 
         return penalty
@@ -116,9 +149,7 @@ class ThinkingQualityReward(BaseReward):
         return penalty
 
     def _compute_length_score(
-        self,
-        think_length: int,
-        trainer_max_tokens: Optional[int] = None
+        self, think_length: int, trainer_max_tokens: Optional[int] = None
     ) -> float:
         """
         Compute score based on thinking length with hardware constraints.
@@ -134,7 +165,9 @@ class ThinkingQualityReward(BaseReward):
         if self.use_trainer_limits and trainer_max_tokens is not None:
             # Adjust thresholds based on trainer limit
             effective_max = min(self.target_length_max, trainer_max_tokens)
-            effective_excessive = min(self.excessive_length_threshold, trainer_max_tokens + 10)
+            effective_excessive = min(
+                self.excessive_length_threshold, trainer_max_tokens + 10
+            )
         else:
             effective_max = self.target_length_max
             effective_excessive = self.excessive_length_threshold
@@ -163,7 +196,11 @@ class ThinkingQualityReward(BaseReward):
             score -= harsh_penalty
 
             # Log warning for monitoring
-            if think_length > trainer_max_tokens if trainer_max_tokens else effective_excessive:
+            if (
+                think_length > trainer_max_tokens
+                if trainer_max_tokens
+                else effective_excessive
+            ):
                 logger.warning(
                     f"Thinking length {think_length} exceeds limit "
                     f"({trainer_max_tokens or effective_excessive}), "
@@ -200,13 +237,13 @@ class ThinkingQualityReward(BaseReward):
         think_length = len(think_content.strip())
 
         # Try to get trainer max_thinking_tokens from metadata
-        trainer_max_tokens = context.metadata.get('max_thinking_tokens')
+        trainer_max_tokens = context.metadata.get("max_thinking_tokens")
 
         length_score = self._compute_length_score(think_length, trainer_max_tokens)
         score *= length_score
 
         # Structure bonus (lists, bullet points)
-        if re.search(r'(\n\s*[-*•]|\n\s*\d+\.\s+)', think_content):
+        if re.search(r"(\n\s*[-*•]|\n\s*\d+\.\s+)", think_content):
             score += 0.1
 
         # Bad phrases penalty

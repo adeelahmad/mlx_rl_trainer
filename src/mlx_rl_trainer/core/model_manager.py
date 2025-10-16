@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
-
+import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
@@ -43,6 +43,15 @@ except ImportError:
         pass
 
     def print_trainable_parameters(*args, **kwargs):
+        pass
+
+    def load_adapters(*args, **kwargs):
+        pass
+
+    def save_config(*args, **kwargs):
+        pass
+
+    def trainable_parameters(*args, **kwargs):
         pass
 
     def load_adapters(*args, **kwargs):
@@ -138,11 +147,17 @@ class ModelManager:
         # Simple linear warmup and cosine decay scheduler
         def lr_scheduler(step: int) -> float:
             if step < trainer_config.lr_warmup_steps:
-                return trainer_config.learning_rate * (step / trainer_config.lr_warmup_steps)
+                return trainer_config.learning_rate * (
+                    step / trainer_config.lr_warmup_steps
+                )
             progress = (step - trainer_config.lr_warmup_steps) / (
                 trainer_config.num_training_steps - trainer_config.lr_warmup_steps
             )
-            return trainer_config.learning_rate * 0.5 * (1.0 + mx.cos(mx.array(np.pi * progress)))
+            return (
+                trainer_config.learning_rate
+                * 0.5
+                * (1.0 + mx.cos(mx.array(np.pi * progress)))
+            )
 
         return optimizer, lr_scheduler
 
@@ -184,18 +199,13 @@ class ModelManager:
         tokenizer: Any,
         temp: float,
         max_tokens: int,
-        cache: Optional[Any],
         logit_processors: Optional[List[Callable]],
         generation_cfg: Optional[Any],
     ) -> Tuple[mx.array, mx.array]:
         """Generates token sequences from prompts and returns tokens and their log probabilities."""
         batch_size = prompts.shape[0]
-        if cache is None:
-            cache = self.make_prompt_cache(
-                model, max_kv_size=prompts.shape[1] + max_tokens
-            )
 
-        logits_output = model(prompts.astype(mx.int64), cache=cache)
+        logits_output = model(prompts.astype(mx.int64), cache=None)
         logits = (
             logits_output[0] if isinstance(logits_output, tuple) else logits_output
         )[:, -1, :].astype(mx.float32)
@@ -213,9 +223,7 @@ class ModelManager:
 
             from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler
 
-            sampler = safe_make_sampler(
-                generation_cfg, temp=temp
-            )
+            sampler = safe_make_sampler(generation_cfg, temp=temp)
 
             next_token = sampler(processed_logits)
             log_probs = nn.log_softmax(processed_logits, axis=-1)
@@ -240,7 +248,7 @@ class ModelManager:
             if mx.all(ended).item():
                 break
 
-            logits_output = model(tokens_to_add[:, None].astype(mx.int64), cache=cache)
+            logits_output = model(tokens_to_add[:, None].astype(mx.int64), cache=None)
             logits = (
                 logits_output[0] if isinstance(logits_output, tuple) else logits_output
             )[:, -1, :].astype(mx.float32)

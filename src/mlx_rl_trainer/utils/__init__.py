@@ -6,7 +6,7 @@ from .mlx_utils import (
     _first_token_ids_for_lexemes,
     _letter_token_ids,
     _resolve_tag_ids,
-    limit_memory
+    limit_memory,
 )
 
 from .text_utils import (
@@ -48,8 +48,7 @@ __all__ = [
     "_first_token_ids_for_lexemes",
     "_letter_token_ids",
     "_resolve_tag_ids",
-    "limit_memory"
-    "_preview",
+    "limit_memory" "_preview",
     "_strip_markup",
     "_count_words",
     "_tokenize_set",

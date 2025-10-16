@@ -123,8 +123,10 @@ if not hasattr(optim.Optimizer, "_orig_apply_gradients_mlx_metal_patch"):
 def metal_before_update(num_updates: int, data_config: Any, trainer_config: Any):
     if not hasattr(trainer_config, "_orig_max_gen_len"):
         trainer_config._orig_max_gen_len = int(getattr(data_config, "max_gen_len", 160))
-        trainer_config._orig_num_samples = int(getattr(trainer_config, "num_rollout_samples", 4))
-    
+        trainer_config._orig_num_samples = int(
+            getattr(trainer_config, "num_rollout_samples", 4)
+        )
+
     # max_kv_size is not directly in config, so we'll manage it separately or assume it's handled elsewhere
     # For now, we'll just use the original values if not explicitly set.
     # If it needs to be dynamically adjusted, it should be part of a config object.
@@ -135,7 +137,7 @@ def metal_before_update(num_updates: int, data_config: Any, trainer_config: Any)
     else:
         data_config.max_gen_len = trainer_config._orig_max_gen_len
         trainer_config.num_rollout_samples = trainer_config._orig_num_samples
-    
+
     if (num_updates % 5) == 0:
         try:
             mx.synchronize()
@@ -275,6 +277,7 @@ def make_dynamic_tag_bias_processor(
 
     return _proc_vectorized
 
+
 def _resolve_tag_ids(
     tokenizer: TokenizerWrapper, gen_config: GenerationConfig
 ) -> Dict[str, Optional[int]]:
@@ -295,6 +298,7 @@ def _resolve_tag_ids(
         "eos": tokenizer.eos_token_id,
     }
 
+
 def _first_token_ids_for_lexemes(
     tokenizer: TokenizerWrapper, lexemes: Sequence[str]
 ) -> List[int]:
@@ -314,6 +318,7 @@ def _first_token_ids_for_lexemes(
             ids.append(t_space[0])
     return ids
 
+
 def _letter_token_ids(
     tokenizer: TokenizerWrapper, letters: Sequence[str] = LETTER_ALPH
 ) -> Dict[str, List[int]]:
@@ -326,7 +331,6 @@ def _letter_token_ids(
                 cand.append(ids[0])
         out[L] = cand
     return out
-
 
 
 def safe_make_sampler(
@@ -346,3 +350,56 @@ def safe_make_sampler(
         )
     except TypeError:
         return make_sampler(temp=temp, top_p=gen_cfg.sampling_top_p)
+
+
+def _extract_layer_number(param_path: str) -> Optional[int]:
+    """Extract layer number from parameter path."""
+    import re
+
+    match = re.search(r"\.layers\.(\d+)\.", param_path)
+    return int(match.group(1)) if match else None
+
+
+def mask_gradients_by_layer(
+    grads: Dict[str, mx.array], layer_config: Dict[str, List[str]]
+) -> Dict[str, mx.array]:
+    masked_grads = {}
+    include_layers = [str(x) for x in layer_config.get("include", [])]
+    exclude_layers = [str(x) for x in layer_config.get("exclude", [])]
+
+    for key, grad in tree_flatten(grads):
+        layer_num = _extract_layer_number(key)
+
+        if layer_num is None:
+            # Keep non-layer parameters as is
+            masked_grads[key] = grad
+        else:
+            if (not include_layers or str(layer_num) in include_layers) and (
+                str(layer_num) not in exclude_layers
+            ):
+                masked_grads[key] = grad
+            else:
+                masked_grads[key] = mx.zeros_like(grad)
+    return tree_unflatten(list(masked_grads.items()))
+
+
+def combine_gradients(
+    gradient_tuples: List[Tuple[Dict[str, mx.array], float]]
+) -> Dict[str, mx.array]:
+    combined_grads = {}
+    for grads, weight in gradient_tuples:
+        for key, grad in tree_flatten(grads):
+            if key not in combined_grads:
+                combined_grads[key] = grad * weight
+            else:
+                combined_grads[key] += grad * weight
+    return tree_unflatten(list(combined_grads.items()))
+
+
+def get_grad_norm(grads: Dict[str, mx.array]) -> float:
+    """Calculates the L2 norm of the gradients."""
+    total_norm = 0.0
+    for _, grad in tree_flatten(grads):
+        if isinstance(grad, mx.array):
+            total_norm += mx.sum(grad * grad).item()
+    return total_norm**0.5

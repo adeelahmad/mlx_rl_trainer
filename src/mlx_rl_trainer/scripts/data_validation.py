@@ -3,6 +3,7 @@ Example external data validation script.
 """
 from typing import Dict, Any
 
+
 def validate_sample(sample: Dict[str, Any]) -> bool:
     """
     Validates a single data sample.
@@ -16,7 +17,7 @@ def validate_sample(sample: Dict[str, Any]) -> bool:
     # Example validation: Ensure the prompt is not empty.
     if not sample.get("prompt", "").strip():
         return False
-    
+
     # Example validation: Ensure the completion is not empty.
     if not sample.get("completion", "").strip():
         return False

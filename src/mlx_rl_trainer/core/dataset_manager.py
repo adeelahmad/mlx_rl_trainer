@@ -20,7 +20,7 @@ from mlx_rl_trainer.utils.text_utils import (
     apply_chat_template_wrapper,
     extract_think_region,
     _looks_garbage,
-    clean_completion_string
+    clean_completion_string,
 )
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
@@ -116,6 +116,7 @@ class DatasetManager:
             raise FileNotFoundError(f"Data file not found: {path}")
 
         import aiofiles
+
         async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
@@ -135,6 +136,7 @@ class DatasetManager:
         chunk = []
 
         import aiofiles
+
         async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
@@ -176,9 +178,10 @@ class DatasetManager:
                 return raw_data
             elif path.suffix.lower() == ".json":
                 import aiofiles
-                raw_content = await (await aiofiles.open(
-                    path, mode="r", encoding="utf-8"
-                )).read()
+
+                raw_content = await (
+                    await aiofiles.open(path, mode="r", encoding="utf-8")
+                ).read()
                 data = json.loads(raw_content)
                 del raw_content
                 gc.collect()

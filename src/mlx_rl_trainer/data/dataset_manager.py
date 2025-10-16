@@ -19,7 +19,7 @@ from mlx_rl_trainer.utils.text_utils import (
     apply_chat_template_wrapper,
     extract_think_region,
     _looks_garbage,
-    clean_completion_string
+    clean_completion_string,
 )
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
@@ -27,6 +27,7 @@ import aiofiles
 import gc
 
 logger = logging.getLogger(__name__)
+
 
 def _aggressive_memory_cleanup():
     """Aggressively free memory."""
@@ -36,10 +37,6 @@ def _aggressive_memory_cleanup():
         pass
     mx.clear_cache()
     gc.collect()
-
-
-
-
 
 
 def _normalize_record(
@@ -58,7 +55,7 @@ def _normalize_record(
     completion = _s(
         obj.get(completion_key, obj.get("completion", obj.get("answer", "")))
     )
-    system = "" #_s(obj.get("system", system_prompt_default))
+    system = ""  # _s(obj.get("system", system_prompt_default))
 
     gen_config_default = GenerationConfig()
     completion_cleaned = clean_completion_string(completion)
@@ -123,23 +120,48 @@ class DatasetManager:
     def set_system_prompt(self, system_prompt: str):
         self.system_prompt = system_prompt
 
-    async def _async_read_jsonl(self, path: Path, chunk_size: int = 10000) -> AsyncIterator[List[Dict[str, Any]]]:
+    async def _async_read_jsonl(
+        self,
+        path: Path,
+        chunk_size: int = 10000,
+        max_rows: Optional[int] = 100,
+    ) -> AsyncIterator[List[Dict[str, Any]]]:
+        """
+        Asynchronously reads a JSONL file, yielding chunks of parsed data.
+
+        Args:
+            path: The path to the JSONL file.
+            chunk_size: The number of lines to buffer in each yielded chunk.
+            max_rows: The maximum total number of rows to read. If None, all
+                      rows are read.
+        """
         if not path.is_file():
             raise FileNotFoundError(f"Data file not found: {path}")
 
         chunk = []
+        rows_read = 0
         async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
             async for line in f:
+                # Stop if the row limit has been reached
+                if max_rows is not None and rows_read >= max_rows:
+                    break
+
                 if line.strip():
                     try:
                         chunk.append(json.loads(line.strip()))
+                        rows_read += 1  # Increment counter after a successful read
+
                         if len(chunk) >= chunk_size:
                             yield chunk
                             chunk = []
                     except json.JSONDecodeError:
-                        logger.warning(f"Malformed JSONL line in {path.name}, skipping.")
-            if chunk:
-                yield chunk
+                        logger.warning(
+                            f"Malformed JSONL line in {path.name}, skipping."
+                        )
+
+        # Yield the final, potentially smaller, chunk
+        if chunk:
+            yield chunk
 
     async def load_datasets(self, force_reload: bool = False):
         if self._is_loaded and not force_reload:
@@ -151,7 +173,8 @@ class DatasetManager:
             return self._process_raw_to_dataset(chunk, split_name, validation_fn)
 
         async def load_and_process(path, split_name):
-            if not path: return None
+            if not path:
+                return None
 
             all_datasets = []
             if path.suffix.lower() in [".jsonl", ".ndjson"]:
@@ -171,6 +194,7 @@ class DatasetManager:
                 return None
 
             from datasets import concatenate_datasets
+
             return concatenate_datasets(all_datasets)
 
         self._train_dataset = await load_and_process(self.config.train_path, "train")
@@ -192,11 +216,17 @@ class DatasetManager:
             validator_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(validator_module)
 
-            if hasattr(validator_module, "validate_sample") and callable(validator_module.validate_sample):
-                logger.info(f"Loaded data validation function from {self.config.data_validation_script_path}")
+            if hasattr(validator_module, "validate_sample") and callable(
+                validator_module.validate_sample
+            ):
+                logger.info(
+                    f"Loaded data validation function from {self.config.data_validation_script_path}"
+                )
                 return validator_module.validate_sample
             else:
-                logger.warning(f"`validate_sample` function not found in {self.config.data_validation_script_path}")
+                logger.warning(
+                    f"`validate_sample` function not found in {self.config.data_validation_script_path}"
+                )
                 return None
         except Exception as e:
             logger.error(f"Failed to load data validation script: {e}", exc_info=True)
@@ -209,12 +239,22 @@ class DatasetManager:
             return json.loads(raw_content)
         else:
             from datasets import load_dataset
+
             hf_split_name = "train" if split_name == "train" else "test"
-            dataset_obj = await asyncio.to_thread(load_dataset, path.as_posix(), split=hf_split_name)
-            return dataset_obj.to_list() if hasattr(dataset_obj, "to_list") else list(dataset_obj)
+            dataset_obj = await asyncio.to_thread(
+                load_dataset, path.as_posix(), split=hf_split_name
+            )
+            return (
+                dataset_obj.to_list()
+                if hasattr(dataset_obj, "to_list")
+                else list(dataset_obj)
+            )
 
     def _process_raw_to_dataset(
-        self, raw_data: List[Dict[str, Any]], split_name: str, validation_fn: Optional[Callable[[Dict], bool]]
+        self,
+        raw_data: List[Dict[str, Any]],
+        split_name: str,
+        validation_fn: Optional[Callable[[Dict], bool]],
     ) -> Optional[Dataset]:
         normalized_records = []
         for obj in tqdm(raw_data, desc=f"Normalizing {split_name} data"):
@@ -292,6 +332,7 @@ class DatasetManager:
                     yield {
                         "prompts_data": prompts_data,
                         "prompts_mx": prompts_mx,
+                        "dataset": dataset,
                     }
 
         return batch_generator()

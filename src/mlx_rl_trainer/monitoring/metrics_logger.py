@@ -33,6 +33,7 @@ from mlx_rl_trainer.utils.text_utils import _preview, _extract_think_answer_leng
 logger = logging.getLogger(__name__)
 wandb_run: Any = None
 
+
 def wandb_init(config: ExperimentConfig, run_id: str):
     """Initialize Weights & Biases if available and enabled."""
     global wandb_run
@@ -49,6 +50,7 @@ def wandb_init(config: ExperimentConfig, run_id: str):
         except Exception as e:
             logger.error(f"Failed to initialize Weights & Biases: {e}", exc_info=True)
 
+
 def _aggressive_memory_cleanup():
     """Aggressively free memory."""
     try:
@@ -57,6 +59,7 @@ def _aggressive_memory_cleanup():
         pass
     mx.clear_cache()
     gc.collect()
+
 
 def _calculate_mcq_accuracy(
     refs: Optional[List[str]],
@@ -150,8 +153,9 @@ class MetricsLogger:
                 self._writer = None
         _aggressive_memory_cleanup()
 
+
 def _emit_plots_from_csv(
-    csv_path: Path, out_dir: Path, config: ExperimentConfig = None, run_id = None
+    csv_path: Path, out_dir: Path, config: ExperimentConfig = None, run_id=None
 ):
     if (
         not (PANDAS_AVAILABLE and MPL_AVAILABLE)
@@ -161,7 +165,7 @@ def _emit_plots_from_csv(
         return
 
     try:
-        df = pd.read_csv(csv_path, on_bad_lines='skip')
+        df = pd.read_csv(csv_path, on_bad_lines="skip")
 
         if df.empty:
             del df
@@ -169,7 +173,7 @@ def _emit_plots_from_csv(
 
         x_col = "update_step"
         if x_col in df.columns:
-            df = df.drop_duplicates(subset=[x_col], keep='last')
+            df = df.drop_duplicates(subset=[x_col], keep="last")
             df = df.sort_values(by=x_col).reset_index(drop=True)
 
         plot_metrics = {
@@ -208,15 +212,17 @@ def _emit_plots_from_csv(
 
                 fig.tight_layout()
 
-                safe_y_col = y_col.replace('/', '_').replace('.', '_')
+                safe_y_col = y_col.replace("/", "_").replace(".", "_")
                 plot_path = plots_dir / f"{safe_y_col}_{fname_suffix}.png"
 
-                fig.savefig(plot_path, dpi=100, bbox_inches='tight')
-                
+                fig.savefig(plot_path, dpi=100, bbox_inches="tight")
+
                 global wandb_run
                 if wandb_run:
                     try:
-                        wandb_run.log({f"plots/{safe_y_col}": wandb.Image(fig)}, commit=False)
+                        wandb_run.log(
+                            {f"plots/{safe_y_col}": wandb.Image(fig)}, commit=False
+                        )
                     except Exception as e:
                         logger.error(f"Error logging plot to wandb: {e}", exc_info=True)
 
@@ -225,22 +231,23 @@ def _emit_plots_from_csv(
 
             except Exception as e:
                 logger.warning(f"Failed to plot {y_col}: {e}")
-                plt.close('all')
+                plt.close("all")
 
         for col, name in plot_metrics.items():
             _plot(col, name)
             gc.collect()
 
         del df
-        plt.close('all')
+        plt.close("all")
         _aggressive_memory_cleanup()
 
         logger.info(f"Plots generated in: {plots_dir}")
 
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
-        plt.close('all')
+        plt.close("all")
         _aggressive_memory_cleanup()
+
 
 def _maybe_log_samples(
     config: ExperimentConfig,
@@ -277,7 +284,7 @@ def _maybe_log_samples(
                 original_sample = prompts_data[p_idx]
                 gen_text = decoded_responses[i]
 
-                ref_text, _ = _get_prompt_and_ref_text(original_sample, config)
+                ref_text = original_sample.get("ref_answer_str", "")
 
                 gen_think_len, gen_ans_len = _extract_think_answer_lengths(
                     gen_text, config.generation
@@ -317,7 +324,7 @@ def _maybe_log_samples(
                 table = wandb.Table(columns=columns)
                 for sample in wandb_samples:
                     table.add_data(*[sample.get(col, None) for col in columns])
-                
+
                 wandb_run.log({"samples": table}, step=update_idx)
 
             except Exception as e:

@@ -7,9 +7,13 @@ from typing import Any, Dict, Optional
 from mlx_rl_trainer.rewards.base_reward import BaseReward
 from mlx_rl_trainer.rewards.registry import register_reward
 from mlx_rl_trainer.rewards.context import RewardContext
-from mlx_rl_trainer.utils.text_utils import _jaccard_similarity as jaccard_similarity, _normalize_ans_for_match as normalize_text
+from mlx_rl_trainer.utils.text_utils import (
+    _jaccard_similarity as jaccard_similarity,
+    _normalize_ans_for_match as normalize_text,
+)
 
 logger = logging.getLogger(__name__)
+
 
 @register_reward("verify_response")
 class VerifyResponseReward(BaseReward):
@@ -48,9 +52,7 @@ class VerifyResponseReward(BaseReward):
         self.verification_weight = verification_weight
         self.verification_mode = verification_mode
 
-    def compute(
-        self, generated_text: str, context: RewardContext
-    ) -> float:
+    def compute(self, generated_text: str, context: RewardContext) -> float:
         """
         Computes the reward for a single generated text.
 
@@ -95,7 +97,9 @@ class VerifyResponseReward(BaseReward):
         if self.verification_mode == "python_script_output_based":
             # This is a placeholder for a more complex implementation
             # that would involve sandboxed code execution.
-            logger.warning("`python_script_output_based` is not fully implemented and will default to normalized string match.")
+            logger.warning(
+                "`python_script_output_based` is not fully implemented and will default to normalized string match."
+            )
             return 1.0 if normalize_text(generated) == normalize_text(truth) else 0.0
 
         return 0.0

@@ -7,6 +7,7 @@ import yaml
 
 from mlx_rl_trainer.core.config import ExperimentConfig
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Dump the default ExperimentConfig to a YAML file."
@@ -22,7 +23,7 @@ def main():
     default_config = ExperimentConfig()
 
     # Convert to a dictionary suitable for YAML export
-    config_dict = default_config.model_dump(mode='json')
+    config_dict = default_config.model_dump(mode="json")
 
     # Write to the specified file
     output_path = Path(args.output_path)
@@ -30,6 +31,7 @@ def main():
         yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
     print(f"Default configuration successfully written to: {output_path}")
+
 
 if __name__ == "__main__":
     main()

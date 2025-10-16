@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 try:
     import wandb
+
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 shutdown_requested = False
 wandb_run = None
 
+
 def handle_signal(signum, frame):
     global shutdown_requested
     if not shutdown_requested:
@@ -51,6 +53,7 @@ def handle_signal(signum, frame):
             "\n[bold yellow]Shutdown requested. Finishing current step and saving checkpoint...[/bold yellow]"
         )
         shutdown_requested = True
+
 
 def path_to_str(d):
     if isinstance(d, dict):
@@ -60,6 +63,7 @@ def path_to_str(d):
     if isinstance(d, Path):
         return str(d)
     return d
+
 
 async def _async_main():
     global shutdown_requested, wandb_run
@@ -154,7 +158,7 @@ async def _async_main():
         config.trainer.output_dir / config.checkpointing.save_dir,
         keep_last_n=config.checkpointing.keep_last_n,
         save_best=True,
-        base_model_path=config.model.model_path
+        base_model_path=config.model.model_path,
     )
     if args.resume:
         checkpoint_manager.resume_from_path = Path(args.resume)
@@ -170,7 +174,6 @@ async def _async_main():
             data_manager,
             checkpoint_manager,
             reward_composer,
-            paged_kv_cache,
             metrics_logger,
         )
     else:
@@ -202,17 +205,20 @@ async def _async_main():
             wandb_run.finish()
         logger.info("[bold blue]All resources released. Shutdown complete.[/bold blue]")
 
+
 def main():
     rprint(f"MLX using device: [bold cyan]{mx.default_device()}[/bold cyan]")
 
     current_peak_mem = mx.get_peak_memory()
     initial_peak_mem = mx.get_peak_memory()
     if current_peak_mem > initial_peak_mem:
-         logging.debug(f"Peak Mem: {current_peak_mem / 1e9:.3f} GB (Delta: {(current_peak_mem - initial_peak_mem) / 1e9:.3f} GB)")
+        logging.debug(
+            f"Peak Mem: {current_peak_mem / 1e9:.3f} GB (Delta: {(current_peak_mem - initial_peak_mem) / 1e9:.3f} GB)"
+        )
     else:
-         process = psutil.Process()
-         mem_info = process.memory_info()
-         logging.debug(f"RSS Mem: {mem_info.rss / (1024 * 1024):.2f} MB")
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        logging.debug(f"RSS Mem: {mem_info.rss / (1024 * 1024):.2f} MB")
 
     limit_memory(80)
 

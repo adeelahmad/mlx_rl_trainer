@@ -50,9 +50,9 @@ def _get_memory_usage_mb() -> Dict[str, float]:
         peak = mx.get_peak_memory() / (1024 * 1024)
 
         return {
-            'cache_mb': cache_size,
-            'allocated_mb': allocated,
-            'peak_mb': peak,
+            "cache_mb": cache_size,
+            "allocated_mb": allocated,
+            "peak_mb": peak,
         }
     except Exception as e:
         logger.debug(f"Could not get memory stats: {e}")
@@ -150,15 +150,19 @@ class BaseTrainer(ABC):
         )
 
         # Memory optimization flags (backward compatible)
-        self.use_mixed_precision = getattr(config.trainer, 'use_mixed_precision', False)
-        self.alternate_dual_gradients = getattr(config.trainer, 'alternate_dual_gradients', False)
-        self.log_memory_usage = getattr(config.trainer, 'log_memory_usage', False)
+        self.use_mixed_precision = getattr(config.trainer, "use_mixed_precision", False)
+        self.alternate_dual_gradients = getattr(
+            config.trainer, "alternate_dual_gradients", False
+        )
+        self.log_memory_usage = getattr(config.trainer, "log_memory_usage", False)
 
         # Log optimization status
         if self.use_mixed_precision:
             logger.info("Mixed precision training ENABLED (fp16 forward pass)")
         if self.alternate_dual_gradients:
-            logger.info("Alternating dual gradients ENABLED (thinking/answer alternation)")
+            logger.info(
+                "Alternating dual gradients ENABLED (thinking/answer alternation)"
+            )
         if self.log_memory_usage:
             logger.info("Memory usage logging ENABLED")
 
@@ -217,9 +221,9 @@ class BaseTrainer(ABC):
         mem_stats = _get_memory_usage_mb()
         if mem_stats and self.metrics_logger:
             log_dict = {
-                f'memory/{stage}/cache_mb': mem_stats.get('cache_mb', 0),
-                f'memory/{stage}/allocated_mb': mem_stats.get('allocated_mb', 0),
-                f'memory/{stage}/peak_mb': mem_stats.get('peak_mb', 0),
+                f"memory/{stage}/cache_mb": mem_stats.get("cache_mb", 0),
+                f"memory/{stage}/allocated_mb": mem_stats.get("allocated_mb", 0),
+                f"memory/{stage}/peak_mb": mem_stats.get("peak_mb", 0),
             }
             self.metrics_logger.log_metrics(log_dict, step=step)
 
@@ -237,7 +241,9 @@ class BaseTrainer(ABC):
         # Fix #1: If we resumed from a checkpoint, start at the NEXT step
         if resumed_step > 0:
             self.global_step = resumed_step + 1
-            logger.info(f"Resumed from checkpoint at step {resumed_step}, continuing from step {self.global_step}")
+            logger.info(
+                f"Resumed from checkpoint at step {resumed_step}, continuing from step {self.global_step}"
+            )
         else:
             self.global_step = 0
             logger.info("Starting training from scratch at step 0")
@@ -264,7 +270,7 @@ class BaseTrainer(ABC):
         training_completed = False
 
         # Log initial memory
-        self._log_memory_if_enabled('startup', self.global_step)
+        self._log_memory_if_enabled("startup", self.global_step)
 
         # Initialize wandb
         wandb_init(self.config, self._run_id)
@@ -276,10 +282,12 @@ class BaseTrainer(ABC):
                     break
 
                 # Apply Metal memory management and dynamic parameter adjustments
-                metal_before_update(self.global_step, self.config.data, self.config.trainer)
+                metal_before_update(
+                    self.global_step, self.config.data, self.config.trainer
+                )
 
                 # Memory tracking: before accumulation
-                self._log_memory_if_enabled('before_accum', self.global_step)
+                self._log_memory_if_enabled("before_accum", self.global_step)
 
                 # Streaming aggregation instead of list accumulation
                 accum_grads = None
@@ -314,19 +322,19 @@ class BaseTrainer(ABC):
 
                     # Memory tracking: before rollout
                     if accum_idx == 0:
-                        self._log_memory_if_enabled('before_rollout', self.global_step)
+                        self._log_memory_if_enabled("before_rollout", self.global_step)
 
                     # Generate rollouts (now returns 4 values)
                     (
                         rollout_batch,
                         avg_reward_mb,
                         raw_reward_components_mb,
-                        generation_metrics
+                        generation_metrics,
                     ) = self.generate_rollouts(batch_data, self.global_step)
 
                     # Memory tracking: after rollout
                     if accum_idx == 0:
-                        self._log_memory_if_enabled('after_rollout', self.global_step)
+                        self._log_memory_if_enabled("after_rollout", self.global_step)
 
                     if (
                         not rollout_batch
@@ -343,19 +351,26 @@ class BaseTrainer(ABC):
 
                     # OPTIMIZATION 1: Alternating dual gradients
                     # If enabled and we have dual gradients, compute them alternately
-                    if self.alternate_dual_gradients and 'thinking_mask' in rollout_batch:
+                    if (
+                        self.alternate_dual_gradients
+                        and "thinking_mask" in rollout_batch
+                    ):
                         # Alternate: even iterations = thinking, odd = answer
-                        gradient_mode = 'thinking' if accum_idx % 2 == 0 else 'answer'
+                        gradient_mode = "thinking" if accum_idx % 2 == 0 else "answer"
 
                         # Temporarily modify batch to compute only one gradient type
-                        if gradient_mode == 'thinking':
+                        if gradient_mode == "thinking":
                             # Zero out answer mask to compute only thinking gradients
-                            original_answer_mask = rollout_batch.get('answer_mask')
-                            rollout_batch['answer_mask'] = mx.zeros_like(rollout_batch['thinking_mask'])
+                            original_answer_mask = rollout_batch.get("answer_mask")
+                            rollout_batch["answer_mask"] = mx.zeros_like(
+                                rollout_batch["thinking_mask"]
+                            )
                         else:
                             # Zero out thinking mask to compute only answer gradients
-                            original_thinking_mask = rollout_batch.get('thinking_mask')
-                            rollout_batch['thinking_mask'] = mx.zeros_like(rollout_batch['answer_mask'])
+                            original_thinking_mask = rollout_batch.get("thinking_mask")
+                            rollout_batch["thinking_mask"] = mx.zeros_like(
+                                rollout_batch["answer_mask"]
+                            )
 
                         # Train step with alternating gradient
                         metrics_mb, grads_mb, step_metrics = self.train_step(
@@ -363,12 +378,12 @@ class BaseTrainer(ABC):
                         )
 
                         # Restore original masks
-                        if gradient_mode == 'thinking':
+                        if gradient_mode == "thinking":
                             if original_answer_mask is not None:
-                                rollout_batch['answer_mask'] = original_answer_mask
+                                rollout_batch["answer_mask"] = original_answer_mask
                         else:
                             if original_thinking_mask is not None:
-                                rollout_batch['thinking_mask'] = original_thinking_mask
+                                rollout_batch["thinking_mask"] = original_thinking_mask
                     else:
                         # Standard train step (compute both gradients simultaneously)
                         metrics_mb, grads_mb, step_metrics = self.train_step(
@@ -377,7 +392,9 @@ class BaseTrainer(ABC):
 
                     # Memory tracking: after train step
                     if accum_idx == 0:
-                        self._log_memory_if_enabled('after_train_step', self.global_step)
+                        self._log_memory_if_enabled(
+                            "after_train_step", self.global_step
+                        )
 
                     # Stream aggregate metrics
                     sum_loss += metrics_mb.loss
@@ -388,18 +405,24 @@ class BaseTrainer(ABC):
                     # Stream aggregate raw rewards
                     if raw_reward_components_mb:
                         for k, v in raw_reward_components_mb.items():
-                            aggregated_raw_rewards[k] = aggregated_raw_rewards.get(k, 0.0) + v
+                            aggregated_raw_rewards[k] = aggregated_raw_rewards.get(
+                                k, 0.0
+                            ) + sum(v)
 
                     # Log generation metrics (includes thinking/answer stats)
                     if generation_metrics and self.metrics_logger and accum_idx == 0:
                         # Only log on first microbatch to avoid spam
-                        gen_log = {f"generation/{k}": v for k, v in generation_metrics.items()}
+                        gen_log = {
+                            f"generation/{k}": v for k, v in generation_metrics.items()
+                        }
                         self.metrics_logger.log_metrics(gen_log, step=self.global_step)
 
                     # Accumulate gradients efficiently
                     if grads_mb:
                         # Scale gradients immediately
-                        grads_mb_scaled = self._scale_gradients_inplace(grads_mb, grad_scale)
+                        grads_mb_scaled = self._scale_gradients_inplace(
+                            grads_mb, grad_scale
+                        )
 
                         if accum_grads is None:
                             accum_grads = grads_mb_scaled
@@ -418,16 +441,23 @@ class BaseTrainer(ABC):
                     self._aggressive_memory_cleanup()
 
                 # Memory tracking: after accumulation
-                self._log_memory_if_enabled('after_accum', self.global_step)
+                self._log_memory_if_enabled("after_accum", self.global_step)
 
                 # Only proceed if we have valid gradients
                 if accum_grads and self.optimizer and count_microbatches > 0:
                     # Compute grad norm efficiently
-                    flat_grads = [v for _, v in tree_flatten(accum_grads) if isinstance(v, mx.array)]
+                    flat_grads = [
+                        v
+                        for _, v in tree_flatten(accum_grads)
+                        if isinstance(v, mx.array)
+                    ]
                     mx.eval(flat_grads)
 
                     grad_norm = np.linalg.norm(
-                        [np.linalg.norm(np.array(v.flatten().astype(mx.float32))) for v in flat_grads]
+                        [
+                            np.linalg.norm(np.array(v.flatten().astype(mx.float32)))
+                            for v in flat_grads
+                        ]
                     )
                     del flat_grads
 
@@ -448,7 +478,7 @@ class BaseTrainer(ABC):
                     self._aggressive_memory_cleanup()
 
                     # Memory tracking: after optimizer step
-                    self._log_memory_if_enabled('after_optimizer', self.global_step)
+                    self._log_memory_if_enabled("after_optimizer", self.global_step)
 
                     # Compute averages
                     avg_loss = sum_loss / count_microbatches
@@ -475,10 +505,12 @@ class BaseTrainer(ABC):
 
                         # Add raw rewards if available
                         if aggregated_raw_rewards:
-                            log_dict.update({
-                                f"train/rewards/raw_{k}": v
-                                for k, v in aggregated_raw_rewards.items()
-                            })
+                            log_dict.update(
+                                {
+                                    f"train/rewards/raw_{k}": v
+                                    for k, v in aggregated_raw_rewards.items()
+                                }
+                            )
 
                         self.metrics_logger.log_metrics(log_dict, step=self.global_step)
 
@@ -519,7 +551,7 @@ class BaseTrainer(ABC):
                     # Evaluation with memory cleanup
                     if is_eval or is_final:
                         # Memory tracking: before eval
-                        self._log_memory_if_enabled('before_eval', self.global_step)
+                        self._log_memory_if_enabled("before_eval", self.global_step)
 
                         # Clear caches before evaluation
                         self._aggressive_memory_cleanup()
@@ -542,7 +574,7 @@ class BaseTrainer(ABC):
                         self._aggressive_memory_cleanup()
 
                         # Memory tracking: after eval
-                        self._log_memory_if_enabled('after_eval', self.global_step)
+                        self._log_memory_if_enabled("after_eval", self.global_step)
 
                     # Checkpoint saving
                     should_save_best = (
@@ -555,10 +587,15 @@ class BaseTrainer(ABC):
                     should_save = would_save and (training_performed or is_final)
 
                     if should_save:
-                        self._log_memory_if_enabled("before_checkpoint", self.global_step)
+                        self._log_memory_if_enabled(
+                            "before_checkpoint", self.global_step
+                        )
                         if self.metrics_logger:
                             self.metrics_logger._emit_plots_from_csv(
-                                self.metrics_logger.file_path, self.config.trainer.output_dir, self.config, self._run_id
+                                self.metrics_logger.file_path,
+                                self.config.trainer.output_dir,
+                                self.config,
+                                self._run_id,
                             )
 
                         # Clear caches before saving
@@ -586,7 +623,9 @@ class BaseTrainer(ABC):
                         self._aggressive_memory_cleanup()
 
                         # Memory tracking: after checkpoint
-                        self._log_memory_if_enabled('after_checkpoint', self.global_step)
+                        self._log_memory_if_enabled(
+                            "after_checkpoint", self.global_step
+                        )
                     elif would_save and not training_performed:
                         logger.info(
                             f"Skipping checkpoint save at step {self.global_step} - no training performed this iteration"
@@ -597,18 +636,20 @@ class BaseTrainer(ABC):
                 # Periodic aggressive cleanup every 10 steps
                 if self.global_step % 10 == 0:
                     self._aggressive_memory_cleanup()
-                    self._log_memory_if_enabled('periodic_cleanup', self.global_step)
+                    self._log_memory_if_enabled("periodic_cleanup", self.global_step)
 
         # Final cleanup and checkpoint
         self._aggressive_memory_cleanup()
 
         # Save final checkpoint if needed
-        if should_shutdown() or (not training_completed and self.global_step > resumed_step):
+        if should_shutdown() or (
+            not training_completed and self.global_step > resumed_step
+        ):
             reason = "interrupted" if should_shutdown() else "completed"
             self.save_final_checkpoint(reason=reason)
 
         # Final memory log
-        self._log_memory_if_enabled('final', self.global_step)
+        self._log_memory_if_enabled("final", self.global_step)
 
         # Finish wandb run
         if wandb_run:

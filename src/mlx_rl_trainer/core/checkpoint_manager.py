@@ -31,6 +31,7 @@ except ImportError:
     class MLXLoRALinear:
         pass
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,10 +99,14 @@ class CheckpointManager:
                         with open(metadata_file, "r") as f:
                             metadata = json.load(f)
                             # Bug fix: Use get with default value properly
-                            self.best_metric = metadata.get("current_metric", -float("inf"))
+                            self.best_metric = metadata.get(
+                                "current_metric", -float("inf")
+                            )
                             del metadata
                     else:
-                        logger.warning(f"Metadata file missing in best checkpoint: {resolved_path}")
+                        logger.warning(
+                            f"Metadata file missing in best checkpoint: {resolved_path}"
+                        )
             except FileNotFoundError:
                 logger.warning("Symlink 'best' is dangling. Removing it.")
                 best_symlink.unlink()
@@ -185,22 +190,30 @@ class CheckpointManager:
                     )
                     self._warned_about_missing_path = True
 
-                is_lora = any(isinstance(m, MLXLoRALinear) for _, m in model.named_modules())
+                is_lora = any(
+                    isinstance(m, MLXLoRALinear) for _, m in model.named_modules()
+                )
 
                 if is_lora:
                     adapter_params = dict(tree_flatten(model.trainable_parameters()))
                     if adapter_params:
-                        mx.save_safetensors(str(temp_path / "adapters.safetensors"), adapter_params)
+                        mx.save_safetensors(
+                            str(temp_path / "adapters.safetensors"), adapter_params
+                        )
                         del adapter_params
                 else:
                     full_params = dict(tree_flatten(model.parameters()))
-                    mx.save_safetensors(str(temp_path / "model.safetensors"), full_params)
+                    mx.save_safetensors(
+                        str(temp_path / "model.safetensors"), full_params
+                    )
                     del full_params
                 self._aggressive_memory_cleanup()
 
                 if metadata.get("save_optimizer_state", False) and optimizer:
                     optimizer_state = dict(tree_flatten(optimizer.state))
-                    mx.save_safetensors(str(temp_path / "optimizer.safetensors"), optimizer_state)
+                    mx.save_safetensors(
+                        str(temp_path / "optimizer.safetensors"), optimizer_state
+                    )
                     del optimizer_state
                     self._aggressive_memory_cleanup()
 
@@ -214,7 +227,9 @@ class CheckpointManager:
                 os.rename(temp_path, final_path)
                 self._checkpoints.append(final_path)
 
-                rprint(f"Checkpoint saved to [cyan]{final_path.name}[/cyan] (Metric: {current_metric:.4f}).")
+                rprint(
+                    f"Checkpoint saved to [cyan]{final_path.name}[/cyan] (Metric: {current_metric:.4f})."
+                )
 
                 self._update_symlink(final_path, "latest")
                 if self.is_best_metric(current_metric):
@@ -228,26 +243,36 @@ class CheckpointManager:
             except (IOError, OSError) as e:
                 if temp_path.exists():
                     shutil.rmtree(temp_path, ignore_errors=True)
-                
-                rprint(f"[bold red]CRITICAL: Checkpoint save failed on attempt {attempt + 1}/{retries}. Error: {e}[/bold red]")
+
+                rprint(
+                    f"[bold red]CRITICAL: Checkpoint save failed on attempt {attempt + 1}/{retries}. Error: {e}[/bold red]"
+                )
                 if "No space left on device" in str(e):
-                    rprint("[bold red]Disk may be full. Please check storage.[/bold red]")
-                    break # No point in retrying if disk is full
+                    rprint(
+                        "[bold red]Disk may be full. Please check storage.[/bold red]"
+                    )
+                    break  # No point in retrying if disk is full
                 if "Permission denied" in str(e):
-                    rprint("[bold red]Permission denied. Check directory permissions.[/bold red]")
+                    rprint(
+                        "[bold red]Permission denied. Check directory permissions.[/bold red]"
+                    )
                     break
 
                 if attempt < retries - 1:
-                    sleep_time = backoff_factor ** attempt
+                    sleep_time = backoff_factor**attempt
                     rprint(f"[yellow]Retrying in {sleep_time:.1f} seconds...[/yellow]")
                     time.sleep(sleep_time)
                 else:
                     rprint("[bold red]All checkpoint save retries failed.[/bold red]")
-                    raise CheckpointError(f"Atomic save failed for step {step}: {e}") from e
+                    raise CheckpointError(
+                        f"Atomic save failed for step {step}: {e}"
+                    ) from e
             except Exception as e:
                 if temp_path.exists():
                     shutil.rmtree(temp_path, ignore_errors=True)
-                raise CheckpointError(f"An unexpected error occurred during checkpoint save for step {step}: {e}") from e
+                raise CheckpointError(
+                    f"An unexpected error occurred during checkpoint save for step {step}: {e}"
+                ) from e
 
     def load_latest_state(
         self, model: nn.Module, optimizer: Optional[optim.Optimizer] = None
@@ -265,7 +290,9 @@ class CheckpointManager:
                 try:
                     chosen_path = latest_symlink.resolve(strict=True)
                 except FileNotFoundError:
-                    logger.warning("Symlink 'latest' is dangling. Searching for last checkpoint.")
+                    logger.warning(
+                        "Symlink 'latest' is dangling. Searching for last checkpoint."
+                    )
                     latest_symlink.unlink()
                     if self._checkpoints:
                         chosen_path = self._checkpoints[-1]
@@ -282,19 +309,24 @@ class CheckpointManager:
             # Load metadata
             metadata_file = chosen_path / "metadata.json"
             if not metadata_file.is_file():
-                raise CheckpointError(f"Metadata file missing in checkpoint: {chosen_path.name}")
+                raise CheckpointError(
+                    f"Metadata file missing in checkpoint: {chosen_path.name}"
+                )
 
             with open(metadata_file, "r") as f:
                 metadata = json.load(f)
 
             # Determine if this is a LoRA checkpoint
-            is_lora = any(isinstance(m, MLXLoRALinear) for _, m in model.named_modules())
+            is_lora = any(
+                isinstance(m, MLXLoRALinear) for _, m in model.named_modules()
+            )
             adapters_file = chosen_path / "adapters.safetensors"
             model_file = chosen_path / "model.safetensors"
 
             # Load model weights
             if is_lora and adapters_file.is_file():
                 from mlx_lm.tuner.utils import load_adapters
+
                 load_adapters(model, str(chosen_path))
                 rprint("Loaded LoRA adapters.")
             elif model_file.is_file():
@@ -316,7 +348,9 @@ class CheckpointManager:
                 optimizer_file = chosen_path / "optimizer.safetensors"
                 if metadata.get("save_optimizer_state") and optimizer_file.is_file():
                     try:
-                        optimizer_state_items = list(mx.load(str(optimizer_file)).items())
+                        optimizer_state_items = list(
+                            mx.load(str(optimizer_file)).items()
+                        )
                         optimizer.state = tree_unflatten(optimizer_state_items)
                         del optimizer_state_items
                         optimizer_loaded = True
@@ -431,7 +465,11 @@ class CheckpointManager:
                 resumed_step, metadata = self.load_latest_state(model, optimizer)
                 resumed_epoch = metadata.get("epoch", 0)
             except CheckpointError as e:
-                rprint(f"[bold red]Failed to load latest checkpoint: {e}. Starting from scratch.[/bold red]")
+                rprint(
+                    f"[bold red]Failed to load latest checkpoint: {e}. Starting from scratch.[/bold red]"
+                )
             except Exception as e:
-                rprint(f"[bold red]An unexpected error occurred while resuming: {e}. Starting from scratch.[/bold red]")
+                rprint(
+                    f"[bold red]An unexpected error occurred while resuming: {e}. Starting from scratch.[/bold red]"
+                )
         return resumed_step, resumed_epoch

@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="mlx_rl_trainer",
-    version="0.5.0",
+    version="0.9.0",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     entry_points={
@@ -26,13 +26,14 @@ setup(
         "tqdm>=4.60.0",  # For console progress bars
         "aiofiles>=22.0.0",  # For asynchronous file I/O
         "scikit-learn>=1.3.0",  # For TF-IDF in reward functions
+        "wandb",
+        "pandas",
+        "matplotlib",
     ],
     extras_require={
         "dev": [
-            "pandas",  # For metrics plotting
-            "matplotlib",  # For metrics plotting
-            "pytest",  # For unit and integration testing
-            "pytest-asyncio",  # For testing async code
+            "pytest",
+            "pytest-asyncio",
         ]
     },
     python_requires=">=3.9",

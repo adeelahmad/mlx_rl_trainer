@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+import time
 
 from mlx_rl_trainer.core.trainer import BaseTrainer, EvaluationMetrics, TrainingMetrics
 from mlx_rl_trainer.core.model_manager import ModelManager
@@ -32,6 +33,11 @@ from mlx_rl_trainer.data.dataset_manager import DatasetManager
 from mlx_rl_trainer.generation.generator import generate_rollouts_for_batch
 from mlx_rl_trainer.monitoring.metrics_logger import _maybe_log_samples
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
+from mlx_rl_trainer.utils.mlx_utils import (
+    mask_gradients_by_layer,
+    combine_gradients,
+    get_grad_norm,
+)
 from .grpo_algorithm import grpo_loss
 
 logger = logging.getLogger(__name__)
@@ -59,45 +65,26 @@ class GRPOTrainer(BaseTrainer):
             paged_kv_cache,
             metrics_logger,
         )
-        self.loss_and_grad_fn = nn.value_and_grad(self.actor_model, grpo_loss)
 
     def _setup(self) -> Tuple[int, int]:
-        """Load models, optimizers, and resume from checkpoint if available."""
         self.actor_model, self.tokenizer = self.model_manager.load_model(
-            self.config.model.model_path, "actor"
+            model_path=self.config.model.ref_model_path,
+            type_name="actor",
+            is_trainable=True,
+            apply_lora=self.config.model.use_lora,
+            lora_config=self.config.model.model_dump(),
         )
         self.ref_model, _ = self.model_manager.load_model(
-            self.config.model.ref_model_path, "reference"
+            model_path=self.config.model.ref_model_path,
+            type_name="reference",
+            is_trainable=False,
         )
-
-        if self.config.model.use_lora:
-            self.actor_model.freeze()
-            for l in self.actor_model.model.layers:
-                if hasattr(l, "self_attn"):
-                    l.self_attn.q_proj.unfreeze()
-                    l.self_attn.v_proj.unfreeze()
-                if hasattr(l, "mlp"):
-                    l.mlp.gate_proj.unfreeze()
-                    l.mlp.down_proj.unfreeze()
 
         self.optimizer, self.lr_scheduler = self.model_manager.create_optimizer(
             self.actor_model, self.config.trainer
         )
 
-        if self.config.trainer.gradient_checkpointing:
-            logger.info("Applying gradient checkpointing to transformer layers...")
-            if hasattr(self.actor_model, "model") and hasattr(
-                self.actor_model.model, "layers"
-            ):
-                self.actor_model.model.layers = [ 
-                    nn.remat(l) for l in self.actor_model.model.layers
-                ]
-                logger.info(
-                    f"Successfully applied gradient checkpointing to {len(self.actor_model.model.layers)} layers."
-                )
-            else:
-                logger.warning("Could not apply gradient checkpointing: model structure not recognized.")
-
+        self.loss_and_grad_fn = nn.value_and_grad(self.actor_model, grpo_loss)
 
         resume_step, resume_epoch = self.checkpoint_manager.resume_from_checkpoint(
             self.actor_model, self.optimizer
@@ -108,16 +95,18 @@ class GRPOTrainer(BaseTrainer):
         self, rollout_batch: Dict[str, mx.array], update_step: int
     ) -> Tuple[TrainingMetrics, Dict[str, mx.array], Dict[str, Any]]:
         """Executes a single training step including forward/backward passes and gradient updates."""
-        start_time = mx.cpu_time()
+        start_time = time.process_time()
 
         # Determine SFT loss weights with adaptive logic
-        sft_think_weight = self.config.trainer.sft_think_loss_weight
-        sft_answer_weight = self.config.trainer.sft_answer_loss_weight
+        sft_think_weight = self.config.sft_thinking_weight
+        sft_answer_weight = self.config.sft_answer_weight
 
         kl_div = rollout_batch.get("kl_divergence", 0.0)
-        if self.config.trainer.adaptive_sft_weights and kl_div > 0:
+        if self.config.trainer.adaptive_gradient_weights and kl_div > 0:
             # Reduce SFT weight if KL is high to prioritize RL objective
-            kl_factor = np.clip(1.0 - (kl_div / self.config.trainer.ppo_kl_target), 0.1, 1.0)
+            kl_factor = np.clip(
+                1.0 - (kl_div / self.config.trainer.grpo_beta), 0.1, 1.0
+            )
             sft_think_weight *= kl_factor
             sft_answer_weight *= kl_factor
 
@@ -149,67 +138,91 @@ class GRPOTrainer(BaseTrainer):
                 think_ratio = 1.0 - answer_ratio
 
                 # Boost answer gradients, penalize thinking gradients
-                answer_boost = 1.0 + (think_ratio * self.config.trainer.answer_grad_boost_factor)
-                think_penalty = 1.0 - (answer_ratio * self.config.trainer.thinking_grad_penalty_factor)
+                answer_boost = 1.0 + (
+                    think_ratio * self.config.trainer.answer_grad_boost_factor
+                )
+                think_penalty = 1.0 - (
+                    answer_ratio * self.config.trainer.thinking_grad_penalty_factor
+                )
 
                 logger.info(f"Adaptive weights activated:")
-                logger.info(f"  Thinking: {think_token_count} tokens ({think_ratio:.1%})")
-                logger.info(f"  Answer: {answer_token_count} tokens ({answer_ratio:.1%})")
-                logger.info(f"  Boosted answer: {answer_boost:.1f}x RL + {sft_answer_weight:.2f}x SFT")
+                logger.info(
+                    f"  Thinking: {think_token_count} tokens ({think_ratio:.1%})"
+                )
+                logger.info(
+                    f"  Answer: {answer_token_count} tokens ({answer_ratio:.1%})"
+                )
+                logger.info(
+                    f"  Boosted answer: {answer_boost:.1f}x RL + {sft_answer_weight:.2f}x SFT"
+                )
                 logger.info(f"  Boosted SFT: {sft_think_weight:.2f}x SFT")
 
-
                 # Apply boosts/penalties to gradients
-                think_grads = self.model_manager.mask_gradients_by_layer(
+                think_grads = mask_gradients_by_layer(
                     grads, self.config.trainer.thinking_layers_config
                 )
-                answer_grads = self.model_manager.mask_gradients_by_layer(
+                answer_grads = mask_gradients_by_layer(
                     grads, self.config.trainer.answer_layers_config
                 )
-                
-                # Combine scaled gradients
-                grads = self.model_manager.combine_gradients([
-                    (think_grads, think_penalty),
-                    (answer_grads, answer_boost)
-                ])
 
+                # Combine scaled gradients
+                grads = combine_gradients(
+                    [(think_grads, think_penalty), (answer_grads, answer_boost)]
+                )
 
         # Hybrid RL+SFT training logic
         if sft_think_weight > 0 or sft_answer_weight > 0:
             logger.info("Hybrid RL+SFT training enabled:")
-            logger.info(f"  Answer: {self.config.trainer.grpo_beta:.1f}x RL + {sft_answer_weight:.2f}x SFT")
+            logger.info(
+                f"  Answer: {self.config.trainer.grpo_beta:.1f}x RL + {sft_answer_weight:.2f}x SFT"
+            )
 
         # Dual gradient accumulation logic
         if self.config.trainer.alternate_dual_gradients:
             # Alternate between thinking and answer gradients
-            if update_step % 2 == 0: # Thinking step
-                answer_grads = self.model_manager.mask_gradients_by_layer(grads, {"include": []}) # Zero out answer grads
-                grads = self.model_manager.combine_gradients([(grads, 1.0), (answer_grads, -1.0)])
-            else: # Answer step
-                think_grads = self.model_manager.mask_gradients_by_layer(grads, {"include": []}) # Zero out think grads
-                grads = self.model_manager.combine_gradients([(grads, 1.0), (think_grads, -1.0)])
+            if update_step % 2 == 0:  # Thinking step
+                answer_grads = mask_gradients_by_layer(
+                    grads, {"include": []}
+                )  # Zero out answer grads
+                grads = combine_gradients([(grads, 1.0), (answer_grads, -1.0)])
+            else:  # Answer step
+                think_grads = mask_gradients_by_layer(
+                    grads, {"include": []}
+                )  # Zero out think grads
+                grads = combine_gradients([(grads, 1.0), (think_grads, -1.0)])
 
-        else: # Standard dual gradient logic
+        else:  # Standard dual gradient logic
             think_layers = self.config.trainer.thinking_layers_config
             answer_layers = self.config.trainer.answer_layers_config
-            
+
             # Determine overlapping layers
-            overlap_layers = sorted(list(set(think_layers.get("include", [])).intersection(set(answer_layers.get("include", [])))))
+            overlap_layers = sorted(
+                list(
+                    set(think_layers.get("include", [])).intersection(
+                        set(answer_layers.get("include", []))
+                    )
+                )
+            )
 
             logger.info("Dual gradient mode - OVERLAPPING layers:")
-            logger.info(f"  Thinking: {think_layers.get('include')} ({self.config.trainer.grpo_beta}x)")
-            logger.info(f"  Answer: {answer_layers.get('include')} ({self.config.trainer.boost_answer_grad_layers}x)")
-            logger.info(f"  Overlap: {overlap_layers} (total {self.config.trainer.grpo_beta + self.config.trainer.boost_answer_grad_layers}x)")
-
+            logger.info(
+                f"  Thinking: {think_layers.get('include')} ({self.config.trainer.grpo_beta}x)"
+            )
+            logger.info(
+                f"  Answer: {answer_layers.get('include')} ({self.config.trainer.boost_answer_grad_layers}x)"
+            )
+            logger.info(
+                f"  Overlap: {overlap_layers} (total {self.config.trainer.grpo_beta + self.config.trainer.boost_answer_grad_layers}x)"
+            )
 
         mx.eval(loss, grads)
-        step_time = mx.cpu_time() - start_time
+        step_time = time.process_time() - start_time
 
         # Prepare metrics for logging
         training_metrics = TrainingMetrics(
             loss=loss.item(),
             reward_mean=metrics["reward_mean"].item(),
-            grad_norm=self.model_manager.get_grad_norm(grads),
+            grad_norm=get_grad_norm(grads),
             learning_rate=self.optimizer.learning_rate,
             step_time_s=step_time,
             kl_divergence=kl_div,
@@ -225,7 +238,7 @@ class GRPOTrainer(BaseTrainer):
 
     def generate_rollouts(
         self, batch_data: Dict[str, Any], update_step: int
-    ) -> Tuple[Dict[str, mx.array], float, Dict[str, float], Dict[str, Any]]:
+    ) -> Tuple[Dict[str, mx.array], float, Dict[str, List[float]], Dict[str, Any]]:
         """Generates rollouts and computes rewards for a batch of prompts."""
         # Enforce thinking token constraints
         self.config.data.max_gen_len = (
@@ -233,16 +246,24 @@ class GRPOTrainer(BaseTrainer):
         )
 
         # Generate responses from the actor model
-        rollout_data, avg_reward, raw_rewards, generation_metrics = generate_rollouts_for_batch(
+        dataset_from_batch = batch_data["dataset"]
+        (
+            rollout_data,
+            avg_reward,
+            raw_rewards,
+            generation_metrics,
+        ) = generate_rollouts_for_batch(
             model=self.actor_model,
             ref_model=self.ref_model,
             tokenizer=self.tokenizer,
             prompts_data=batch_data["prompts_data"],
-            prompts_mx=batch_data["prompts_mx"],
+            dataset=dataset_from_batch,
             config=self.config,
             reward_composer=self.reward_composer,
-            paged_kv_cache=self.paged_kv_cache,
             model_manager=self.model_manager,
+            run_id=self._run_id,
+            current_update=update_step,
+            is_invalid_batch=False,  # Temporarily set to False, as it's calculated after this call
         )
 
         # Log samples if enabled
@@ -250,7 +271,7 @@ class GRPOTrainer(BaseTrainer):
         _maybe_log_samples(
             self.config,
             update_step,
-            batch_data["prompts"],
+            batch_data["prompts_data"],
             rollout_data.get("decoded_responses", []),
             raw_rewards,
             "grpo",
