@@ -156,12 +156,12 @@ class CheckpointManager:
         optimizer: optim.Optimizer,
         metadata: Dict[str, Any],
         current_metric: Optional[float] = None,
+        retries: int = 3,
+        backoff_factor: float = 2.0,
     ):
         """
-        Saves a complete, portable checkpoint atomically.
-        Memory optimized: Stream parameters and immediate cleanup.
+        Saves a complete, portable checkpoint atomically with retries.
         """
-        # Bug fix: Handle None metric properly
         if current_metric is None:
             current_metric = self.best_metric
 
@@ -170,91 +170,84 @@ class CheckpointManager:
         temp_path = self.output_dir / f".{checkpoint_name}.tmp"
         final_path = self.output_dir / checkpoint_name
 
-        if temp_path.exists():
-            shutil.rmtree(temp_path)
-
-        try:
-            temp_path.mkdir(parents=True)
-
-            # Copy base model files if path provided
-            if self.base_model_path:
-                self._copy_base_model_files(temp_path)
-            elif not self._warned_about_missing_path:
-                rprint(
-                    "[yellow]Warning: `base_model_path` not provided to CheckpointManager. "
-                    "Checkpoints will not be self-contained.[/yellow]"
-                )
-                self._warned_about_missing_path = True
-
-            # Save model weights (LoRA or full) with memory optimization
-            is_lora = any(
-                isinstance(m, MLXLoRALinear) for _, m in model.named_modules()
-            )
-
-            if is_lora:
-                # Get trainable parameters
-                adapter_params = dict(tree_flatten(model.trainable_parameters()))
-                if adapter_params:
-                    mx.save_safetensors(
-                        str(temp_path / "adapters.safetensors"), adapter_params
-                    )
-                    # Immediate cleanup
-                    del adapter_params
-                    self._aggressive_memory_cleanup()
-            else:
-                # Get full parameters
-                full_params = dict(tree_flatten(model.parameters()))
-                mx.save_safetensors(str(temp_path / "model.safetensors"), full_params)
-                # Immediate cleanup
-                del full_params
-                self._aggressive_memory_cleanup()
-
-            # Save optimizer state if requested
-            if metadata.get("save_optimizer_state", False) and optimizer:
-                optimizer_state = dict(tree_flatten(optimizer.state))
-                mx.save_safetensors(
-                    str(temp_path / "optimizer.safetensors"),
-                    optimizer_state,
-                )
-                # Immediate cleanup
-                del optimizer_state
-                self._aggressive_memory_cleanup()
-
-            # Save metadata
-            metadata["step"] = step
-            metadata["current_metric"] = current_metric
-            metadata["timestamp"] = timestamp
-
-            with open(temp_path / "metadata.json", "w") as f:
-                json.dump(metadata, f, indent=2, default=str)
-
-            # Atomic rename
-            os.rename(temp_path, final_path)
-            self._checkpoints.append(final_path)
-
-            rprint(
-                f"Checkpoint saved to [cyan]{final_path.name}[/cyan] (Metric: {current_metric:.4f})."
-            )
-
-            # Update symlinks
-            self._update_symlink(final_path, "latest")
-
-            # Bug fix: Only update best if this is actually the best metric
-            if self.is_best_metric(current_metric):
-                self.best_metric = current_metric
-                self._update_symlink(final_path, "best")
-
-            # Rotate old checkpoints
-            self._rotate_checkpoints()
-
-            # Final cleanup
-            self._aggressive_memory_cleanup()
-
-        except Exception as e:
-            # Cleanup temporary directory on failure
+        for attempt in range(retries):
             if temp_path.exists():
-                shutil.rmtree(temp_path, ignore_errors=True)
-            raise CheckpointError(f"Atomic save failed for step {step}: {e}") from e
+                shutil.rmtree(temp_path)
+
+            try:
+                temp_path.mkdir(parents=True)
+
+                if self.base_model_path:
+                    self._copy_base_model_files(temp_path)
+                elif not self._warned_about_missing_path:
+                    rprint(
+                        "[yellow]Warning: `base_model_path` not provided. Checkpoints may not be self-contained.[/yellow]"
+                    )
+                    self._warned_about_missing_path = True
+
+                is_lora = any(isinstance(m, MLXLoRALinear) for _, m in model.named_modules())
+
+                if is_lora:
+                    adapter_params = dict(tree_flatten(model.trainable_parameters()))
+                    if adapter_params:
+                        mx.save_safetensors(str(temp_path / "adapters.safetensors"), adapter_params)
+                        del adapter_params
+                else:
+                    full_params = dict(tree_flatten(model.parameters()))
+                    mx.save_safetensors(str(temp_path / "model.safetensors"), full_params)
+                    del full_params
+                self._aggressive_memory_cleanup()
+
+                if metadata.get("save_optimizer_state", False) and optimizer:
+                    optimizer_state = dict(tree_flatten(optimizer.state))
+                    mx.save_safetensors(str(temp_path / "optimizer.safetensors"), optimizer_state)
+                    del optimizer_state
+                    self._aggressive_memory_cleanup()
+
+                metadata["step"] = step
+                metadata["current_metric"] = current_metric
+                metadata["timestamp"] = timestamp
+
+                with open(temp_path / "metadata.json", "w") as f:
+                    json.dump(metadata, f, indent=2, default=str)
+
+                os.rename(temp_path, final_path)
+                self._checkpoints.append(final_path)
+
+                rprint(f"Checkpoint saved to [cyan]{final_path.name}[/cyan] (Metric: {current_metric:.4f}).")
+
+                self._update_symlink(final_path, "latest")
+                if self.is_best_metric(current_metric):
+                    self.best_metric = current_metric
+                    self._update_symlink(final_path, "best")
+
+                self._rotate_checkpoints()
+                self._aggressive_memory_cleanup()
+                return  # Success
+
+            except (IOError, OSError) as e:
+                if temp_path.exists():
+                    shutil.rmtree(temp_path, ignore_errors=True)
+                
+                rprint(f"[bold red]CRITICAL: Checkpoint save failed on attempt {attempt + 1}/{retries}. Error: {e}[/bold red]")
+                if "No space left on device" in str(e):
+                    rprint("[bold red]Disk may be full. Please check storage.[/bold red]")
+                    break # No point in retrying if disk is full
+                if "Permission denied" in str(e):
+                    rprint("[bold red]Permission denied. Check directory permissions.[/bold red]")
+                    break
+
+                if attempt < retries - 1:
+                    sleep_time = backoff_factor ** attempt
+                    rprint(f"[yellow]Retrying in {sleep_time:.1f} seconds...[/yellow]")
+                    time.sleep(sleep_time)
+                else:
+                    rprint("[bold red]All checkpoint save retries failed.[/bold red]")
+                    raise CheckpointError(f"Atomic save failed for step {step}: {e}") from e
+            except Exception as e:
+                if temp_path.exists():
+                    shutil.rmtree(temp_path, ignore_errors=True)
+                raise CheckpointError(f"An unexpected error occurred during checkpoint save for step {step}: {e}") from e
 
     def load_latest_state(
         self, model: nn.Module, optimizer: Optional[optim.Optimizer] = None
@@ -424,3 +417,21 @@ class CheckpointManager:
         if current_metric is None:
             return False
         return self.save_best and current_metric > self.best_metric
+
+    def resume_from_checkpoint(
+        self, model: nn.Module, optimizer: Optional[optim.Optimizer] = None
+    ) -> Tuple[int, int]:
+        """
+        Loads the latest checkpoint to resume training.
+        """
+        resumed_step = 0
+        resumed_epoch = 0
+        if self._checkpoints:
+            try:
+                resumed_step, metadata = self.load_latest_state(model, optimizer)
+                resumed_epoch = metadata.get("epoch", 0)
+            except CheckpointError as e:
+                rprint(f"[bold red]Failed to load latest checkpoint: {e}. Starting from scratch.[/bold red]")
+            except Exception as e:
+                rprint(f"[bold red]An unexpected error occurred while resuming: {e}. Starting from scratch.[/bold red]")
+        return resumed_step, resumed_epoch

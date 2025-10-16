@@ -18,7 +18,6 @@ from mlx_rl_trainer.rewards.programming.code_execution import (
 )
 from mlx_rl_trainer.core.config import GenerationConfig
 from mlx_rl_trainer.utils.text_utils import apply_chat_template_wrapper
-from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +130,6 @@ class HumanEvalEvaluator(BaseEvaluator):
             sampling_top_p=self.top_p,
             sampling_top_k=self.top_k,
         )
-        sampler = safe_make_sampler(gen_cfg_for_sampler, temp=self.gen_temp)
 
         generated_texts = []
         for _ in range(num_solutions):
@@ -142,7 +140,8 @@ class HumanEvalEvaluator(BaseEvaluator):
                 prompt=formatted_prompt,
                 max_tokens=self.max_gen_len,
                 temp=self.gen_temp,
-                sampler=sampler,
+                top_p=self.top_p,
+                top_k=self.top_k,
             )
             generated_texts.append(response)
         return generated_texts

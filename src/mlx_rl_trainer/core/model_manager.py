@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 
 import mlx.core as mx
 import mlx.nn as nn
+import mlx.optimizers as optim
 from rich import print as rprint
 
 from .config import ModelConfig
@@ -128,6 +129,23 @@ class ModelManager:
             raise
         return model
 
+    def create_optimizer(
+        self, model: nn.Module, trainer_config: Any
+    ) -> Tuple[Any, Callable[[int], float]]:
+        """Creates an optimizer and a learning rate scheduler."""
+        optimizer = optim.AdamW(learning_rate=trainer_config.learning_rate)
+
+        # Simple linear warmup and cosine decay scheduler
+        def lr_scheduler(step: int) -> float:
+            if step < trainer_config.lr_warmup_steps:
+                return trainer_config.learning_rate * (step / trainer_config.lr_warmup_steps)
+            progress = (step - trainer_config.lr_warmup_steps) / (
+                trainer_config.num_training_steps - trainer_config.lr_warmup_steps
+            )
+            return trainer_config.learning_rate * 0.5 * (1.0 + mx.cos(mx.array(np.pi * progress)))
+
+        return optimizer, lr_scheduler
+
     def get_logprobs_for_sequence(
         self, model: nn.Module, prompts: mx.array, responses: mx.array
     ) -> mx.array:
@@ -196,8 +214,8 @@ class ModelManager:
             from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler
 
             sampler = safe_make_sampler(
-                self.config, temp=temp
-            )  # Use self.config as it's an ExperimentConfig
+                generation_cfg, temp=temp
+            )
 
             next_token = sampler(processed_logits)
             log_probs = nn.log_softmax(processed_logits, axis=-1)

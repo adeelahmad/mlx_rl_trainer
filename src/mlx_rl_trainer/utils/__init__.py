@@ -2,24 +2,10 @@
 
 from .mlx_utils import (
     _is_metal_internal_error,
-    metal_recover,
-    metal_safe_apply_gradients,
-    _create_4d_attention_mask,
-    safe_make_sampler,
     make_dynamic_tag_bias_processor,
     _first_token_ids_for_lexemes,
     _letter_token_ids,
     _resolve_tag_ids,
-    scale_grads_by_band,
-    mask_grads_to_layer_band,
-    mask_grads_to_specific_layers,
-    ContentAlignBridge,
-    _mask_after_answer,
-    _find_embedding_layer,
-    _freeze_module,
-    metal_before_update,
-    _global_grad_norm,
-    _maybe_clip_grad_norm,
     limit_memory
 )
 
@@ -56,27 +42,13 @@ from .distributed import DistributedUtil
 
 __all__ = [
     # mlx_utils
-    "metal_safe_apply_gradients",
     "limit_memory",
     "_is_metal_internal_error",
-    "metal_recover",
-    "_create_4d_attention_mask",
-    "safe_make_sampler",
     "make_dynamic_tag_bias_processor",
     "_first_token_ids_for_lexemes",
     "_letter_token_ids",
     "_resolve_tag_ids",
-    "scale_grads_by_band",
-    "mask_grads_to_layer_band",
-    "mask_grads_to_specific_layers",
-    "ContentAlignBridge",
-    "_mask_after_answer",
-    "_find_embedding_layer",
-    "_freeze_module",
-    "metal_before_update",
-    "_global_grad_norm",
-    "_maybe_clip_grad_norm",
-    # text_utils
+    "limit_memory"
     "_preview",
     "_strip_markup",
     "_count_words",

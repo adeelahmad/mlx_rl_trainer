@@ -14,6 +14,7 @@ import mlx_rl_trainer.rewards.programming.code_execution
 import mlx_rl_trainer.rewards.reasoning.thinking_quality
 import mlx_rl_trainer.rewards.content.mcq_accuracy
 import mlx_rl_trainer.rewards.content.steps_coverage
+import mlx_rl_trainer.rewards.content.verify_response
 
 
 __all__ = [

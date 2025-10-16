@@ -15,7 +15,6 @@ from mlx_rl_trainer.utils.text_utils import (
     _extract_final_numeric,
     apply_chat_template_wrapper,
 )
-from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +77,12 @@ class GSM8KEvaluator(BaseEvaluator):
             sampling_top_p=self.top_p,
             sampling_top_k=self.top_k,
         )
-        sampler = safe_make_sampler(gen_cfg, temp=self.gen_temp)
         return generate(
             model,
             tokenizer,
             prompt=formatted_prompt,
             max_tokens=self.max_gen_len,
             temp=self.gen_temp,
-            sampler=sampler,
+            top_p=self.top_p,
+            top_k=self.top_k,
         )

@@ -1,4 +1,9 @@
-#!/usr/bin/env python
+# file_path: mlx_rl_trainer/src/mlx_rl_trainer/scripts/train.py
+# revision_no: 002
+# goals_of_writing_code_block: The main entry point for training a model, incorporating W&B logging and memory management.
+# type_of_code_response: replace
+"""Main training script with W&B and memory management."""
+
 import sys, logging, asyncio, uuid, random, signal, time, json
 from pathlib import Path
 import argparse
@@ -9,12 +14,10 @@ from rich import print as rprint, traceback as rich_traceback
 import numpy as np
 import psutil
 
-# Add src to path for local imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 try:
     import wandb
-
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -29,9 +32,8 @@ from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.base_reward import RewardComposer
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.monitoring.metrics_logger import MetricsLogger, _emit_plots_from_csv
-from mlx_rl_trainer.utils import limit_memory
+from mlx_rl_trainer.utils.mlx_utils import limit_memory
 
-# Import rewards and evaluators to register them
 import mlx_rl_trainer.rewards
 import mlx_rl_trainer.evaluation
 
@@ -42,7 +44,6 @@ logger = logging.getLogger(__name__)
 shutdown_requested = False
 wandb_run = None
 
-
 def handle_signal(signum, frame):
     global shutdown_requested
     if not shutdown_requested:
@@ -50,7 +51,6 @@ def handle_signal(signum, frame):
             "\n[bold yellow]Shutdown requested. Finishing current step and saving checkpoint...[/bold yellow]"
         )
         shutdown_requested = True
-
 
 def path_to_str(d):
     if isinstance(d, dict):
@@ -60,7 +60,6 @@ def path_to_str(d):
     if isinstance(d, Path):
         return str(d)
     return d
-
 
 async def _async_main():
     global shutdown_requested, wandb_run
@@ -95,7 +94,6 @@ async def _async_main():
         sys.exit(1)
 
     run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
-    # config.trainer.output_dir = config.trainer.output_dir / run_id
     config.trainer.output_dir.mkdir(parents=True, exist_ok=True)
 
     file_handler = logging.FileHandler(
@@ -122,7 +120,7 @@ async def _async_main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    if config.monitoring.use_wandb and WANDB_AVAILABLE:
+    if config.monitoring.wandb_log and WANDB_AVAILABLE:
         try:
             wandb_cfg = path_to_str(config.model_dump())
             wandb_cfg["run_id"] = run_id
@@ -142,7 +140,7 @@ async def _async_main():
             logger.error(
                 f"W&B initialization failed: {e}. Disabling W&B.", exc_info=True
             )
-            config.monitoring.use_wandb = False
+            config.monitoring.wandb_log = False
             wandb_run = None
 
     rewards = [
@@ -154,7 +152,7 @@ async def _async_main():
     data_manager = DatasetManager(config.data, tokenizer=None)
     checkpoint_manager = CheckpointManager(
         config.trainer.output_dir / config.checkpointing.save_dir,
-        keep_last_n=config.checkpointing.keep_last_n,  # CORRECTED from keep_best_n
+        keep_last_n=config.checkpointing.keep_last_n,
         save_best=True,
         base_model_path=config.model.model_path
     )
@@ -204,13 +202,9 @@ async def _async_main():
             wandb_run.finish()
         logger.info("[bold blue]All resources released. Shutdown complete.[/bold blue]")
 
-
 def main():
     rprint(f"MLX using device: [bold cyan]{mx.default_device()}[/bold cyan]")
 
-
-
-    # Log memory usage (optional)
     current_peak_mem = mx.get_peak_memory()
     initial_peak_mem = mx.get_peak_memory()
     if current_peak_mem > initial_peak_mem:

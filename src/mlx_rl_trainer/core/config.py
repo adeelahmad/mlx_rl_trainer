@@ -93,7 +93,6 @@ THINK_STYLE_PROMPT_LITERAL = """THINKING RULES - Use maximally compressed notati
 
     ═══ WHEN UNCERTAIN ═══ DO NOT guess or assume. Instead: ? = flag uncertainty w/ question mark ASK: "need clarification on X" or "X not specified - options: A/B/C?" CONSTRAINT: "cannot solve b/c: missing info Y" If problem unsolvable → state why concisely, don\'t elaborate Think like: debugger output, medical chart notes, trading floor shorthand, or military briefing. COMPRESS EVERYTHING. Every word must earn its place."""
 
-THINK_STYLE_PROMPT_LITERAL = ""
 class RewardConfig(BaseModel):
     name: str = Field(..., description="Registered name of the reward function.")
     weight: float = Field(
@@ -139,6 +138,12 @@ class DataConfig(BaseModel):
             "Adeel",
         ],
         description="Keywords to filter out samples.",
+    )
+    data_validation_script_path: Optional[Path] = Field(
+        None, description="Path to an external Python script for custom validation."
+    )
+    data_validation_strict_mode: bool = Field(
+        False, description="If True, discard samples that fail validation."
     )
 
 
@@ -192,7 +197,7 @@ class CheckpointConfig(BaseModel):
 
 
 class MonitoringConfig(BaseModel):
-    use_wandb: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
+    wandb_log: bool = Field(True, description="Enable Weights & Biases (W&B) logging.")
     wandb_project: Optional[str] = Field(
         "mlx-grpo-qwen3-v4", description="W&B project name."
     )
@@ -249,7 +254,6 @@ class GenerationConfig(BaseModel):
     mcq_letter_lift: float = Field(8.0)
     mcq_ban_first_bias: float = Field(-14.0)
     nonmcq_ban_first_bias: float = Field(-12.0)
-    mcq_close_after_k: int = Field(1)
     min_answer_tokens: int = Field(8)
     min_answer_tokens_mcq: int = Field(1)
     mcq_answer_end_bias: float = Field(9.0)
@@ -3180,6 +3184,9 @@ class TrainerParams(BaseModel):
     ppo_batch_size: PositiveInt = Field(1)
     num_rollout_samples: PositiveInt = Field(2)
     grad_accum_steps: PositiveInt = Field(1)
+    gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save memory.")
+    min_think_tokens: PositiveInt = Field(16, description="Minimum number of tokens for the thinking part of the generation.")
+    max_think_tokens: PositiveInt = Field(128, description="Maximum number of tokens for the thinking part of the generation.")
     # Only enable alternating gradients
     alternate_dual_gradients:bool = Field(True) #  true
     use_mixed_precision:bool = Field(False) # false  # Disabled for stability

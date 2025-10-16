@@ -1,3 +1,7 @@
+# file_path: mlx_rl_trainer/src/mlx_rl_trainer/monitoring/metrics_logger.py
+# revision_no: 002
+# goals_of_writing_code_block: Implement a comprehensive metrics logger that supports CSV, NDJSON, and Weights & Biases (W&B) for tracking experiments.
+# type_of_code_response: replace
 """Handles logging to CSV, NDJSON, and Weights & Biases."""
 import logging, csv, json, threading, time, gc
 from typing import Any, Dict, List, Optional, Union
@@ -16,12 +20,34 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = MPL_AVAILABLE = False
 
+try:
+    import wandb
+
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 from mlx_rl_trainer.core.config import ExperimentConfig
 from mlx_rl_trainer.utils.text_utils import _preview, _extract_think_answer_lengths
 
 logger = logging.getLogger(__name__)
 wandb_run: Any = None
 
+def wandb_init(config: ExperimentConfig, run_id: str):
+    """Initialize Weights & Biases if available and enabled."""
+    global wandb_run
+    if WANDB_AVAILABLE and config.monitoring.wandb_log:
+        try:
+            wandb_run = wandb.init(
+                project=config.monitoring.wandb_project,
+                name=run_id,
+                config=config.model_dump(),
+                resume="allow",
+                id=run_id,
+            )
+            logger.info(f"Weights & Biases initialized for run: {run_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Weights & Biases: {e}", exc_info=True)
 
 def _aggressive_memory_cleanup():
     """Aggressively free memory."""
@@ -31,7 +57,6 @@ def _aggressive_memory_cleanup():
         pass
     mx.clear_cache()
     gc.collect()
-
 
 def _calculate_mcq_accuracy(
     refs: Optional[List[str]],
@@ -74,7 +99,6 @@ class MetricsLogger:
 
         loggable: Dict[str, Any] = {"update_step": step, "run_id": self.run_id}
 
-        # Convert metrics to loggable format
         for k, v in metrics.items():
             if isinstance(v, (mx.array, np.ndarray)):
                 loggable[k] = v.item() if v.size == 1 else str(v.tolist())
@@ -87,7 +111,6 @@ class MetricsLogger:
             try:
                 current_headers = sorted(loggable.keys())
 
-                # Recreate writer if headers changed
                 if self._writer is None or self._headers != current_headers:
                     is_empty = (
                         not self.file_path.exists()
@@ -100,19 +123,23 @@ class MetricsLogger:
                     if is_empty:
                         self._writer.writeheader()
 
-                # Write the row
                 self._writer.writerow(loggable)
                 self._file.flush()
 
-                # Increment write counter
                 self._write_count += 1
 
-                # Periodic memory cleanup
                 if self._write_count % self._cleanup_interval == 0:
                     _aggressive_memory_cleanup()
 
             except Exception as e:
                 logger.error(f"Error writing metrics CSV: {e}", exc_info=True)
+
+        global wandb_run
+        if wandb_run:
+            try:
+                wandb_run.log(loggable, step=step)
+            except Exception as e:
+                logger.error(f"Error logging to wandb: {e}", exc_info=True)
 
     def close(self):
         with self._lock:
@@ -121,17 +148,11 @@ class MetricsLogger:
                 self._file.close()
                 self._file = None
                 self._writer = None
-        # Final cleanup
         _aggressive_memory_cleanup()
-
 
 def _emit_plots_from_csv(
     csv_path: Path, out_dir: Path, config: ExperimentConfig = None, run_id = None
 ):
-    """
-    Generate plots from CSV metrics file.
-    Memory optimized: Uses chunked processing and explicit cleanup.
-    """
     if (
         not (PANDAS_AVAILABLE and MPL_AVAILABLE)
         or not csv_path.exists()
@@ -140,23 +161,17 @@ def _emit_plots_from_csv(
         return
 
     try:
-        # Read CSV with error handling for corrupted lines
         df = pd.read_csv(csv_path, on_bad_lines='skip')
 
         if df.empty:
             del df
             return
 
-        # Remove duplicate update_steps, keeping the last entry
         x_col = "update_step"
         if x_col in df.columns:
-            # Keep the last entry (most recent log) for each unique 'update_step' value
             df = df.drop_duplicates(subset=[x_col], keep='last')
-
-            # Sort by update_step for proper plotting
             df = df.sort_values(by=x_col).reset_index(drop=True)
 
-        # Define all meaningful plot columns (Y-axes)
         plot_metrics = {
             "train/loss": "loss",
             "train/reward_mean": "reward_mean",
@@ -164,12 +179,8 @@ def _emit_plots_from_csv(
             "train/learning_rate": "lr",
             "train/grad_norm": "grad_norm",
             "train/kl_divergence": "kl_divergence",
-            "train/rewards/raw_TagStructureReward": "reward_TagStructure",
-            "train/rewards/raw_SemanticSimilarityReward": "reward_SemanticSimilarity",
-            "train/rewards/raw_CodeExecutionReward": "reward_CodeExecution",
         }
 
-        # Use run_id if available, otherwise use a generic 'plots' directory structure
         plots_dir = out_dir / "plots"
         if run_id:
             plots_dir = plots_dir / run_id
@@ -177,22 +188,16 @@ def _emit_plots_from_csv(
         plots_dir.mkdir(exist_ok=True, parents=True)
 
         def _plot(y_col: str, fname_suffix: str, x_col: str = "update_step"):
-            """Generate a single plot with memory cleanup."""
             if y_col not in df.columns or x_col not in df.columns:
                 return
 
             try:
-                # Create figure
                 fig, ax = plt.subplots(figsize=(10, 6))
-
-                # Extract data as numpy arrays for efficient plotting
                 x_data = df[x_col].values
                 y_data = df[y_col].values
 
-                # Plot
                 ax.plot(x_data, y_data)
 
-                # Formatting
                 x_label = x_col.replace("_", " ").title()
                 y_label = y_col.replace("_", " ").title()
 
@@ -203,29 +208,29 @@ def _emit_plots_from_csv(
 
                 fig.tight_layout()
 
-                # Use safe filename
                 safe_y_col = y_col.replace('/', '_').replace('.', '_')
                 plot_path = plots_dir / f"{safe_y_col}_{fname_suffix}.png"
 
-                # Save and close
                 fig.savefig(plot_path, dpi=100, bbox_inches='tight')
-                plt.close(fig)
+                
+                global wandb_run
+                if wandb_run:
+                    try:
+                        wandb_run.log({f"plots/{safe_y_col}": wandb.Image(fig)}, commit=False)
+                    except Exception as e:
+                        logger.error(f"Error logging plot to wandb: {e}", exc_info=True)
 
-                # Clean up references
+                plt.close(fig)
                 del fig, ax, x_data, y_data
 
             except Exception as e:
                 logger.warning(f"Failed to plot {y_col}: {e}")
-                # Ensure figure is closed even on error
                 plt.close('all')
 
-        # Generate each plot
         for col, name in plot_metrics.items():
             _plot(col, name)
-            # Periodic cleanup after every few plots
             gc.collect()
 
-        # Final cleanup
         del df
         plt.close('all')
         _aggressive_memory_cleanup()
@@ -234,10 +239,8 @@ def _emit_plots_from_csv(
 
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
-        # Ensure all figures are closed on error
         plt.close('all')
         _aggressive_memory_cleanup()
-
 
 def _maybe_log_samples(
     config: ExperimentConfig,
@@ -249,10 +252,6 @@ def _maybe_log_samples(
     run_id: str,
     is_invalid_batch: bool,
 ):
-    """
-    Log sample generations to JSONL file.
-    Memory optimized: Process samples one at a time and cleanup.
-    """
     if (
         config.monitoring.log_samples_every <= 0
         or update_idx % config.monitoring.log_samples_every != 0
@@ -267,7 +266,8 @@ def _maybe_log_samples(
         )
         k = min(config.monitoring.max_logged_samples, len(decoded_responses))
 
-        # Use context manager for automatic file closing
+        wandb_samples = []
+
         with open(out_path, "a", encoding="utf-8") as f:
             for i in range(k):
                 p_idx = i // config.trainer.num_rollout_samples
@@ -277,13 +277,8 @@ def _maybe_log_samples(
                 original_sample = prompts_data[p_idx]
                 gen_text = decoded_responses[i]
 
-                # Construct reference text
-                ref_dict = original_sample.get('ref', {
-                    "completion": f"{config.generation.think_start_tag}\n{original_sample.get('ref_think_str','')}{config.generation.think_end_tag}\n{original_sample.get('ref_answer_str','')}"
-                })
-                ref_text = ref_dict.get("completion", "") if isinstance(ref_dict, dict) else str(ref_dict)
+                ref_text, _ = _get_prompt_and_ref_text(original_sample, config)
 
-                # Extract lengths
                 gen_think_len, gen_ans_len = _extract_think_answer_lengths(
                     gen_text, config.generation
                 )
@@ -291,7 +286,6 @@ def _maybe_log_samples(
                     ref_text, config.generation
                 )
 
-                # Build entry
                 entry = {
                     "update": update_idx,
                     "is_invalid_batch": is_invalid_batch,
@@ -309,18 +303,26 @@ def _maybe_log_samples(
                     "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-                # Add individual reward components
                 for r_name, r_vals in rewards_data.items():
                     if r_name != "total":
                         entry[f"reward_{r_name}"] = r_vals[i]
 
-                # Write entry
+                wandb_samples.append(entry)
                 f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
-
-                # Clean up entry to free memory
                 del entry
 
-        # Periodic cleanup after logging samples
+        if wandb_run and wandb_samples:
+            try:
+                columns = list(wandb_samples[0].keys())
+                table = wandb.Table(columns=columns)
+                for sample in wandb_samples:
+                    table.add_data(*[sample.get(col, None) for col in columns])
+                
+                wandb_run.log({"samples": table}, step=update_idx)
+
+            except Exception as e:
+                logger.error(f"Error logging samples to wandb: {e}", exc_info=True)
+
         _aggressive_memory_cleanup()
 
     except Exception as e:

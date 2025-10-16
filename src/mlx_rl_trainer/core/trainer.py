@@ -29,13 +29,14 @@ from .config import ExperimentConfig
 from .model_manager import ModelManager
 from .dataset_manager import DatasetManager
 from .checkpoint_manager import CheckpointManager
-from ..monitoring.metrics_logger import MetricsLogger
+from ..monitoring.metrics_logger import MetricsLogger, wandb_init, wandb_run
 from .exceptions import (
     TrainingRuntimeError,
     CheckpointError,
 )
 
 from mlx.utils import tree_map, tree_flatten
+from mlx_rl_trainer.utils.mlx_utils import metal_before_update
 
 logger = logging.getLogger(__name__)
 
@@ -265,11 +266,17 @@ class BaseTrainer(ABC):
         # Log initial memory
         self._log_memory_if_enabled('startup', self.global_step)
 
+        # Initialize wandb
+        wandb_init(self.config, self._run_id)
+
         with pbar:
             while self.global_step < self.config.trainer.num_training_steps:
                 if should_shutdown():
                     logger.info("Shutdown requested. Breaking training loop.")
                     break
+
+                # Apply Metal memory management and dynamic parameter adjustments
+                metal_before_update(self.global_step, self.config.data, self.config.trainer)
 
                 # Memory tracking: before accumulation
                 self._log_memory_if_enabled('before_accum', self.global_step)
@@ -489,6 +496,7 @@ class BaseTrainer(ABC):
                     # Determine if we need to evaluate or save
                     is_eval = (
                         self.config.trainer.eval_every > 0
+                        and self.global_step > 0
                         and (self.global_step + 1) % self.config.trainer.eval_every == 0
                     )
                     is_save = (
@@ -547,8 +555,11 @@ class BaseTrainer(ABC):
                     should_save = would_save and (training_performed or is_final)
 
                     if should_save:
-                        # Memory tracking: before checkpoint
-                        self._log_memory_if_enabled('before_checkpoint', self.global_step)
+                        self._log_memory_if_enabled("before_checkpoint", self.global_step)
+                        if self.metrics_logger:
+                            self.metrics_logger._emit_plots_from_csv(
+                                self.metrics_logger.file_path, self.config.trainer.output_dir, self.config, self._run_id
+                            )
 
                         # Clear caches before saving
                         self._aggressive_memory_cleanup()
@@ -598,3 +609,7 @@ class BaseTrainer(ABC):
 
         # Final memory log
         self._log_memory_if_enabled('final', self.global_step)
+
+        # Finish wandb run
+        if wandb_run:
+            wandb_run.finish()

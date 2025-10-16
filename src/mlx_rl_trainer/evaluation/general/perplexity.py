@@ -16,9 +16,6 @@ from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_rl_trainer.evaluation.base_evaluator import BaseEvaluator
 from mlx_rl_trainer.evaluation.registry import EvaluatorRegistry
 from mlx_rl_trainer.core.trainer import EvaluationMetrics
-from mlx_rl_trainer.utils.mlx_utils import (
-    _create_4d_attention_mask,
-)  # For masking utility
 from mlx_rl_trainer.utils.text_utils import (
     apply_chat_template_wrapper,
 )  # For consistent prompting
@@ -98,10 +95,10 @@ class PerplexityEvaluator(BaseEvaluator):
 
             # Forward pass to get logits
             # For NLL, we need attention mask for padding
-            attn_mask = _create_4d_attention_mask(
-                input_ids_mx, tokenizer.pad_token_id, dtype=mx.float32
-            )
-            logits = model(input_ids_mx, mask=attn_mask)
+            # attn_mask = _create_4d_attention_mask(
+            #     input_ids_mx, tokenizer.pad_token_id, dtype=mx.float32
+            # )
+            logits = model(input_ids_mx)
 
             # Calculate cross-entropy loss (negative log-likelihood)
             # Targets are shifted: predict token i from context up to i-1
