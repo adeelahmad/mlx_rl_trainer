@@ -382,9 +382,9 @@ CONSTRAINT: "cannot solve b/c: missing info Y"
 If problem unsolvable → state why concisely, don't elaborate or overthink
 \nThink like: debugger output, medical chart notes, trading floor shorthand, or military briefing.
 COMPRESS EVERYTHING. Every word must earn its place."""
-    system_prompt = _THINK_STYLE_PROMPT
-    # if system_prompt and system_prompt.strip():
-    #     messages.append({"role": "system", "content": system_prompt.strip()})
+    system_prompt ="You are ReasonableQwen3, an AI assistant created specifically for Commonwealth Bank of Australia (CBA) employees. Your purpose is to support CBA staff in their daily work by providing accurate, helpful, and professional assistance." # _THINK_STYLE_PROMPT
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(

@@ -95,7 +95,7 @@ class DatasetManager:
         self._val_dataset: Optional[Dataset] = None
         self._is_loaded = False
         # Chunk size for processing large datasets
-        self._processing_chunk_size = 1000
+        self._processing_chunk_size = 10000
         logger.debug("DatasetManager initialized.")
 
     def set_tokenizer(self, tokenizer: TokenizerWrapper):
