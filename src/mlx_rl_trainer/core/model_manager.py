@@ -15,7 +15,6 @@ from .exceptions import ModelLoadError  # Import from new exceptions module
 
 try:
     from mlx_lm import load, generate
-    from mlx_lm.models import cache as mlx_lm_cache
     from mlx_lm.tokenizer_utils import TokenizerWrapper
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
     from mlx_lm.tuner.utils import (
@@ -50,10 +49,6 @@ except ImportError:
     def save_config(*args, **kwargs):
         pass
 
-    class mlx_lm_cache:
-        @staticmethod
-        def make_prompt_cache(*args, **kwargs):
-            return None
 
 
 class ModelManager:
@@ -66,11 +61,6 @@ class ModelManager:
                 "mlx-lm is required but not available. Install with `pip install mlx-lm`."
             )
 
-    def make_prompt_cache(
-        self, model: nn.Module, max_kv_size: Optional[int] = None
-    ) -> Any:
-        """Creates a KV cache for the model."""
-        return mlx_lm_cache.make_prompt_cache(model, max_kv_size=max_kv_size)
 
     def load_model(
         self,
@@ -172,12 +162,8 @@ class ModelManager:
     ) -> Tuple[mx.array, mx.array]:
         """Generates token sequences from prompts and returns tokens and their log probabilities."""
         batch_size = prompts.shape[0]
-        if cache is None:
-            cache = self.make_prompt_cache(
-                model, max_kv_size=prompts.shape[1] + max_tokens
-            )
 
-        logits_output = model(prompts.astype(mx.int64), cache=cache)
+        logits_output = model(prompts.astype(mx.int64))
         logits = (
             logits_output[0] if isinstance(logits_output, tuple) else logits_output
         )[:, -1, :].astype(mx.float32)
@@ -222,7 +208,7 @@ class ModelManager:
             if mx.all(ended).item():
                 break
 
-            logits_output = model(tokens_to_add[:, None].astype(mx.int64), cache=cache)
+            logits_output = model(tokens_to_add[:, None].astype(mx.int64))
             logits = (
                 logits_output[0] if isinstance(logits_output, tuple) else logits_output
             )[:, -1, :].astype(mx.float32)

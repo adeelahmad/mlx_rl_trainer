@@ -40,7 +40,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+prompt_run_*
 # Project-specific Output & Logs
 /outputs/
 /eval_outputs/
