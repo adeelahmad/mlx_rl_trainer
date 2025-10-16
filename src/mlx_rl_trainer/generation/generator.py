@@ -37,6 +37,7 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
+from mlx_lm.models import cache
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx.utils import tree_flatten
 import numpy as np
@@ -413,14 +414,16 @@ def generate_rollouts_for_batch(
     # Generate with fresh cache per sample
     for sample_idx in range(total_samples):
         # Create fresh cache
-
+        from mlx_lm.models import cache as mlx_cache
+        sample_cache = None
 
         sample_prompt = prompts_mx[sample_idx:sample_idx+1]
         if sample_prompt.size == 0:
+            del sample_cache
             continue
 
         # Initial forward pass
-        out = model(sample_prompt.astype(mx.int64))
+        out = model(sample_prompt.astype(mx.int64), cache=sample_cache)
         next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(mx.float32)
         del out  # Immediate cleanup
 
@@ -462,12 +465,12 @@ def generate_rollouts_for_batch(
                 hist_tokens.append(tok_val)
 
             # Continue generation
-            out = model(mx.array([[tok_val]], dtype=mx.int32).astype(mx.int64))
+            out = model(mx.array([[tok_val]], dtype=mx.int32).astype(mx.int64), cache=sample_cache)
             next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(mx.float32)
             del out
 
         # Aggressive cleanup
-        del hist_tokens, ended, logit_processor
+        del sample_cache, hist_tokens, ended, logit_processor
         if sample_idx % 10 == 0:  # Periodic deep cleanup
             mx.clear_cache()
             gc.collect()
