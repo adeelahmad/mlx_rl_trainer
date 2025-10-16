@@ -44,9 +44,9 @@ def _get_memory_usage_mb() -> Dict[str, float]:
     """Get current memory usage in MB (MLX Metal memory)."""
     try:
         # MLX Metal memory stats
-        cache_size = mx.get_cache_memory() / (1024 * 1024)  # Convert to MB
-        allocated = mx.get_active_memory() / (1024 * 1024)
-        peak = mx.get_peak_memory() / (1024 * 1024)
+        cache_size = mx.metal.cache_size() / (1024 * 1024)  # Convert to MB
+        allocated = mx.metal.get_active_memory() / (1024 * 1024)
+        peak = mx.metal.get_peak_memory() / (1024 * 1024)
 
         return {
             'cache_mb': cache_size,
@@ -201,6 +201,7 @@ class BaseTrainer(ABC):
 
     def _aggressive_memory_cleanup(self):
         """Aggressively free memory."""
+        mx.metal.clear_cache()
         mx.clear_cache()
         gc.collect()
 

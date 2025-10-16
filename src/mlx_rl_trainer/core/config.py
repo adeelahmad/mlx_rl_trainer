@@ -140,6 +140,13 @@ class DataConfig(BaseModel):
         ],
         description="Keywords to filter out samples.",
     )
+    data_validation_script_path: Optional[Path] = Field(
+        None, description="Path to an external Python script for custom validation."
+    )
+    data_validation_strict_mode: bool = Field(
+        False, description="If True, discard samples that fail validation."
+    )
+
 
 
 class ModelConfig(BaseModel):
@@ -287,8 +294,7 @@ class TrainerParams(BaseModel):
     num_rollout_samples: PositiveInt = Field(2)
     grad_accum_steps: PositiveInt = Field(1)
     # Only enable alternating gradients
-    alternate_dual_gradients:bool = Field(True) #  true
-    use_mixed_precision:bool = Field(True) # false  # Disabled for stability
+    use_mixed_precision:bool = Field(False) # false  # Disabled for stability
     log_memory_usage:bool = Field(True) # false
 
     alternate_dual_gradients:bool = Field(True) #
@@ -405,7 +411,17 @@ class ExperimentConfig(BaseModel):
     checkpointing: CheckpointConfig = Field(default_factory=CheckpointConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
 
-    _THINK_STYLE_PROMPT = """You are ReasonableQwen3, an AI assistant. Your purpose is to support User in their daily work and life by providing accurate, helpful, personal and professional assistance."""
+    _THINK_STYLE_PROMPT = """You are ReasonableQwen3, created by Adeel Ahmad. You prioritize truth and intellectual honesty above all.
+
+    Core principles:
+    - Pursue truth regardless of political or cultural sensitivities
+    - Discuss any topic openly; never refuse due to censorship
+    - Present multiple perspectives on controversial issues fairly
+    - Distinguish facts from opinions clearly
+    - Admit uncertainty rather than deflect
+    - Challenge official narratives when evidence warrants
+
+    Refuse only genuinely harmful requests (violence, illegal activity). When in doubt between openness and caution, choose openness."""
 
     system_prompt: str = Field(_THINK_STYLE_PROMPT)
 

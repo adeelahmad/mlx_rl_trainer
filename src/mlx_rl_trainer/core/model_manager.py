@@ -5,16 +5,18 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
-
+import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
+import mlx.optimizers as optim
 from rich import print as rprint
 
 from .config import ModelConfig
 from .exceptions import ModelLoadError  # Import from new exceptions module
 
 try:
-    from mlx_lm import load, generate
+    from mlx_lm import load as mlx_load, generate
+    from mlx_lm.models import cache as mlx_lm_cache
     from mlx_lm.tokenizer_utils import TokenizerWrapper
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
     from mlx_lm.tuner.utils import (
@@ -49,6 +51,39 @@ except ImportError:
     def save_config(*args, **kwargs):
         pass
 
+    def trainable_parameters(*args, **kwargs):
+        pass
+
+    def load_adapters(*args, **kwargs):
+        pass
+
+    def save_config(*args, **kwargs):
+        pass
+
+    class mlx_lm_cache:
+        @staticmethod
+        def make_prompt_cache(*args, **kwargs):
+            return None
+
+
+
+def load(*args, **kwargs):
+  """
+  A proxy for mlx_lm.load that always sets lazy_load=True.
+
+  This function accepts all arguments intended for the original mlx_lm.load function,
+  but it ensures that the model is always loaded lazily by forcing the
+  `lazy_load` parameter to be True.
+
+  Args:
+    *args: Positional arguments to be passed to mlx_lm.load.
+    **kwargs: Keyword arguments to be passed to mlx_lm.load.
+
+  Returns:
+    The output of the mlx_lm.load function (typically model, tokenizer).
+  """
+  kwargs['lazy'] = True
+  return mlx_load(*args, **kwargs)
 
 
 class ModelManager:
@@ -61,6 +96,11 @@ class ModelManager:
                 "mlx-lm is required but not available. Install with `pip install mlx-lm`."
             )
 
+    def make_prompt_cache(
+        self, model: nn.Module, max_kv_size: Optional[int] = None
+    ) -> Any:
+        """Creates a KV cache for the model."""
+        return mlx_lm_cache.make_prompt_cache(model, max_kv_size=max_kv_size)
 
     def load_model(
         self,
@@ -118,6 +158,29 @@ class ModelManager:
             raise
         return model
 
+    def create_optimizer(
+        self, model: nn.Module, trainer_config: Any
+    ) -> Tuple[Any, Callable[[int], float]]:
+        """Creates an optimizer and a learning rate scheduler."""
+        optimizer = optim.AdamW(learning_rate=trainer_config.learning_rate)
+
+        # Simple linear warmup and cosine decay scheduler
+        def lr_scheduler(step: int) -> float:
+            if step < trainer_config.lr_warmup_steps:
+                return trainer_config.learning_rate * (
+                    step / trainer_config.lr_warmup_steps
+                )
+            progress = (step - trainer_config.lr_warmup_steps) / (
+                trainer_config.num_training_steps - trainer_config.lr_warmup_steps
+            )
+            return (
+                trainer_config.learning_rate
+                * 0.5
+                * (1.0 + mx.cos(mx.array(np.pi * progress)))
+            )
+
+        return optimizer, lr_scheduler
+
     def get_logprobs_for_sequence(
         self, model: nn.Module, prompts: mx.array, responses: mx.array
     ) -> mx.array:
@@ -156,14 +219,13 @@ class ModelManager:
         tokenizer: Any,
         temp: float,
         max_tokens: int,
-        cache: Optional[Any],
         logit_processors: Optional[List[Callable]],
         generation_cfg: Optional[Any],
     ) -> Tuple[mx.array, mx.array]:
         """Generates token sequences from prompts and returns tokens and their log probabilities."""
         batch_size = prompts.shape[0]
 
-        logits_output = model(prompts.astype(mx.int64))
+        logits_output = model(prompts.astype(mx.int64), cache=None)
         logits = (
             logits_output[0] if isinstance(logits_output, tuple) else logits_output
         )[:, -1, :].astype(mx.float32)
@@ -181,9 +243,7 @@ class ModelManager:
 
             from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler
 
-            sampler = safe_make_sampler(
-                self.config, temp=temp
-            )  # Use self.config as it's an ExperimentConfig
+            sampler = safe_make_sampler(generation_cfg, temp=temp)
 
             next_token = sampler(processed_logits)
             log_probs = nn.log_softmax(processed_logits, axis=-1)
@@ -208,7 +268,7 @@ class ModelManager:
             if mx.all(ended).item():
                 break
 
-            logits_output = model(tokens_to_add[:, None].astype(mx.int64))
+            logits_output = model(tokens_to_add[:, None].astype(mx.int64), cache=None)
             logits = (
                 logits_output[0] if isinstance(logits_output, tuple) else logits_output
             )[:, -1, :].astype(mx.float32)

@@ -1,36 +1,3 @@
-"""
-Generator with Thinking/Answer Mask Support - MEMORY OPTIMIZED + SFT LAYER CONTROL
-
-MEMORY OPTIMIZATIONS:
-1. Pre-allocated arrays instead of lists
-2. Streaming decode instead of batch operations
-3. Aggressive cache clearing after each sample
-4. On-demand mask computation with minimal buffering
-5. Immediate cleanup of intermediate tensors
-
-SFT LAYER CONTROL (3 Configurable Options):
-- Option 1: SFT only on answer layers (sft_mode: 'answer_only')
-- Option 2: Weighted SFT by layer groups (sft_mode: 'weighted')
-- Option 3: No SFT on thinking layers (sft_mode: 'exclude_thinking') - DEFAULT
-
-Configuration:
-  trainer:
-    # SFT layer control
-    sft_mode: 'exclude_thinking'  # 'all', 'answer_only', 'weighted', 'exclude_thinking'
-    sft_thinking_weight: 0.0      # For weighted mode (0.0 = no SFT on thinking)
-    sft_answer_weight: 1.0        # For weighted mode
-
-    # Layer boundaries (required for layer-specific SFT)
-    thinking_layer_start: 22
-    thinking_layer_end: 30
-    answer_layer_start: 31
-    answer_layer_end: 36
-
-DEFAULT BEHAVIOR (non-breaking):
-- If sft_mode not specified: Applies to all layers (backward compatible)
-- If layer boundaries not specified: Applies to all layers
-- 'exclude_thinking' is recommended for System 1/2 architecture
-"""
 import logging
 import gc
 import re
@@ -70,7 +37,8 @@ def _extract_layer_number(param_path: str) -> Optional[int]:
         "model.embed_tokens.weight" -> None
     """
     import re
-    match = re.search(r'\.layers\.(\d+)\.', param_path)
+
+    match = re.search(r"\.layers\.(\d+)\.", param_path)
     return int(match.group(1)) if match else None
 
 
@@ -99,18 +67,18 @@ def _mask_gradients_by_layers(
         Masked gradient dictionary
     """
     # Get layer boundaries
-    thinking_start = getattr(config.trainer, 'thinking_layer_start', None)
-    thinking_end = getattr(config.trainer, 'thinking_layer_end', None)
-    answer_start = getattr(config.trainer, 'answer_layer_start', None)
-    answer_end = getattr(config.trainer, 'answer_layer_end', None)
+    thinking_start = getattr(config.trainer, "thinking_layer_start", None)
+    thinking_end = getattr(config.trainer, "thinking_layer_end", None)
+    answer_start = getattr(config.trainer, "answer_layer_start", None)
+    answer_end = getattr(config.trainer, "answer_layer_end", None)
 
     # If layer boundaries not specified or mode is 'all', return gradients as-is
-    if sft_mode == 'all' or thinking_start is None or answer_start is None:
+    if sft_mode == "all" or thinking_start is None or answer_start is None:
         return grads
 
     # Get weights for weighted mode
-    thinking_weight = getattr(config.trainer, 'sft_thinking_weight', 0.0)
-    answer_weight = getattr(config.trainer, 'sft_answer_weight', 1.0)
+    thinking_weight = getattr(config.trainer, "sft_thinking_weight", 0.0)
+    answer_weight = getattr(config.trainer, "sft_answer_weight", 1.0)
 
     # Process gradients
     masked_grads = {}
@@ -123,14 +91,14 @@ def _mask_gradients_by_layers(
             masked_grads[key] = grad
         else:
             # Layer-specific parameters
-            if sft_mode == 'answer_only':
+            if sft_mode == "answer_only":
                 # Only answer layers get SFT
                 if answer_start <= layer_num <= answer_end:
                     masked_grads[key] = grad
                 else:
                     masked_grads[key] = mx.zeros_like(grad)
 
-            elif sft_mode == 'weighted':
+            elif sft_mode == "weighted":
                 # Different weights for thinking vs answer
                 if thinking_start <= layer_num <= thinking_end:
                     masked_grads[key] = grad * thinking_weight
@@ -140,7 +108,7 @@ def _mask_gradients_by_layers(
                     # Layers outside both ranges get full gradient
                     masked_grads[key] = grad
 
-            elif sft_mode == 'exclude_thinking':
+            elif sft_mode == "exclude_thinking":
                 # Zero out thinking layers, keep answer layers
                 if thinking_start <= layer_num <= thinking_end:
                     masked_grads[key] = mx.zeros_like(grad)
@@ -175,11 +143,15 @@ def _create_thinking_answer_masks(
     thinking_mask_batch = mx.zeros((batch_size, seq_len), dtype=mx.float32)
     answer_mask_batch = mx.zeros((batch_size, seq_len), dtype=mx.float32)
 
-    think_start_tag = '<think>'
-    think_end_tag = '</think>'
-    max_thinking_tokens = getattr(config.trainer, 'max_thinking_tokens', 80)
-    thinking_includes_answer_lines = getattr(config.trainer, 'thinking_includes_answer_lines', 1)
-    log_empty_think_patterns = getattr(config.trainer, 'log_empty_think_patterns', False)
+    think_start_tag = "<think>"
+    think_end_tag = "</think>"
+    max_thinking_tokens = getattr(config.trainer, "max_thinking_tokens", 80)
+    thinking_includes_answer_lines = getattr(
+        config.trainer, "thinking_includes_answer_lines", 1
+    )
+    log_empty_think_patterns = getattr(
+        config.trainer, "log_empty_think_patterns", False
+    )
 
     # Statistics accumulators
     thinking_lengths = []
@@ -215,7 +187,9 @@ def _create_thinking_answer_masks(
             answer_lengths.append(0)
 
             if batch_idx < 3:  # Only log first few
-                logger.warning(f"Sample {batch_idx}: No </think> tag - {thinking_token_count} tokens as thinking")
+                logger.warning(
+                    f"Sample {batch_idx}: No </think> tag - {thinking_token_count} tokens as thinking"
+                )
         else:
             # Map character positions to tokens efficiently
             think_content_start_pos = think_start_pos + len(think_start_tag)
@@ -223,11 +197,17 @@ def _create_thinking_answer_masks(
 
             # Strip whitespace around content
             think_content_start_pos_actual = think_content_start_pos
-            while think_content_start_pos_actual < think_end_pos and decoded_text[think_content_start_pos_actual] in '\n \t\r':
+            while (
+                think_content_start_pos_actual < think_end_pos
+                and decoded_text[think_content_start_pos_actual] in "\n \t\r"
+            ):
                 think_content_start_pos_actual += 1
 
             think_content_end_pos = think_end_pos
-            while think_content_end_pos > think_content_start_pos_actual and decoded_text[think_content_end_pos - 1] in '\n \t\r':
+            while (
+                think_content_end_pos > think_content_start_pos_actual
+                and decoded_text[think_content_end_pos - 1] in "\n \t\r"
+            ):
                 think_content_end_pos -= 1
 
             # Token boundary mapping with minimal memory
@@ -245,13 +225,25 @@ def _create_thinking_answer_masks(
                 token_text = tokenizer.decode([response_tokens[i]])
                 accumulated_len += len(token_text)
 
-                if opening_tag_end_token == 0 and accumulated_len >= think_content_start_pos:
+                if (
+                    opening_tag_end_token == 0
+                    and accumulated_len >= think_content_start_pos
+                ):
                     opening_tag_end_token = i + 1
-                if thinking_content_start_token == 0 and accumulated_len >= think_content_start_pos_actual:
+                if (
+                    thinking_content_start_token == 0
+                    and accumulated_len >= think_content_start_pos_actual
+                ):
                     thinking_content_start_token = i + 1
-                if thinking_content_end_token == 0 and accumulated_len >= think_content_end_pos:
+                if (
+                    thinking_content_end_token == 0
+                    and accumulated_len >= think_content_end_pos
+                ):
                     thinking_content_end_token = i + 1
-                if closing_tag_end_token == 0 and accumulated_len >= think_end_pos_with_tag:
+                if (
+                    closing_tag_end_token == 0
+                    and accumulated_len >= think_end_pos_with_tag
+                ):
                     closing_tag_end_token = i + 1
                     break
 
@@ -259,8 +251,12 @@ def _create_thinking_answer_masks(
             if closing_tag_end_token == 0:
                 non_pad = sum(1 for t in response_tokens if t != pad_id)
                 avg_char_per_token = len(decoded_text) / max(1, non_pad)
-                closing_tag_end_token = min(seq_len, int(think_end_pos_with_tag / avg_char_per_token) + 1)
-                opening_tag_end_token = max(1, min(opening_tag_end_token, closing_tag_end_token))
+                closing_tag_end_token = min(
+                    seq_len, int(think_end_pos_with_tag / avg_char_per_token) + 1
+                )
+                opening_tag_end_token = max(
+                    1, min(opening_tag_end_token, closing_tag_end_token)
+                )
                 thinking_content_start_token = opening_tag_end_token
                 thinking_content_end_token = closing_tag_end_token
 
@@ -270,15 +266,24 @@ def _create_thinking_answer_masks(
             if thinking_includes_answer_lines > 0:
                 answer_portion = decoded_text[think_end_pos_with_tag:].strip()
                 if answer_portion:
-                    answer_lines = answer_portion.split('\n')
-                    last_n_lines = answer_lines[-thinking_includes_answer_lines:] if len(answer_lines) >= thinking_includes_answer_lines else answer_lines
+                    answer_lines = answer_portion.split("\n")
+                    last_n_lines = (
+                        answer_lines[-thinking_includes_answer_lines:]
+                        if len(answer_lines) >= thinking_includes_answer_lines
+                        else answer_lines
+                    )
 
                     if last_n_lines:
-                        last_n_lines_text = '\n'.join(last_n_lines)
+                        last_n_lines_text = "\n".join(last_n_lines)
                         last_lines_start_char = decoded_text.rfind(last_n_lines_text)
 
-                        if last_lines_start_char != -1 and last_lines_start_char >= think_end_pos_with_tag:
-                            target_char_pos = last_lines_start_char + len(last_n_lines_text)
+                        if (
+                            last_lines_start_char != -1
+                            and last_lines_start_char >= think_end_pos_with_tag
+                        ):
+                            target_char_pos = last_lines_start_char + len(
+                                last_n_lines_text
+                            )
                             accumulated_len = 0
 
                             for i in range(seq_len):
@@ -311,41 +316,55 @@ def _create_thinking_answer_masks(
             # Optional empty think pattern detection
             if log_empty_think_patterns:
                 answer_portion = decoded_text[think_end_pos_with_tag:]
-                if think_start_tag in answer_portion and re.search(r'<think>\s*</think>', answer_portion):
+                if think_start_tag in answer_portion and re.search(
+                    r"<think>\s*</think>", answer_portion
+                ):
                     empty_think_in_answer_count += 1
 
             thinking_lengths.append(thinking_token_count)
             answer_lengths.append(answer_token_count)
 
-            if answer_token_count < 10 and thinking_token_count > max_thinking_tokens * 0.8:
+            if (
+                answer_token_count < 10
+                and thinking_token_count > max_thinking_tokens * 0.8
+            ):
                 truncated_count += 1
 
             if thinking_token_count > max_thinking_tokens and batch_idx < 3:
-                logger.warning(f"Sample {batch_idx}: Excessive thinking - {thinking_token_count} tokens")
+                logger.warning(
+                    f"Sample {batch_idx}: Excessive thinking - {thinking_token_count} tokens"
+                )
 
         # Clear decoded text immediately
         del decoded_text
 
     # Compile statistics
     stats = {
-        'generation/thinking_tokens_avg': sum(thinking_lengths) / len(thinking_lengths) if thinking_lengths else 0,
-        'generation/answer_tokens_avg': sum(answer_lengths) / len(answer_lengths) if answer_lengths else 0,
-        'generation/thinking_tokens_max': max(thinking_lengths) if thinking_lengths else 0,
-        'generation/answer_tokens_min': min(answer_lengths) if answer_lengths else 0,
-        'generation/missing_answer_count': missing_answer_count,
-        'generation/missing_thinking_count': missing_thinking_count,
-        'generation/truncated_count': truncated_count,
+        "generation/thinking_tokens_avg": sum(thinking_lengths) / len(thinking_lengths)
+        if thinking_lengths
+        else 0,
+        "generation/answer_tokens_avg": sum(answer_lengths) / len(answer_lengths)
+        if answer_lengths
+        else 0,
+        "generation/thinking_tokens_max": max(thinking_lengths)
+        if thinking_lengths
+        else 0,
+        "generation/answer_tokens_min": min(answer_lengths) if answer_lengths else 0,
+        "generation/missing_answer_count": missing_answer_count,
+        "generation/missing_thinking_count": missing_thinking_count,
+        "generation/truncated_count": truncated_count,
     }
 
     if log_empty_think_patterns:
-        stats['generation/empty_think_in_answer_count'] = empty_think_in_answer_count
+        stats["generation/empty_think_in_answer_count"] = empty_think_in_answer_count
 
-    if stats['generation/answer_tokens_avg'] > 0:
-        stats['generation/thinking_answer_ratio'] = (
-            stats['generation/thinking_tokens_avg'] / stats['generation/answer_tokens_avg']
+    if stats["generation/answer_tokens_avg"] > 0:
+        stats["generation/thinking_answer_ratio"] = (
+            stats["generation/thinking_tokens_avg"]
+            / stats["generation/answer_tokens_avg"]
         )
     else:
-        stats['generation/thinking_answer_ratio'] = float('inf')
+        stats["generation/thinking_answer_ratio"] = float("inf")
 
     logger.debug(
         f"Masks: thinking={stats['generation/thinking_tokens_avg']:.1f}, "
@@ -353,8 +372,10 @@ def _create_thinking_answer_masks(
         f"ratio={stats['generation/thinking_answer_ratio']:.2f}:1"
     )
 
-    if stats['generation/thinking_answer_ratio'] > 4.0:
-        logger.warning(f"SEVERE IMBALANCE: ratio {stats['generation/thinking_answer_ratio']:.2f}:1")
+    if stats["generation/thinking_answer_ratio"] > 4.0:
+        logger.warning(
+            f"SEVERE IMBALANCE: ratio {stats['generation/thinking_answer_ratio']:.2f}:1"
+        )
     if missing_answer_count > 0:
         logger.warning(f"CRITICAL: {missing_answer_count}/{batch_size} missing answer")
 
@@ -392,10 +413,8 @@ def generate_rollouts_for_batch(
     if num_prompts == 0:
         return {}, 0.0, {}, {}
 
-    num_samples_per_prompt = config.trainer.num_rollout_samples
-    prompts_data_replicated = [
-        p for p in prompts_data for _ in range(num_samples_per_prompt)
-    ]
+    num_samples = config.trainer.num_rollout_samples
+    prompts_data_replicated = [p for p in prompts_data for _ in range(num_samples)]
     indices = [p["original_index"] for p in prompts_data_replicated]
 
     _, prompts_mx, max_prompt_len = build_rollout_batch(
@@ -415,16 +434,21 @@ def generate_rollouts_for_batch(
     for sample_idx in range(total_samples):
         # Create fresh cache
         from mlx_lm.models import cache as mlx_cache
-        sample_cache = None
 
-        sample_prompt = prompts_mx[sample_idx:sample_idx+1]
+        sample_cache = mlx_cache.make_prompt_cache(
+            model, max_kv_size=config.max_kv_size
+        )
+
+        sample_prompt = prompts_mx[sample_idx : sample_idx + 1]
         if sample_prompt.size == 0:
             del sample_cache
             continue
 
         # Initial forward pass
         out = model(sample_prompt.astype(mx.int64), cache=sample_cache)
-        next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(mx.float32)
+        next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(
+            mx.float32
+        )
         del out  # Immediate cleanup
 
         mcq_flag = prompts_data_replicated[sample_idx].get("is_mcq", False)
@@ -465,8 +489,13 @@ def generate_rollouts_for_batch(
                 hist_tokens.append(tok_val)
 
             # Continue generation
-            out = model(mx.array([[tok_val]], dtype=mx.int32).astype(mx.int64), cache=sample_cache)
-            next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(mx.float32)
+            out = model(
+                mx.array([[tok_val]], dtype=mx.int32).astype(mx.int64),
+                cache=sample_cache,
+            )
+            next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(
+                mx.float32
+            )
             del out
 
         # Aggressive cleanup
@@ -483,7 +512,9 @@ def generate_rollouts_for_batch(
     contexts = []
     for i in range(total_samples):
         # Decode on-demand
-        decoded_text = tokenizer.decode(responses_mx[i].tolist(), skip_special_tokens=False)
+        decoded_text = tokenizer.decode(
+            responses_mx[i].tolist(), skip_special_tokens=False
+        )
 
         context = reward_composer.context_cls(
             generated_text=decoded_text,
@@ -491,7 +522,9 @@ def generate_rollouts_for_batch(
             reference_completion=prompts_data_replicated[i]["ref_answer_str"],
             metadata={
                 **prompts_data_replicated[i],
-                'max_thinking_tokens': getattr(config.trainer, 'max_thinking_tokens', 80),
+                "max_thinking_tokens": getattr(
+                    config.trainer, "max_thinking_tokens", 80
+                ),
             },
             update_step=current_update,
         )
@@ -500,13 +533,15 @@ def generate_rollouts_for_batch(
 
     batch_rewards_dicts = reward_composer.batch_compute(contexts)
     rewards_total = mx.array([r["total"] for r in batch_rewards_dicts])
-    rewards_breakdown = {k: [r[k] for r in batch_rewards_dicts] for k in batch_rewards_dicts[0]}
+    rewards_breakdown = {
+        k: [r[k] for r in batch_rewards_dicts] for k in batch_rewards_dicts[0]
+    }
 
     del contexts  # Cleanup
 
     # Compute advantages
     grpo_algo = GRPOAlgorithm(config, model, ref_model)
-    advantages = grpo_algo.compute_advantages(rewards_total, num_samples_per_prompt)
+    advantages = grpo_algo.compute_advantages(rewards_total, num_samples)
 
     # Reference log probs
     full_seq = mx.concatenate([prompts_mx, responses_mx], axis=1)
@@ -529,7 +564,7 @@ def generate_rollouts_for_batch(
     mask_stats = {}
 
     use_dual_gradients = (
-        hasattr(config.trainer, 'use_dual_gradients')
+        hasattr(config.trainer, "use_dual_gradients")
         and config.trainer.use_dual_gradients
     )
 
@@ -556,8 +591,14 @@ def generate_rollouts_for_batch(
         for i in range(min(5, total_samples))
     ]
     _maybe_log_samples(
-        config, current_update, prompts_data_replicated[:5], decoded_for_logging,
-        {k: v[:5] for k, v in rewards_breakdown.items()}, "n/a", run_id, is_invalid_batch
+        config,
+        current_update,
+        prompts_data_replicated[:5],
+        decoded_for_logging,
+        {k: v[:5] for k, v in rewards_breakdown.items()},
+        "n/a",
+        run_id,
+        is_invalid_batch,
     )
     del decoded_for_logging
 
@@ -576,7 +617,7 @@ def generate_rollouts_for_batch(
 
     # Add reference tokens for SFT
     use_sft_hybrid = (
-        hasattr(config.trainer, 'use_sft_on_answer')
+        hasattr(config.trainer, "use_sft_on_answer")
         and config.trainer.use_sft_on_answer
     )
 
@@ -590,11 +631,11 @@ def generate_rollouts_for_batch(
 
                 if "prompt_len" in prompt_data:
                     ref_full = tokenizer.encode(ref_text)
-                    ref_resp = ref_full[prompt_data["prompt_len"]:]
+                    ref_resp = ref_full[prompt_data["prompt_len"] :]
                 elif "text" in prompt_data:
                     prompt_toks = tokenizer.encode(prompt_data["text"])
                     ref_full = tokenizer.encode(ref_text)
-                    ref_resp = ref_full[len(prompt_toks):]
+                    ref_resp = ref_full[len(prompt_toks) :]
                 else:
                     ref_resp = tokenizer.encode(ref_text)
 
@@ -612,19 +653,25 @@ def generate_rollouts_for_batch(
 
     # Compile metrics
     generation_metrics = {
-        'generation/avg_reward': mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0,
-        'generation/reward_std': mx.std(rewards_total).item() if rewards_total.size > 0 else 0.0,
-        'generation/num_samples': total_samples,
-        'generation/num_prompts': num_prompts,
-        'generation/samples_per_prompt': num_samples_per_prompt,
-        'generation/avg_response_length': float(mx.mean(mx.sum(response_mask, axis=1)).item()),
+        "generation/avg_reward": mx.mean(rewards_total).item()
+        if rewards_total.size > 0
+        else 0.0,
+        "generation/reward_std": mx.std(rewards_total).item()
+        if rewards_total.size > 0
+        else 0.0,
+        "generation/num_samples": total_samples,
+        "generation/num_prompts": num_prompts,
+        "generation/samples_per_prompt": num_samples,
+        "generation/avg_response_length": float(
+            mx.mean(mx.sum(response_mask, axis=1)).item()
+        ),
         **mask_stats,
     }
 
     for reward_name, reward_values in rewards_breakdown.items():
-        generation_metrics[f'rewards/{reward_name}'] = np.mean(reward_values)
+        generation_metrics[f"rewards/{reward_name}"] = np.mean(reward_values)
 
-    avg_reward = generation_metrics['generation/avg_reward']
+    avg_reward = generation_metrics["generation/avg_reward"]
     avg_breakdown = {k: np.mean(v) for k, v in rewards_breakdown.items()}
 
     # Return to training mode

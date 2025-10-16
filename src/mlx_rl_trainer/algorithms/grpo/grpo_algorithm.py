@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 def _extract_layer_number(param_path: str) -> Optional[int]:
     """Extract layer number from parameter path."""
     import re
-    match = re.search(r'\.layers\.(\d+)\.', param_path)
+
+    match = re.search(r"\.layers\.(\d+)\.", param_path)
     return int(match.group(1)) if match else None
 
 
@@ -64,18 +65,18 @@ def _mask_gradients_by_layers(
     - 'exclude_thinking': Zero out thinking layer gradients (DEFAULT)
     """
     # Get layer boundaries
-    thinking_start = getattr(config.trainer, 'thinking_layer_start', None)
-    thinking_end = getattr(config.trainer, 'thinking_layer_end', None)
-    answer_start = getattr(config.trainer, 'answer_layer_start', None)
-    answer_end = getattr(config.trainer, 'answer_layer_end', None)
+    thinking_start = getattr(config.trainer, "thinking_layer_start", None)
+    thinking_end = getattr(config.trainer, "thinking_layer_end", None)
+    answer_start = getattr(config.trainer, "answer_layer_start", None)
+    answer_end = getattr(config.trainer, "answer_layer_end", None)
 
     # If layer boundaries not specified or mode is 'all', return gradients as-is
-    if sft_mode == 'all' or thinking_start is None or answer_start is None:
+    if sft_mode == "all" or thinking_start is None or answer_start is None:
         return grads
 
     # Get weights for weighted mode
-    thinking_weight = getattr(config.trainer, 'sft_thinking_weight', 0.0)
-    answer_weight = getattr(config.trainer, 'sft_answer_weight', 1.0)
+    thinking_weight = getattr(config.trainer, "sft_thinking_weight", 0.0)
+    answer_weight = getattr(config.trainer, "sft_answer_weight", 1.0)
 
     # Process gradients
     masked_grads = {}
@@ -87,13 +88,13 @@ def _mask_gradients_by_layers(
             masked_grads[key] = grad
         else:
             # Layer-specific parameters
-            if sft_mode == 'answer_only':
+            if sft_mode == "answer_only":
                 if answer_start <= layer_num <= answer_end:
                     masked_grads[key] = grad
                 else:
                     masked_grads[key] = mx.zeros_like(grad)
 
-            elif sft_mode == 'weighted':
+            elif sft_mode == "weighted":
                 if thinking_start <= layer_num <= thinking_end:
                     masked_grads[key] = grad * thinking_weight
                 elif answer_start <= layer_num <= answer_end:
@@ -101,7 +102,7 @@ def _mask_gradients_by_layers(
                 else:
                     masked_grads[key] = grad
 
-            elif sft_mode == 'exclude_thinking':
+            elif sft_mode == "exclude_thinking":
                 if thinking_start <= layer_num <= thinking_end:
                     masked_grads[key] = mx.zeros_like(grad)
                 else:
@@ -123,7 +124,9 @@ class GRPOAlgorithm:
     def compute_advantages(self, rewards_flat, samples_per_prompt):
         """Compute advantages with optional baseline normalization."""
         if samples_per_prompt <= 1:
-            return (rewards_flat - mx.mean(rewards_flat)) / (mx.std(rewards_flat) + 1e-8)
+            return (rewards_flat - mx.mean(rewards_flat)) / (
+                mx.std(rewards_flat) + 1e-8
+            )
 
         batch_size = rewards_flat.shape[0] // samples_per_prompt
         rewards_reshaped = rewards_flat.reshape(batch_size, samples_per_prompt)
@@ -138,8 +141,8 @@ class GRPOAlgorithm:
         zero_val = 0.0
 
         def compute_loss(actor_model):
-            tokens_key = 'tokens'
-            mask_key = 'response_mask'
+            tokens_key = "tokens"
+            mask_key = "response_mask"
 
             logits = actor_model(A[tokens_key])
             if isinstance(logits, tuple):
@@ -147,17 +150,19 @@ class GRPOAlgorithm:
             logits = logits.astype(mx.float32)
 
             offset = A[tokens_key].shape[1] - A[mask_key].shape[1]
-            shifted_logits = logits[:, offset-1:-1, :]
+            shifted_logits = logits[:, offset - 1 : -1, :]
             target_tokens = A[tokens_key][:, offset:]
 
             log_probs = nn.log_softmax(shifted_logits, axis=-1)
-            gathered_log_probs = mx.take_along_axis(log_probs, target_tokens[..., None], axis=-1).squeeze(-1)
+            gathered_log_probs = mx.take_along_axis(
+                log_probs, target_tokens[..., None], axis=-1
+            ).squeeze(-1)
 
-            log_ratio = gathered_log_probs - A['ref_log_probs']
+            log_ratio = gathered_log_probs - A["ref_log_probs"]
             kl_term = mx.exp(log_ratio) - 1 - log_ratio
             kl_penalty = kl_term * A[mask_key]
 
-            advantages_expanded = A['advantages'][:, None]
+            advantages_expanded = A["advantages"][:, None]
             policy_loss_term = -log_ratio * advantages_expanded * A[mask_key]
 
             total_loss_per_token = policy_loss_term + self.beta * kl_penalty
@@ -166,10 +171,7 @@ class GRPOAlgorithm:
             kl_div = mx.sum(kl_penalty) / mx.sum(A[mask_key])
             policy_loss = mx.sum(policy_loss_term) / mx.sum(A[mask_key])
 
-            return loss, {
-                'kl_divergence': kl_div,
-                'policy_loss': policy_loss
-            }
+            return loss, {"kl_divergence": kl_div, "policy_loss": policy_loss}
 
         try:
             loss_grad_fn = nn.value_and_grad(self.actor, compute_loss)
@@ -178,7 +180,11 @@ class GRPOAlgorithm:
             return loss, grads, metrics_dict
         except Exception as e:
             logger.error(f"Error during loss computation: {e}", exc_info=True)
-            return mx.array(zero_val), {}, {'kl_divergence': zero_val, 'policy_loss': zero_val}
+            return (
+                mx.array(zero_val),
+                {},
+                {"kl_divergence": zero_val, "policy_loss": zero_val},
+            )
 
     def calculate_dual_gradient_loss(self, rollout_batch, full_config, pad_token_id):
         """
@@ -194,19 +200,25 @@ class GRPOAlgorithm:
         A = rollout_batch
 
         # Check if we have the necessary masks
-        has_thinking_mask = 'thinking_mask' in A
-        has_answer_mask = 'answer_mask' in A
+        has_thinking_mask = "thinking_mask" in A
+        has_answer_mask = "answer_mask" in A
 
         # Fallback to original method if masks not present
         if not has_thinking_mask or not has_answer_mask:
-            logger.warning("Thinking/answer masks not found in batch. Falling back to standard gradient computation.")
-            loss, grads, metrics = self.calculate_loss_and_grads(A, full_config, pad_token_id)
+            logger.warning(
+                "Thinking/answer masks not found in batch. Falling back to standard gradient computation."
+            )
+            loss, grads, metrics = self.calculate_loss_and_grads(
+                A, full_config, pad_token_id
+            )
             return loss, grads, loss, grads, metrics
 
-        def compute_loss_with_mask_and_metrics(actor_model, mask_type, compute_metrics=False):
+        def compute_loss_with_mask_and_metrics(
+            actor_model, mask_type, compute_metrics=False
+        ):
             """Compute loss using only specific tokens (thinking or answer)."""
-            tokens_key = 'tokens'
-            response_mask_key = 'response_mask'
+            tokens_key = "tokens"
+            response_mask_key = "response_mask"
 
             logits = actor_model(A[tokens_key])
             if isinstance(logits, tuple):
@@ -214,13 +226,15 @@ class GRPOAlgorithm:
             logits = logits.astype(mx.float32)
 
             offset = A[tokens_key].shape[1] - A[response_mask_key].shape[1]
-            shifted_logits = logits[:, offset-1:-1, :]
+            shifted_logits = logits[:, offset - 1 : -1, :]
             target_tokens = A[tokens_key][:, offset:]
 
             log_probs = nn.log_softmax(shifted_logits, axis=-1)
-            gathered_log_probs = mx.take_along_axis(log_probs, target_tokens[..., None], axis=-1).squeeze(-1)
+            gathered_log_probs = mx.take_along_axis(
+                log_probs, target_tokens[..., None], axis=-1
+            ).squeeze(-1)
 
-            log_ratio = gathered_log_probs - A['ref_log_probs']
+            log_ratio = gathered_log_probs - A["ref_log_probs"]
             kl_term = mx.exp(log_ratio) - 1 - log_ratio
 
             # Apply the thinking or answer mask
@@ -228,7 +242,7 @@ class GRPOAlgorithm:
             combined_mask = A[response_mask_key] * token_mask
 
             kl_penalty = kl_term * combined_mask
-            advantages_expanded = A['advantages'][:, None]
+            advantages_expanded = A["advantages"][:, None]
             policy_loss_term = -log_ratio * advantages_expanded * combined_mask
 
             total_loss_per_token = policy_loss_term + self.beta * kl_penalty
@@ -240,17 +254,21 @@ class GRPOAlgorithm:
             if compute_metrics:
                 kl_div = mx.sum(kl_penalty) / (mask_sum + 1e-8)
                 policy_loss = mx.sum(policy_loss_term) / (mask_sum + 1e-8)
-                return loss, {'kl_divergence': kl_div, 'policy_loss': policy_loss}
+                return loss, {"kl_divergence": kl_div, "policy_loss": policy_loss}
 
             return loss
 
         # Compute thinking-only gradients
-        thinking_loss_fn = lambda model: compute_loss_with_mask_and_metrics(model, 'thinking_mask', False)
+        thinking_loss_fn = lambda model: compute_loss_with_mask_and_metrics(
+            model, "thinking_mask", False
+        )
         thinking_grads_fn = nn.value_and_grad(self.actor, thinking_loss_fn)
         thinking_loss, thinking_grads = thinking_grads_fn(self.actor)
 
         # Compute answer-only gradients AND metrics in one pass
-        answer_loss_fn = lambda model: compute_loss_with_mask_and_metrics(model, 'answer_mask', True)
+        answer_loss_fn = lambda model: compute_loss_with_mask_and_metrics(
+            model, "answer_mask", True
+        )
         answer_grads_fn = nn.value_and_grad(self.actor, answer_loss_fn)
         (answer_loss, metrics), answer_grads = answer_grads_fn(self.actor)
 
@@ -259,7 +277,9 @@ class GRPOAlgorithm:
 
         return thinking_loss, thinking_grads, answer_loss, answer_grads, metrics_dict
 
-    def calculate_sft_loss_and_grads(self, rollout_batch, reference_tokens, full_config, pad_token_id):
+    def calculate_sft_loss_and_grads(
+        self, rollout_batch, reference_tokens, full_config, pad_token_id
+    ):
         """
         Compute SFT (supervised fine-tuning) loss and gradients with layer-specific control.
 
@@ -286,32 +306,38 @@ class GRPOAlgorithm:
         A = rollout_batch
 
         # Get SFT mode
-        sft_mode = getattr(full_config.trainer, 'sft_mode', 'all')
+        sft_mode = getattr(full_config.trainer, "sft_mode", "all")
 
         # Log SFT mode on first call
-        if not hasattr(self, '_sft_mode_logged'):
+        if not hasattr(self, "_sft_mode_logged"):
             logger.info(f"SFT layer control mode: {sft_mode}")
-            if sft_mode == 'exclude_thinking':
-                logger.info("System 2 (thinking) layers will NOT receive SFT gradients - only RL signal")
-            elif sft_mode == 'answer_only':
+            if sft_mode == "exclude_thinking":
+                logger.info(
+                    "System 2 (thinking) layers will NOT receive SFT gradients - only RL signal"
+                )
+            elif sft_mode == "answer_only":
                 logger.info("Only System 1 (answer) layers will receive SFT gradients")
-            elif sft_mode == 'weighted':
-                thinking_w = getattr(full_config.trainer, 'sft_thinking_weight', 0.0)
-                answer_w = getattr(full_config.trainer, 'sft_answer_weight', 1.0)
+            elif sft_mode == "weighted":
+                thinking_w = getattr(full_config.trainer, "sft_thinking_weight", 0.0)
+                answer_w = getattr(full_config.trainer, "sft_answer_weight", 1.0)
                 logger.info(f"Weighted SFT: thinking={thinking_w}, answer={answer_w}")
             self._sft_mode_logged = True
 
         # Check if we have answer mask
-        if 'answer_mask' not in A:
-            logger.warning("Answer mask not found for SFT. Falling back to response_mask.")
-            answer_mask = A.get('response_mask', mx.ones_like(reference_tokens, dtype=mx.float32))
+        if "answer_mask" not in A:
+            logger.warning(
+                "Answer mask not found for SFT. Falling back to response_mask."
+            )
+            answer_mask = A.get(
+                "response_mask", mx.ones_like(reference_tokens, dtype=mx.float32)
+            )
         else:
-            answer_mask = A['answer_mask']
+            answer_mask = A["answer_mask"]
 
         def compute_sft_loss(actor_model):
             """Compute cross-entropy loss on answer tokens only."""
-            tokens_key = 'tokens'
-            response_mask_key = 'response_mask'
+            tokens_key = "tokens"
+            response_mask_key = "response_mask"
 
             # Get logits for full sequence
             logits = actor_model(A[tokens_key])
@@ -323,19 +349,32 @@ class GRPOAlgorithm:
             offset = A[tokens_key].shape[1] - A[response_mask_key].shape[1]
 
             # Shift logits for next-token prediction: logits[t] predicts token[t+1]
-            response_logits = logits[:, offset-1:-1, :]  # [batch, response_len, vocab]
+            response_logits = logits[
+                :, offset - 1 : -1, :
+            ]  # [batch, response_len, vocab]
 
             # Reference tokens are already response-only, shift for next-token prediction
             target_tokens = reference_tokens[:, 1:]  # [batch, response_len-1]
 
             # Answer mask also needs to exclude first token to align with targets
-            current_answer_mask = answer_mask[:, 1:] if answer_mask.shape[1] > 1 else answer_mask
+            current_answer_mask = (
+                answer_mask[:, 1:] if answer_mask.shape[1] > 1 else answer_mask
+            )
 
             # Verify shapes match and truncate if needed
-            min_len = min(response_logits.shape[1], target_tokens.shape[1], current_answer_mask.shape[1])
+            min_len = min(
+                response_logits.shape[1],
+                target_tokens.shape[1],
+                current_answer_mask.shape[1],
+            )
 
-            if response_logits.shape[1] != target_tokens.shape[1] or response_logits.shape[1] != current_answer_mask.shape[1]:
-                logger.debug(f"Aligning SFT shapes: logits {response_logits.shape[1]} vs targets {target_tokens.shape[1]} vs mask {current_answer_mask.shape[1]} -> {min_len}")
+            if (
+                response_logits.shape[1] != target_tokens.shape[1]
+                or response_logits.shape[1] != current_answer_mask.shape[1]
+            ):
+                logger.debug(
+                    f"Aligning SFT shapes: logits {response_logits.shape[1]} vs targets {target_tokens.shape[1]} vs mask {current_answer_mask.shape[1]} -> {min_len}"
+                )
                 response_logits = response_logits[:, :min_len, :]
                 target_tokens = target_tokens[:, :min_len]
                 current_answer_mask = current_answer_mask[:, :min_len]
@@ -343,9 +382,7 @@ class GRPOAlgorithm:
             # Compute cross-entropy loss
             log_probs = nn.log_softmax(response_logits, axis=-1)
             gathered_log_probs = mx.take_along_axis(
-                log_probs,
-                target_tokens[..., None],
-                axis=-1
+                log_probs, target_tokens[..., None], axis=-1
             ).squeeze(-1)
 
             # Apply answer mask - only compute loss on answer tokens
@@ -355,7 +392,7 @@ class GRPOAlgorithm:
             mask_sum = mx.sum(current_answer_mask)
             loss = mx.sum(masked_log_probs) / (mask_sum + 1e-8)
 
-            return loss, {'sft_loss': loss}
+            return loss, {"sft_loss": loss}
 
         try:
             loss_grad_fn = nn.value_and_grad(self.actor, compute_sft_loss)
@@ -368,4 +405,85 @@ class GRPOAlgorithm:
             return loss, grads, metrics_dict
         except Exception as e:
             logger.error(f"Error during SFT loss computation: {e}", exc_info=True)
-            return mx.array(0.0), {}, {'sft_loss': 0.0}
+            return mx.array(0.0), {}, {"sft_loss": 0.0}
+
+
+def grpo_loss(
+    actor_model: nn.Module,
+    ref_model: nn.Module,
+    tokens: mx.array,
+    log_probs_ref: mx.array,
+    advantages: mx.array,
+    returns: mx.array,
+    attention_mask: mx.array,
+    thinking_mask: mx.array,
+    answer_mask: mx.array,
+    grpo_beta: float,
+    sft_think_weight: float,
+    sft_answer_weight: float,
+    full_config: ExperimentConfig,
+) -> Tuple[mx.array, Tuple[mx.array, mx.array, Dict[str, mx.array]]]:
+    """Computes the GRPO loss, including RL and SFT components."""
+    # RL Loss (PPO-like clipped objective)
+    logits_actor = actor_model(tokens)
+    log_probs_actor = nn.log_softmax(logits_actor, axis=-1)
+    gathered_log_probs_actor = mx.take_along_axis(
+        log_probs_actor, tokens[..., None], axis=-1
+    ).squeeze(-1)
+
+    ratio = mx.exp(gathered_log_probs_actor - log_probs_ref)
+    clipped_ratio = mx.clip(
+        ratio,
+        1 - full_config.trainer.ppo_clip_param,
+        1 + full_config.trainer.ppo_clip_param,
+    )
+
+    # Policy loss
+    policy_loss1 = -advantages * ratio
+    policy_loss2 = -advantages * clipped_ratio
+    policy_loss = mx.maximum(policy_loss1, policy_loss2)
+
+    # Value loss (if using value function, not directly in GRPO here)
+    # For now, we'll use the returns as the target for a simple value loss if needed
+    # value_loss = 0.5 * mx.mean((actor_model.value(tokens) - returns)**2)
+
+    # KL divergence penalty
+    kl_div = (
+        (ratio - 1) - gathered_log_probs_actor + log_probs_ref
+    )  # This is actually (ratio - 1) - log_ratio
+    kl_penalty = grpo_beta * kl_div
+
+    # Combine RL loss components
+    rl_loss_per_token = policy_loss + kl_penalty
+    rl_loss = mx.sum(rl_loss_per_token * attention_mask) / mx.sum(attention_mask)
+
+    # SFT Loss
+    sft_loss = mx.array(0.0)
+    if sft_think_weight > 0 or sft_answer_weight > 0:
+        # Assuming `tokens` already contains the reference completion for SFT
+        # and `attention_mask` covers the relevant parts.
+        # For simplicity, let's assume SFT targets are `tokens` itself for now.
+        # In a real scenario, `reference_completion_tokens` would be passed.
+        sft_logits = actor_model(tokens)
+        sft_log_probs = nn.log_softmax(sft_logits, axis=-1)
+        sft_gathered_log_probs = mx.take_along_axis(
+            sft_log_probs, tokens[..., None], axis=-1
+        ).squeeze(-1)
+
+        # Apply SFT weights based on thinking/answer masks
+        sft_loss_think = -sft_gathered_log_probs * thinking_mask
+        sft_loss_answer = -sft_gathered_log_probs * answer_mask
+
+        sft_loss = sft_think_weight * (
+            mx.sum(sft_loss_think) / (mx.sum(thinking_mask) + 1e-8)
+        ) + sft_answer_weight * (mx.sum(sft_loss_answer) / (mx.sum(answer_mask) + 1e-8))
+
+    total_loss = rl_loss + sft_loss
+
+    metrics = {
+        "reward_mean": mx.mean(returns),
+        "kl_divergence": mx.mean(kl_div * attention_mask)
+        / (mx.sum(attention_mask) + 1e-8),
+    }
+
+    return total_loss, (rl_loss, sft_loss, metrics)

@@ -1,9 +1,9 @@
 """
 Data pipeline management: Loading, preprocessing, and efficient batching.
 """
-import json, logging, random, re, asyncio
+import json, logging, random, re, asyncio, gc, importlib.util
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Iterator
+from typing import Any, Callable, Dict, List, Optional, Iterator, AsyncIterator
 from datasets import Dataset, Features, Value, load_dataset
 from tqdm.auto import tqdm
 from mlx_rl_trainer.core.config import (
@@ -19,17 +19,24 @@ from mlx_rl_trainer.utils.text_utils import (
     apply_chat_template_wrapper,
     extract_think_region,
     _looks_garbage,
-    clean_completion_string
+    clean_completion_string,
 )
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
 import aiofiles
+import gc
 
 logger = logging.getLogger(__name__)
 
 
-
-
+def _aggressive_memory_cleanup():
+    """Aggressively free memory."""
+    try:
+        mx.metal.clear_cache()
+    except:
+        pass
+    mx.clear_cache()
+    gc.collect()
 
 
 def _normalize_record(
@@ -48,7 +55,7 @@ def _normalize_record(
     completion = _s(
         obj.get(completion_key, obj.get("completion", obj.get("answer", "")))
     )
-    system = "" #_s(obj.get("system", system_prompt_default))
+    system = ""  # _s(obj.get("system", system_prompt_default))
 
     gen_config_default = GenerationConfig()
     completion_cleaned = clean_completion_string(completion)
@@ -113,70 +120,150 @@ class DatasetManager:
     def set_system_prompt(self, system_prompt: str):
         self.system_prompt = system_prompt
 
-    async def _async_read_jsonl(self, path: Path) -> List[Dict[str, Any]]:
+    async def _async_read_jsonl(
+        self,
+        path: Path,
+        chunk_size: int = 10000,
+        max_rows: Optional[int] = None,
+    ) -> AsyncIterator[List[Dict[str, Any]]]:
+        """
+        Asynchronously reads a JSONL file, yielding chunks of parsed data.
+
+        Args:
+            path: The path to the JSONL file.
+            chunk_size: The number of lines to buffer in each yielded chunk.
+            max_rows: The maximum total number of rows to read. If None, all
+                      rows are read.
+        """
         if not path.is_file():
             raise FileNotFoundError(f"Data file not found: {path}")
-        data = []
+
+        chunk = []
+        rows_read = 0
         async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
             async for line in f:
+                # Stop if the row limit has been reached
+                if max_rows is not None and rows_read >= max_rows:
+                    break
+
                 if line.strip():
                     try:
-                        data.append(json.loads(line.strip()))
+                        chunk.append(json.loads(line.strip()))
+                        rows_read += 1  # Increment counter after a successful read
+
+                        if len(chunk) >= chunk_size:
+                            yield chunk
+                            chunk = []
                     except json.JSONDecodeError:
                         logger.warning(
                             f"Malformed JSONL line in {path.name}, skipping."
                         )
-        return data
+
+        # Yield the final, potentially smaller, chunk
+        if chunk:
+            yield chunk
 
     async def load_datasets(self, force_reload: bool = False):
         if self._is_loaded and not force_reload:
             return
-        loop = asyncio.get_event_loop()
 
-        async def load_raw_data_for_split(
-            path: Path, split_name: str
-        ) -> List[Dict[str, Any]]:
+        validation_fn = self._load_validation_fn()
+
+        async def process_chunk(chunk, split_name):
+            return self._process_raw_to_dataset(chunk, split_name, validation_fn)
+
+        async def load_and_process(path, split_name):
             if not path:
-                return []
+                return None
+
+            all_datasets = []
             if path.suffix.lower() in [".jsonl", ".ndjson"]:
-                return await self._async_read_jsonl(path)
-            elif path.suffix.lower() == ".json":
-                raw_content = await aiofiles.open(
-                    path, mode="r", encoding="utf-8"
-                ).read()
-                return json.loads(raw_content)
+                async for chunk in self._async_read_jsonl(path):
+                    processed_dataset = await process_chunk(chunk, split_name)
+                    if processed_dataset:
+                        all_datasets.append(processed_dataset)
             else:
-                hf_split_name = "train" if split_name == "train" else "test"
-                dataset_obj = await asyncio.to_thread(
-                    load_dataset, path.as_posix(), split=hf_split_name
-                )
-                return (
-                    dataset_obj.to_list()
-                    if hasattr(dataset_obj, "to_list")
-                    else list(dataset_obj)
-                )
+                # Handle other file types as before, assuming they fit in memory
+                raw_data = await self._load_raw_data(path, split_name)
+                if raw_data:
+                    processed_dataset = await process_chunk(raw_data, split_name)
+                    if processed_dataset:
+                        all_datasets.append(processed_dataset)
 
-        raw_train_data = await load_raw_data_for_split(self.config.train_path, "train")
-        raw_val_data = (
-            await load_raw_data_for_split(self.config.val_path, "val")
-            if self.config.val_path
-            else []
-        )
+            if not all_datasets:
+                return None
 
-        self._train_dataset = self._process_raw_to_dataset(raw_train_data, "train")
-        self._val_dataset = (
-            self._process_raw_to_dataset(raw_val_data, "val") if raw_val_data else None
-        )
+            from datasets import concatenate_datasets
+
+            return concatenate_datasets(all_datasets)
+
+        self._train_dataset = await load_and_process(self.config.train_path, "train")
+        self._val_dataset = await load_and_process(self.config.val_path, "val")
+
         self._is_loaded = True
         logger.info(
-            f"Datasets loaded. Train: {len(self._train_dataset)}, Val: {len(self._val_dataset) if self._val_dataset else 0}"
+            f"Datasets loaded. Train: {len(self._train_dataset) if self._train_dataset else 0}, Val: {len(self._val_dataset) if self._val_dataset else 0}"
         )
 
+    def _load_validation_fn(self) -> Optional[Callable[[Dict], bool]]:
+        if not self.config.data_validation_script_path:
+            return None
+
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "data_validator", self.config.data_validation_script_path
+            )
+            validator_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(validator_module)
+
+            if hasattr(validator_module, "validate_sample") and callable(
+                validator_module.validate_sample
+            ):
+                logger.info(
+                    f"Loaded data validation function from {self.config.val_path}"
+                )
+                return validator_module.validate_sample
+            else:
+                logger.warning(
+                    f"`validate_sample` function not found in {self.config.val_path}"
+                )
+                return None
+        except Exception as e:
+            logger.error(f"Failed to load data validation script: {e}", exc_info=True)
+            return None
+
+    async def _load_raw_data(self, path: Path, split_name: str) -> List[Dict[str, Any]]:
+        if path.suffix.lower() == ".json":
+            async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
+                raw_content = await f.read()
+            return json.loads(raw_content)
+        else:
+            from datasets import load_dataset
+
+            hf_split_name = "train" if split_name == "train" else "test"
+            dataset_obj = await asyncio.to_thread(
+                load_dataset, path.as_posix(), split=hf_split_name
+            )
+            return (
+                dataset_obj.to_list()
+                if hasattr(dataset_obj, "to_list")
+                else list(dataset_obj)
+            )
+
     def _process_raw_to_dataset(
-        self, raw_data: List[Dict[str, Any]], split_name: str
-    ) -> Dataset:
+        self,
+        raw_data: List[Dict[str, Any]],
+        split_name: str,
+        validation_fn: Optional[Callable[[Dict], bool]],
+    ) -> Optional[Dataset]:
         normalized_records = []
         for obj in tqdm(raw_data, desc=f"Normalizing {split_name} data"):
+            if validation_fn and not validation_fn(obj):
+                if self.config.data_validation_strict_mode:
+                    continue
+                else:
+                    obj["is_invalid_sample"] = True
+
             rec = _normalize_record(
                 obj,
                 self.config.dataset_prompt_key,
@@ -245,6 +332,7 @@ class DatasetManager:
                     yield {
                         "prompts_data": prompts_data,
                         "prompts_mx": prompts_mx,
+                        "dataset": dataset,
                     }
 
         return batch_generator()
