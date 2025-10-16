@@ -260,6 +260,16 @@ class GenerationConfig(BaseModel):
     min_answer_tokens_mcq: int = Field(1)
     mcq_answer_end_bias: float = Field(9.0)
 
+    # MCQ Specific Biases
+    hard_mask_mcq_first_token: bool = Field(True)
+    mcq_letter_lift: float = Field(8.0)
+    mcq_ban_first_bias: float = Field(-14.0)
+    nonmcq_ban_first_bias: float = Field(-12.0)
+    mcq_close_after_k: int = Field(1)
+    min_answer_tokens: int = Field(8)
+    min_answer_tokens_mcq: int = Field(1)
+    mcq_answer_end_bias: float = Field(9.0)
+
     ban_phrases_for_bias: List[str] = Field(
         default_factory=lambda: [
             "<think>\\n<|im_start|>",

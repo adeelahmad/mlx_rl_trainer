@@ -161,7 +161,7 @@ async def _async_main():
         base_model_path=config.model.model_path,
     )
     if args.resume:
-        checkpoint_manager.resume_from_path = Path(args.resume)
+        checkpoint_manager.resume_from_pathtra = Path(args.resume)
 
     metrics_logger = MetricsLogger(config, run_id)
 

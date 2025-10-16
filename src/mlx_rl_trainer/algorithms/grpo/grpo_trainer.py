@@ -1,295 +1,505 @@
-# file_path: mlx_rl_trainer/src/mlx_rl_trainer/algorithms/grpo/grpo_trainer.py
-# revision_no: 002
-# goals_of_writing_code_block: Implement the GRPO (Gradient-based Reward Policy Optimization) trainer with advanced memory and performance optimizations.
-# type_of_code_response: replace
-"""GRPO (Gradient-based Reward Policy Optimization) Trainer.
-
-Key optimizations:
-1.  **Dual Gradient Accumulation**: Accumulates separate gradients for thinking and answer
-    portions of a trajectory, allowing for targeted updates.
-2.  **Hybrid RL+SFT Training**: Combines RL loss with a Supervised Fine-Tuning (SFT)
-    loss, weighted by `sft_think_loss_weight` and `sft_answer_loss_weight`.
-3.  **Adaptive SFT Weights**: Dynamically adjusts SFT loss weights based on KL
-    divergence to prevent model collapse (`adaptive_sft_weights`).
-4.  **Adaptive Layer-wise Gradient Scaling**: Boosts gradients for specific layer bands
-    (e.g., answer-focused layers) to accelerate learning (`boost_answer_grad_layers`).
-5.  **Constrained Thinking**: Enforces `min_think_tokens` and `max_think_tokens` during
-    rollout generation.
-"""
-
+# -----------#
+# <FILE name="./grpo_trainer.py">
+# Complete File with Dual Gradient (Thinking vs Answer) Training Support
+# Now includes HYBRID RL+SFT mode (Approach 2)
+#
+# FIXES APPLIED:
+# 1. Smart default layer ranges - answer layers start AFTER thinking layers (no overlap)
+# 2. Configuration validation with helpful error messages
+# 3. Clear logging of layer configuration on first dual gradient step
+# 4. Detection and warning when layers overlap
+# 5. Hybrid RL+SFT mode for answer tokens to prevent drift
+#
+# TRAINING MODES:
+# 1. Standard GRPO: Single RL gradient to all layers
+# 2. Dual Gradient: Thinking (RL) and Answer (RL) to separate layers
+# 3. Hybrid (Approach 2): Thinking (RL only) + Answer (RL + SFT combined)
+#
+# HYBRID MODE (Recommended):
+# Prevents answer degradation during RL by mixing supervised learning:
+#   - Thinking tokens: RL only → layers 22-30 (learn from rewards)
+#   - Answer tokens: RL + SFT → layers 31-36 (learn from rewards + references)
+#
+# CONFIGURATION EXAMPLES:
+#
+# Basic Dual Gradient (RL only):
+# trainer:
+#   use_dual_gradients: true
+#   thinking_layer_start: 22
+#   thinking_layer_end: 30
+#   answer_layer_end: 36
+#   answer_gradient_weight: 2.0
+#
+# Hybrid RL+SFT (Recommended):
+# trainer:
+#   use_dual_gradients: true
+#   use_sft_on_answer: true      # Enable SFT on answer tokens
+#   sft_weight: 0.1               # 10% SFT, 90% RL (prevents drift)
+#   thinking_layer_start: 22
+#   thinking_layer_end: 30
+#   answer_layer_end: 36
+#   answer_gradient_weight: 2.0
+#
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
+import time
+import gc
+import json
+from typing import Dict, Any, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
+import mlx.optimizers as optim
 import numpy as np
-import time
-
-from mlx_rl_trainer.core.trainer import BaseTrainer, EvaluationMetrics, TrainingMetrics
-from mlx_rl_trainer.core.model_manager import ModelManager
-from mlx_rl_trainer.core.config import ExperimentConfig
-from mlx_rl_trainer.core.checkpoint_manager import CheckpointManager
-from mlx_rl_trainer.data.dataset_manager import DatasetManager
-from mlx_rl_trainer.generation.generator import generate_rollouts_for_batch
-from mlx_rl_trainer.monitoring.metrics_logger import _maybe_log_samples
-from mlx_rl_trainer.rewards.base_reward import RewardComposer
+from mlx.utils import tree_flatten, tree_map
+from mlx_lm.tuner.utils import build_schedule
+from mlx_lm.utils import load_config as mlx_lm_load_config
+from mlx_lm.tuner.trainer import grad_checkpoint
+from mlx_rl_trainer.core.trainer import BaseTrainer, TrainingMetrics, EvaluationMetrics
 from mlx_rl_trainer.utils.mlx_utils import (
-    mask_gradients_by_layer,
-    combine_gradients,
-    get_grad_norm,
+    _maybe_clip_grad_norm,
+    mask_grads_to_layer_band,
+    scale_grads_by_band,
 )
-from .grpo_algorithm import grpo_loss
+from mlx_rl_trainer.monitoring.metrics_logger import _maybe_log_samples
+from mlx_rl_trainer.generation.generator import generate_rollouts_for_batch
+from .grpo_algorithm import GRPOAlgorithm
 
 logger = logging.getLogger(__name__)
 
 
 class GRPOTrainer(BaseTrainer):
-    """GRPO Trainer with memory and performance optimizations."""
-
-    def __init__(
-        self,
-        config: ExperimentConfig,
-        model_manager: ModelManager,
-        data_manager: DatasetManager,
-        checkpoint_manager: CheckpointManager,
-        reward_composer: RewardComposer,
-        paged_kv_cache: Optional[Any] = None,
-        metrics_logger: Optional[Any] = None,
-    ):
-        super().__init__(
-            config,
-            model_manager,
-            data_manager,
-            checkpoint_manager,
-            reward_composer,
-            paged_kv_cache,
-            metrics_logger,
-        )
-
-    def _setup(self) -> Tuple[int, int]:
+    def _setup(self):
+        """Initialize models, optimizer, and load checkpoints."""
         self.actor_model, self.tokenizer = self.model_manager.load_model(
-            model_path=self.config.model.ref_model_path,
-            type_name="actor",
+            self.config.model.model_path,
+            "actor",
             is_trainable=True,
             apply_lora=self.config.model.use_lora,
             lora_config=self.config.model.model_dump(),
         )
+
         self.ref_model, _ = self.model_manager.load_model(
-            model_path=self.config.model.ref_model_path,
-            type_name="reference",
-            is_trainable=False,
+            self.config.model.ref_model_path, "reference", is_trainable=False
         )
 
-        self.optimizer, self.lr_scheduler = self.model_manager.create_optimizer(
-            self.actor_model, self.config.trainer
+        self.grpo_algorithm = GRPOAlgorithm(
+            self.config, self.actor_model, self.ref_model
         )
 
-        self.loss_and_grad_fn = nn.value_and_grad(self.actor_model, grpo_loss)
+        self.optimizer = optim.AdamW(
+            learning_rate=self.config.trainer.learning_rate,
+            betas=(
+                self.config.trainer.optimizer_beta1,
+                self.config.trainer.optimizer_beta2,
+            ),
+            weight_decay=self.config.trainer.optimizer_weight_decay,
+        )
 
-        resume_step, resume_epoch = self.checkpoint_manager.resume_from_checkpoint(
+        self.lr_scheduler = build_schedule(self.config.trainer.lr_schedule_config)
+
+        num_updates, state = self.checkpoint_manager.load_latest_state(
             self.actor_model, self.optimizer
         )
-        return resume_step, resume_epoch
 
-    def train_step(
-        self, rollout_batch: Dict[str, mx.array], update_step: int
-    ) -> Tuple[TrainingMetrics, Dict[str, mx.array], Dict[str, Any]]:
-        """Executes a single training step including forward/backward passes and gradient updates."""
-        start_time = time.process_time()
+        # Apply gradient checkpointing if enabled
+        if self.config.use_grad_checkpointing:
+            logging.info("Applying gradient checkpointing to transformer layers...")
+            try:
+                model_core = getattr(self.actor_model, "model", self.actor_model)
+                if hasattr(model_core, "layers") and isinstance(
+                    model_core.layers, list
+                ):
+                    checkpointed_count = 0
+                    for layer in model_core.layers:
+                        if (
+                            self.config.grad_checkpoint_layers
+                            and self.config.grad_checkpoint_layers > 0
+                            and self.config.grad_checkpoint_layers > checkpointed_count
+                        ):
+                            grad_checkpoint(layer)
+                            checkpointed_count += 1
+                    logging.info(
+                        f"Successfully applied gradient checkpointing to {len(model_core.layers)} layers."
+                    )
+                else:
+                    logging.warning(
+                        "Could not find a standard '.model.layers' attribute. Gradient checkpointing not applied."
+                    )
+            except Exception as e:
+                logging.error(
+                    f"Failed to apply gradient checkpointing: {e}", exc_info=True
+                )
 
-        # Determine SFT loss weights with adaptive logic
-        sft_think_weight = self.config.sft_thinking_weight
-        sft_answer_weight = self.config.sft_answer_weight
+        return state.get("num_updates", 0), state.get("epoch", 0)
 
-        kl_div = rollout_batch.get("kl_divergence", 0.0)
-        if self.config.trainer.adaptive_gradient_weights and kl_div > 0:
-            # Reduce SFT weight if KL is high to prioritize RL objective
-            kl_factor = np.clip(
-                1.0 - (kl_div / self.config.trainer.grpo_beta), 0.1, 1.0
-            )
-            sft_think_weight *= kl_factor
-            sft_answer_weight *= kl_factor
+    def train_step(self, rollout_batch, update_step):
+        """
+        Execute training step + collect comprehensive metrics.
 
-        # Compute loss and gradients for the entire batch
-        (loss, (loss_rl, loss_sft, metrics)), grads = self.loss_and_grad_fn(
-            self.actor_model,
-            self.ref_model,
-            rollout_batch["tokens"],
-            rollout_batch["log_probs"],
-            rollout_batch["advantages"],
-            rollout_batch["returns"],
-            rollout_batch["attention_mask"],
-            rollout_batch["thinking_mask"],
-            rollout_batch["answer_mask"],
-            self.config.trainer.grpo_beta,
-            sft_think_weight,
-            sft_answer_weight,
-            self.config,
+        Returns:
+            (training_metrics, combined_grads, step_metrics_dict)
+
+        NEW: step_metrics_dict contains all metrics for WandB logging
+        """
+        B = rollout_batch
+        start_time = time.time()
+
+        # Initialize metrics dictionary for this step
+        step_metrics = {}
+
+        use_dual_gradients = "thinking_mask" in B and "answer_mask" in B
+        use_sft_hybrid = (
+            use_dual_gradients
+            and hasattr(self.config.trainer, "use_sft_on_answer")
+            and self.config.trainer.use_sft_on_answer
+            and "reference_tokens" in B
         )
 
-        # Adaptive gradient scaling for answer-focused layers
-        if self.config.trainer.boost_answer_grad_layers:
-            think_token_count = mx.sum(rollout_batch["thinking_mask"]).item()
-            answer_token_count = mx.sum(rollout_batch["answer_mask"]).item()
-            total_tokens = think_token_count + answer_token_count
+        if (
+            use_dual_gradients
+            and hasattr(self.config.trainer, "use_dual_gradients")
+            and self.config.trainer.use_dual_gradients
+        ):
+            # Dual gradient path
+            (
+                thinking_loss,
+                thinking_grads,
+                answer_loss,
+                answer_grads,
+                metrics,
+            ) = self.grpo_algorithm.calculate_dual_gradient_loss(
+                B, self.config, self.tokenizer.pad_token_id
+            )
 
-            if answer_token_count > 0 and total_tokens > 0:
+            # Layer configuration
+            thinking_layer_start = getattr(
+                self.config.trainer, "thinking_layer_start", 22
+            )
+            thinking_layer_end = getattr(self.config.trainer, "thinking_layer_end", 30)
+            default_answer_start = thinking_layer_end + 1
+            answer_layer_start = getattr(
+                self.config.trainer, "answer_layer_start", default_answer_start
+            )
+            answer_layer_end = getattr(self.config.trainer, "answer_layer_end", 36)
+
+            # ADAPTIVE WEIGHT BALANCING with metrics tracking
+            thinking_token_count = mx.sum(B["thinking_mask"]).item()
+            answer_token_count = mx.sum(B["answer_mask"]).item()
+            total_tokens = thinking_token_count + answer_token_count
+
+            if total_tokens > 0:
+                thinking_ratio = thinking_token_count / total_tokens
                 answer_ratio = answer_token_count / total_tokens
-                think_ratio = 1.0 - answer_ratio
+            else:
+                thinking_ratio = 0.5
+                answer_ratio = 0.5
 
-                # Boost answer gradients, penalize thinking gradients
-                answer_boost = 1.0 + (
-                    think_ratio * self.config.trainer.answer_grad_boost_factor
-                )
-                think_penalty = 1.0 - (
-                    answer_ratio * self.config.trainer.thinking_grad_penalty_factor
-                )
+            # Record token distribution
+            step_metrics["training/thinking_token_count"] = thinking_token_count
+            step_metrics["training/answer_token_count"] = answer_token_count
+            step_metrics["training/thinking_ratio"] = thinking_ratio
+            step_metrics["training/answer_ratio"] = answer_ratio
 
-                logger.info(f"Adaptive weights activated:")
-                logger.info(
-                    f"  Thinking: {think_token_count} tokens ({think_ratio:.1%})"
-                )
-                logger.info(
-                    f"  Answer: {answer_token_count} tokens ({answer_ratio:.1%})"
-                )
-                logger.info(
-                    f"  Boosted answer: {answer_boost:.1f}x RL + {sft_answer_weight:.2f}x SFT"
-                )
-                logger.info(f"  Boosted SFT: {sft_think_weight:.2f}x SFT")
-
-                # Apply boosts/penalties to gradients
-                think_grads = mask_gradients_by_layer(
-                    grads, self.config.trainer.thinking_layers_config
-                )
-                answer_grads = mask_gradients_by_layer(
-                    grads, self.config.trainer.answer_layers_config
-                )
-
-                # Combine scaled gradients
-                grads = combine_gradients(
-                    [(think_grads, think_penalty), (answer_grads, answer_boost)]
-                )
-
-        # Hybrid RL+SFT training logic
-        if sft_think_weight > 0 or sft_answer_weight > 0:
-            logger.info("Hybrid RL+SFT training enabled:")
-            logger.info(
-                f"  Answer: {self.config.trainer.grpo_beta:.1f}x RL + {sft_answer_weight:.2f}x SFT"
+            base_answer_weight = getattr(
+                self.config.trainer, "answer_gradient_weight", 2.0
+            )
+            base_sft_weight = getattr(self.config.trainer, "sft_weight", 0.1)
+            use_adaptive_weights = getattr(
+                self.config.trainer, "adaptive_gradient_weights", True
             )
 
-        # Dual gradient accumulation logic
-        if self.config.trainer.alternate_dual_gradients:
-            # Alternate between thinking and answer gradients
-            if update_step % 2 == 0:  # Thinking step
-                answer_grads = mask_gradients_by_layer(
-                    grads, {"include": []}
-                )  # Zero out answer grads
-                grads = combine_gradients([(grads, 1.0), (answer_grads, -1.0)])
-            else:  # Answer step
-                think_grads = mask_gradients_by_layer(
-                    grads, {"include": []}
-                )  # Zero out think grads
-                grads = combine_gradients([(grads, 1.0), (think_grads, -1.0)])
+            # Track base weights
+            step_metrics["training/answer_weight_base"] = base_answer_weight
+            step_metrics["training/sft_weight_base"] = base_sft_weight
 
-        else:  # Standard dual gradient logic
-            think_layers = self.config.trainer.thinking_layers_config
-            answer_layers = self.config.trainer.answer_layers_config
-
-            # Determine overlapping layers
-            overlap_layers = sorted(
-                list(
-                    set(think_layers.get("include", [])).intersection(
-                        set(answer_layers.get("include", []))
+            if use_adaptive_weights and total_tokens < 200:
+                if thinking_ratio > 0.7:
+                    # Adaptive boosting
+                    answer_gradient_weight = base_answer_weight * (
+                        1.0 / max(answer_ratio, 0.1)
                     )
+                    answer_gradient_weight = min(
+                        answer_gradient_weight, base_answer_weight * 4.0
+                    )
+
+                    sft_weight = base_sft_weight * (1.0 / max(answer_ratio, 0.2))
+                    sft_weight = min(sft_weight, base_sft_weight * 3.0)
+
+                    # Record adaptive adjustment
+                    step_metrics["training/adaptive_weights_active"] = 1.0
+                    step_metrics["training/answer_weight_boost_ratio"] = (
+                        answer_gradient_weight / base_answer_weight
+                    )
+                    step_metrics["training/sft_weight_boost_ratio"] = (
+                        sft_weight / base_sft_weight
+                    )
+
+                    if not hasattr(self, "_adaptive_weights_logged"):
+                        logger.info(f"Adaptive weights activated:")
+                        logger.info(
+                            f"  Thinking: {thinking_token_count:.0f} tokens ({thinking_ratio*100:.1f}%)"
+                        )
+                        logger.info(
+                            f"  Answer: {answer_token_count:.0f} tokens ({answer_ratio*100:.1f}%)"
+                        )
+                        logger.info(
+                            f"  Boosted answer: {base_answer_weight:.1f} → {answer_gradient_weight:.1f}"
+                        )
+                        logger.info(
+                            f"  Boosted SFT: {base_sft_weight:.2f} → {sft_weight:.2f}"
+                        )
+                        self._adaptive_weights_logged = True
+                else:
+                    answer_gradient_weight = base_answer_weight
+                    sft_weight = base_sft_weight
+                    step_metrics["training/adaptive_weights_active"] = 0.0
+                    step_metrics["training/answer_weight_boost_ratio"] = 1.0
+                    step_metrics["training/sft_weight_boost_ratio"] = 1.0
+            else:
+                answer_gradient_weight = base_answer_weight
+                sft_weight = base_sft_weight
+                step_metrics["training/adaptive_weights_active"] = 0.0
+                step_metrics["training/answer_weight_boost_ratio"] = 1.0
+                step_metrics["training/sft_weight_boost_ratio"] = 1.0
+
+            # Record actual weights used
+            step_metrics["training/answer_weight_actual"] = answer_gradient_weight
+            step_metrics["training/sft_weight_actual"] = sft_weight
+
+            # Validate configuration (unchanged)
+            if thinking_layer_start < 0 or thinking_layer_end < thinking_layer_start:
+                raise ValueError(f"Invalid thinking layer range")
+            if answer_layer_start < 0 or answer_layer_end < answer_layer_start:
+                raise ValueError(f"Invalid answer layer range")
+
+            # --- HYBRID SFT+RL MODE ---
+            if use_sft_hybrid:
+                (
+                    sft_loss,
+                    sft_grads,
+                    sft_metrics,
+                ) = self.grpo_algorithm.calculate_sft_loss_and_grads(
+                    B, B["reference_tokens"], self.config, self.tokenizer.pad_token_id
                 )
+
+                # Scale gradients
+                answer_grads_scaled = tree_map(
+                    lambda g: g
+                    * answer_gradient_weight
+                    / self.config.trainer.grad_accum_steps,
+                    answer_grads,
+                )
+                sft_grads_scaled = tree_map(
+                    lambda g: g * sft_weight / self.config.trainer.grad_accum_steps,
+                    sft_grads,
+                )
+                combined_answer_grads = tree_map(
+                    lambda rl, sft: rl + sft, answer_grads_scaled, sft_grads_scaled
+                )
+
+                # Log hybrid mode
+                if not hasattr(self, "_hybrid_mode_logged"):
+                    logger.info(f"Hybrid RL+SFT training enabled:")
+                    logger.info(
+                        f"  Answer: {answer_gradient_weight:.1f}x RL + {sft_weight:.1f}x SFT"
+                    )
+                    self._hybrid_mode_logged = True
+
+                metrics.update(sft_metrics)
+
+                # Record loss components
+                step_metrics["loss/thinking_loss"] = thinking_loss.item()
+                step_metrics["loss/answer_rl_loss"] = answer_loss.item()
+                step_metrics["loss/answer_sft_loss"] = sft_loss.item()
+                step_metrics["loss/total"] = (
+                    thinking_loss.item() + answer_loss.item() + sft_loss.item()
+                ) / 3
+
+                # Calculate contribution percentages
+                total_loss = step_metrics["loss/total"]
+                if total_loss > 0:
+                    step_metrics["loss/thinking_contribution_pct"] = (
+                        thinking_loss.item() / total_loss
+                    ) * 100
+                    step_metrics["loss/answer_rl_contribution_pct"] = (
+                        answer_loss.item() / total_loss
+                    ) * 100
+                    step_metrics["loss/answer_sft_contribution_pct"] = (
+                        sft_loss.item() / total_loss
+                    ) * 100
+
+                avg_loss = step_metrics["loss/total"]
+            else:
+                # Standard dual gradient (no SFT)
+                combined_answer_grads = tree_map(
+                    lambda g: g
+                    * answer_gradient_weight
+                    / self.config.trainer.grad_accum_steps,
+                    answer_grads,
+                )
+
+                step_metrics["loss/thinking_loss"] = thinking_loss.item()
+                step_metrics["loss/answer_rl_loss"] = answer_loss.item()
+                step_metrics["loss/total"] = (
+                    thinking_loss.item() + answer_loss.item()
+                ) / 2
+                avg_loss = step_metrics["loss/total"]
+
+            # Log layer configuration once
+            if not hasattr(self, "_dual_grad_config_logged"):
+                overlap = set(
+                    range(thinking_layer_start, thinking_layer_end + 1)
+                ) & set(range(answer_layer_start, answer_layer_end + 1))
+                if overlap:
+                    logger.info(f"Dual gradient mode - OVERLAPPING layers:")
+                    logger.info(
+                        f"  Thinking: {thinking_layer_start}-{thinking_layer_end} (1x)"
+                    )
+                    logger.info(
+                        f"  Answer: {answer_layer_start}-{answer_layer_end} ({answer_gradient_weight}x)"
+                    )
+                    logger.info(
+                        f"  Overlap: {sorted(overlap)} (total {1 + answer_gradient_weight}x)"
+                    )
+                else:
+                    logger.info(f"Dual gradient mode - SEPARATE pathways:")
+                    logger.info(
+                        f"  Thinking: {thinking_layer_start}-{thinking_layer_end} (1x)"
+                    )
+                    logger.info(
+                        f"  Answer: {answer_layer_start}-{answer_layer_end} ({answer_gradient_weight}x)"
+                    )
+                self._dual_grad_config_logged = True
+
+            # Mask and combine gradients (unchanged)
+            thinking_grads_scaled = tree_map(
+                lambda g: g / self.config.trainer.grad_accum_steps, thinking_grads
+            )
+            thinking_grads_masked = mask_grads_to_layer_band(
+                thinking_grads_scaled,
+                start=thinking_layer_start,
+                end=thinking_layer_end,
+                include_embed=False,
+                include_head=False,
+            )
+            answer_grads_masked = mask_grads_to_layer_band(
+                combined_answer_grads,
+                start=answer_layer_start,
+                end=answer_layer_end,
+                include_embed=False,
+                include_head=True,
+            )
+            combined_grads = tree_map(
+                lambda t, a: t + a, thinking_grads_masked, answer_grads_masked
             )
 
-            logger.info("Dual gradient mode - OVERLAPPING layers:")
-            logger.info(
-                f"  Thinking: {think_layers.get('include')} ({self.config.trainer.grpo_beta}x)"
+        else:
+            # Standard gradient path
+            loss, grads, metrics = self.grpo_algorithm.calculate_loss_and_grads(
+                B, self.config, self.tokenizer.pad_token_id
             )
-            logger.info(
-                f"  Answer: {answer_layers.get('include')} ({self.config.trainer.boost_answer_grad_layers}x)"
+            combined_grads = tree_map(
+                lambda g: g / self.config.trainer.grad_accum_steps, grads
             )
-            logger.info(
-                f"  Overlap: {overlap_layers} (total {self.config.trainer.grpo_beta + self.config.trainer.boost_answer_grad_layers}x)"
-            )
+            avg_loss = loss.item()
+            step_metrics["loss/total"] = avg_loss
 
-        mx.eval(loss, grads)
-        step_time = time.process_time() - start_time
+        # Add common metrics
+        step_metrics["training/reward_mean"] = B["advantages"].mean().item()
+        step_metrics["training/reward_std"] = B["advantages"].std().item()
+        step_metrics["training/learning_rate"] = self.lr_scheduler(update_step)
+        step_metrics["training/kl_divergence"] = metrics.get("kl_divergence", 0.0)
+        step_metrics["training/step_time_s"] = time.time() - start_time
 
-        # Prepare metrics for logging
+        # Create training metrics object (for backward compatibility)
         training_metrics = TrainingMetrics(
-            loss=loss.item(),
-            reward_mean=metrics["reward_mean"].item(),
-            grad_norm=get_grad_norm(grads),
-            learning_rate=self.optimizer.learning_rate,
-            step_time_s=step_time,
-            kl_divergence=kl_div,
+            loss=avg_loss,
+            reward_mean=step_metrics["training/reward_mean"],
+            reward_std=step_metrics["training/reward_std"],
+            grad_norm=0.0,
+            learning_rate=step_metrics["training/learning_rate"],
+            step_time_s=step_metrics["training/step_time_s"],
+            kl_divergence=step_metrics["training/kl_divergence"],
             epoch=self.current_epoch,
             step=update_step,
-            custom_metrics={
-                "train/rl_loss": loss_rl.item(),
-                "train/sft_loss": loss_sft.item(),
-            },
         )
 
-        return training_metrics, grads, {}
+        return training_metrics, combined_grads, step_metrics
 
-    def generate_rollouts(
-        self, batch_data: Dict[str, Any], update_step: int
-    ) -> Tuple[Dict[str, mx.array], float, Dict[str, List[float]], Dict[str, Any]]:
-        """Generates rollouts and computes rewards for a batch of prompts."""
-        # Enforce thinking token constraints
-        self.config.data.max_gen_len = (
-            self.config.trainer.min_think_tokens + self.config.trainer.max_think_tokens
-        )
+    def generate_rollouts(self, batch_data, update_step):
+        """
+        Generate rollouts - now returns generation_metrics too!
+        """
+        prompts_data = batch_data.get("prompts_data", [])
+        is_invalid_batch = any(p.get("is_invalid_sample", False) for p in prompts_data)
 
-        # Generate responses from the actor model
-        dataset_from_batch = batch_data["dataset"]
+        # Unpack 4 values now (not 3!)
         (
-            rollout_data,
+            rollout_batch,
             avg_reward,
-            raw_rewards,
+            avg_breakdown,
             generation_metrics,
         ) = generate_rollouts_for_batch(
             model=self.actor_model,
             ref_model=self.ref_model,
             tokenizer=self.tokenizer,
-            prompts_data=batch_data["prompts_data"],
-            dataset=dataset_from_batch,
+            prompts_data=prompts_data,
+            dataset=self.data_manager._train_dataset,
             config=self.config,
             reward_composer=self.reward_composer,
-            model_manager=self.model_manager,
             run_id=self._run_id,
             current_update=update_step,
-            is_invalid_batch=False,  # Temporarily set to False, as it's calculated after this call
+            is_invalid_batch=is_invalid_batch,
         )
 
-        # Log samples if enabled
-        is_invalid_batch = avg_reward == 0 and not rollout_data
-        _maybe_log_samples(
-            self.config,
-            update_step,
-            batch_data["prompts_data"],
-            rollout_data.get("decoded_responses", []),
-            raw_rewards,
-            "grpo",
-            self._run_id,
-            is_invalid_batch,
-        )
+        return rollout_batch, avg_reward, avg_breakdown, generation_metrics
 
-        return rollout_data, avg_reward, raw_rewards, generation_metrics
+    def wandb_log(self, step, step_metrics, generation_metrics=None):
+        """
+        Comprehensive WandB logging for hardware-constrained training.
 
-    def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
-        """Runs evaluation on the validation set and returns metrics."""
-        # This is a placeholder. In a real implementation, you would run evaluation tasks.
-        logger.info(f"Running evaluation at step {update_step}...")
-        # For now, returning a dummy metric
-        return [
-            EvaluationMetrics(
-                task_name="dummy_task",
-                pass_rate=np.random.rand(),
-                additional_info={"step": update_step},
-            )
-        ]
+        Args:
+            step: Training step number
+            step_metrics: Metrics from train_step
+            generation_metrics: Metrics from generate_rollouts (optional)
+        """
+        if not hasattr(self, "wandb") or self.wandb is None:
+            return
+
+        combined_metrics = {"step": step, **step_metrics}
+
+        # Add generation metrics if available
+        if generation_metrics:
+            combined_metrics.update(generation_metrics)
+
+        # Log to wandb
+        self.wandb.log(combined_metrics)
+
+        # Special alerts for concerning patterns
+        if "generation/thinking_answer_ratio" in combined_metrics:
+            ratio = combined_metrics["generation/thinking_answer_ratio"]
+            if ratio > 5.0:
+                logger.warning(
+                    f"⚠️ CRITICAL IMBALANCE: Thinking/answer ratio is {ratio:.2f}:1"
+                )
+
+        if "generation/missing_answer_count" in combined_metrics:
+            missing = combined_metrics["generation/missing_answer_count"]
+            if missing > 0:
+                logger.warning(f"⚠️ {missing} samples missing answer section")
+
+        if "training/adaptive_weights_active" in combined_metrics:
+            if combined_metrics["training/adaptive_weights_active"] > 0:
+                logger.debug(
+                    f"✓ Adaptive weights: answer {combined_metrics['training/answer_weight_boost_ratio']:.2f}x, "
+                    f"SFT {combined_metrics['training/sft_weight_boost_ratio']:.2f}x"
+                )
+
+    def evaluate(self, update_step):
+        """Placeholder for evaluation logic."""
+        logger.info(f"Evaluation at step {update_step} is a placeholder.")
+        return []
+
+
+# End of File: ./grpo_trainer.py
+# </FILE>
+# -----------#

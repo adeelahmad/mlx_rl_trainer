@@ -124,7 +124,7 @@ class DatasetManager:
         self,
         path: Path,
         chunk_size: int = 10000,
-        max_rows: Optional[int] = 100,
+        max_rows: Optional[int] = None,
     ) -> AsyncIterator[List[Dict[str, Any]]]:
         """
         Asynchronously reads a JSONL file, yielding chunks of parsed data.

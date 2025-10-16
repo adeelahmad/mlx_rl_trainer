@@ -282,9 +282,7 @@ class BaseTrainer(ABC):
                     break
 
                 # Apply Metal memory management and dynamic parameter adjustments
-                metal_before_update(
-                    self.global_step, self.config.data, self.config.trainer
-                )
+                metal_before_update(self.global_step, self.config)
 
                 # Memory tracking: before accumulation
                 self._log_memory_if_enabled("before_accum", self.global_step)
@@ -405,9 +403,9 @@ class BaseTrainer(ABC):
                     # Stream aggregate raw rewards
                     if raw_reward_components_mb:
                         for k, v in raw_reward_components_mb.items():
-                            aggregated_raw_rewards[k] = aggregated_raw_rewards.get(
-                                k, 0.0
-                            ) + sum(v)
+                            aggregated_raw_rewards[k] = (
+                                aggregated_raw_rewards.get(k, 0.0) + v
+                            )
 
                     # Log generation metrics (includes thinking/answer stats)
                     if generation_metrics and self.metrics_logger and accum_idx == 0:
