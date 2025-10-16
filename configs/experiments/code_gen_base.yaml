@@ -24,7 +24,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 192
+  max_gen_len: 128
   loader_type: "jsonl"
   shuffle_data: true
 

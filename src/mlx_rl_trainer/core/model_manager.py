@@ -15,7 +15,7 @@ from .config import ModelConfig
 from .exceptions import ModelLoadError  # Import from new exceptions module
 
 try:
-    from mlx_lm import load, generate
+    from mlx_lm import load as mlx_load, generate
     from mlx_lm.models import cache as mlx_lm_cache
     from mlx_lm.tokenizer_utils import TokenizerWrapper
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
@@ -64,6 +64,26 @@ except ImportError:
         @staticmethod
         def make_prompt_cache(*args, **kwargs):
             return None
+
+
+
+def load(*args, **kwargs):
+  """
+  A proxy for mlx_lm.load that always sets lazy_load=True.
+
+  This function accepts all arguments intended for the original mlx_lm.load function,
+  but it ensures that the model is always loaded lazily by forcing the
+  `lazy_load` parameter to be True.
+
+  Args:
+    *args: Positional arguments to be passed to mlx_lm.load.
+    **kwargs: Keyword arguments to be passed to mlx_lm.load.
+
+  Returns:
+    The output of the mlx_lm.load function (typically model, tokenizer).
+  """
+  kwargs['lazy'] = True
+  return mlx_load(*args, **kwargs)
 
 
 class ModelManager:
