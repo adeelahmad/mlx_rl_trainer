@@ -8,9 +8,9 @@ trainer:
   learning_rate: 1e-3 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 1
-  grad_accum_steps: 3
+  grad_accum_steps: 2
   # CORRECTED: Increased beta to prevent model collapse.
-  grpo_beta: 0.002
+  grpo_beta: 0.0015
   seed: -1
 
 model:
@@ -24,7 +24,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/trainxx-cba.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 192
+  max_gen_len: 128
   loader_type: "jsonl"
   shuffle_data: true
 
