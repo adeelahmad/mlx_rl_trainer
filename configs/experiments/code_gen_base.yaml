@@ -7,14 +7,14 @@ trainer:
   num_training_steps: 80000
   learning_rate: 1e-3 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
-  num_rollout_samples: 1
+  num_rollout_samples: 2
   grad_accum_steps: 2
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
   seed: -1
 
 model:
-  model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
+  model_path: "/Users/adeelahmad/work/mlx_rl_trainer/outputs/model"
   ref_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   base_model_path: "/Users/adeelahmad/.cache/lm-studio/models/lmstudio-community/Qwen-4B-Thinking-2507"
   use_lora: false
@@ -73,7 +73,7 @@ monitoring:
 checkpointing:
   checkpoint_dir: "checkpoints"
   save_every: 100 # Save checkpoint every N steps
-  keep_last_n: 5 # Keep only last N checkpoints
+  keep_last_n: 2 # Keep only last N checkpoints
   save_optimizer_state: false
 
   # NEW: Retry Logic
