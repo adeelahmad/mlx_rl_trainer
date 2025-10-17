@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Path: src/mlx_rl_trainer/scripts/train.py
 import sys, logging, asyncio, uuid, random, signal, time, json
 from pathlib import Path
 import argparse

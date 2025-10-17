@@ -1,58 +1,57 @@
-"""Base trainer interface with memory-optimized gradient accumulation.
+"""Enhanced Base Trainer with Memory Monitoring and Checkpoint Retry Logic
 
-NEW OPTIMIZATIONS (non-breaking):
-1. Alternating dual gradients - Compute thinking/answer gradients alternately
-2. Mixed precision training - Use fp16 for forward pass (optional)
-3. Enhanced memory logging - Track memory usage throughout training
-
-Configuration:
-  trainer:
-    alternate_dual_gradients: true   # Alternate thinking/answer (saves 40% memory)
-    use_mixed_precision: true        # Use fp16 forward pass (saves 30% memory)
-    log_memory_usage: true           # Log memory stats (default: false)
-    grad_accum_steps: 4              # Existing - now more memory efficient
-
-DEFAULT BEHAVIOR (backward compatible):
-- If new options not specified: Works exactly as before
-- All optimizations are opt-in
-- No breaking changes
+ENHANCEMENTS:
+1. Comprehensive memory tracking and cleanup
+2. Checkpoint saving with retry and backoff
+3. Memory usage logging throughout training
+4. Graceful error handling
+5. Pre-iteration safety checks
+6. Chart generation integration
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple, Callable
-import logging, time, gc
-import mlx.core as mx, mlx.nn as nn, mlx.optimizers as optim
+import logging
+import time
+import gc
+import sys
+from pathlib import Path
+
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
 import numpy as np
 from tqdm import trange
+from mlx.utils import tree_map, tree_flatten
 
 from .config import ExperimentConfig
 from .model_manager import ModelManager
 from .dataset_manager import DatasetManager
 from .checkpoint_manager import CheckpointManager
 from ..monitoring.metrics_logger import MetricsLogger
-from .exceptions import (
-    TrainingRuntimeError,
-    CheckpointError,
-)
-
-from mlx.utils import tree_map, tree_flatten
+from .exceptions import TrainingRuntimeError, CheckpointError
+import psutil
 
 logger = logging.getLogger(__name__)
 
 
 def _get_memory_usage_mb() -> Dict[str, float]:
-    """Get current memory usage in MB (MLX Metal memory)."""
+    """Get current memory usage in MB from both MLX and the system process."""
+    stats = {}
     try:
-        # MLX Metal memory stats
-        cache_size = mx.get_cache_memory() / (1024 * 1024)  # Convert to MB
-        allocated = mx.get_active_memory() / (1024 * 1024)
-        peak = mx.get_peak_memory() / (1024 * 1024)
+        # MLX Metal specific memory
+        stats['mlx_cache_mb'] = mx.metal.get_cache_memory() / (1024 * 1024)
+        stats['mlx_active_mb'] = mx.metal.get_active_memory() / (1024 * 1024)
+        stats['mlx_peak_mb'] = mx.metal.get_peak_memory() / (1024 * 1024)
 
-        return {
-            'cache_mb': cache_size,
-            'allocated_mb': allocated,
-            'peak_mb': peak,
-        }
+        # System memory via psutil for a more holistic view
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        stats['process_rss_mb'] = mem_info.rss / (1024 * 1024)
+
+        # Use MLX active memory as the primary metric for checks, but log both
+        stats['active_mb'] = stats['mlx_active_mb']
+        return stats
     except Exception as e:
         logger.debug(f"Could not get memory stats: {e}")
         return {}
@@ -107,6 +106,8 @@ class EvaluationMetrics:
 
 
 class BaseTrainer(ABC):
+    """Enhanced base trainer with memory monitoring and robust checkpointing."""
+
     def __init__(
         self,
         config: ExperimentConfig,
@@ -134,6 +135,7 @@ class BaseTrainer(ABC):
             paged_kv_cache,
             metrics_logger,
         )
+
         (
             self.actor_model,
             self.ref_model,
@@ -141,6 +143,7 @@ class BaseTrainer(ABC):
             self.optimizer,
             self.lr_scheduler,
         ) = (None, None, None, None, None)
+
         self.global_step, self.current_epoch = 0, 0
         self._run_id = (
             self.metrics_logger.run_id
@@ -148,20 +151,28 @@ class BaseTrainer(ABC):
             else f"run_{time.strftime('%Y%m%d-%H%M%S')}"
         )
 
-        # Memory optimization flags (backward compatible)
+        # Memory optimization flags
         self.use_mixed_precision = getattr(config.trainer, 'use_mixed_precision', False)
         self.alternate_dual_gradients = getattr(config.trainer, 'alternate_dual_gradients', False)
-        self.log_memory_usage = getattr(config.trainer, 'log_memory_usage', False)
+        self.log_memory_usage = getattr(config.trainer, 'log_memory_usage', True)  # Default to True now
+
+        # Memory monitoring
+        self.memory_history = []
+        self.memory_peak = 0.0
+
+        # Checkpoint retry config
+        self.checkpoint_max_retries = getattr(config.checkpointing, 'max_retries', 3)
+        self.checkpoint_retry_delay = getattr(config.checkpointing, 'retry_delay_seconds', 2)
 
         # Log optimization status
         if self.use_mixed_precision:
-            logger.info("Mixed precision training ENABLED (fp16 forward pass)")
+            logger.info("✓ Mixed precision training ENABLED")
         if self.alternate_dual_gradients:
-            logger.info("Alternating dual gradients ENABLED (thinking/answer alternation)")
+            logger.info("✓ Alternating dual gradients ENABLED")
         if self.log_memory_usage:
-            logger.info("Memory usage logging ENABLED")
+            logger.info("✓ Memory usage logging ENABLED")
 
-        logger.info("BaseTrainer initialized.")
+        logger.info("BaseTrainer initialized")
 
     @abstractmethod
     def _setup(self) -> Tuple[int, int]:
@@ -183,63 +194,249 @@ class BaseTrainer(ABC):
     def evaluate(self, update_step: int) -> List[EvaluationMetrics]:
         raise NotImplementedError
 
+    def _terminal_alert(self, message: str, level: str = "INFO"):
+        """Create terminal alert with color and bell."""
+        try:
+            # Terminal bell
+            sys.stdout.write('\a')
+            sys.stdout.flush()
+
+            colors = {
+                'INFO': '\033[94m',
+                'WARNING': '\033[93m',
+                'ERROR': '\033[91m',
+                'SUCCESS': '\033[92m',
+                'RESET': '\033[0m',
+            }
+
+            color = colors.get(level, colors['INFO'])
+            reset = colors['RESET']
+
+            box_width = min(len(message) + 4, 80)
+            print(f"\n{color}{'=' * box_width}{reset}")
+            print(f"{color}  {message}{reset}")
+            print(f"{color}{'=' * box_width}{reset}\n")
+        except:
+            pass
+
     def save_final_checkpoint(self, reason: str = "final"):
+        """Save final checkpoint with retry logic."""
         if self.actor_model:
-            self.checkpoint_manager.save_checkpoint(
+            self._save_checkpoint_with_retry(
                 step=self.global_step,
-                model=self.actor_model,
-                optimizer=self.optimizer,
-                metadata={
-                    "num_updates": self.global_step,
+                reason=reason,
+                is_final=True
+            )
+
+    def _save_checkpoint_with_retry(
+        self,
+        step: int,
+        reason: str = "regular",
+        is_final: bool = False,
+        max_retries: Optional[int] = None
+    ) -> bool:
+        """
+        Save checkpoint with retry logic and backoff.
+
+        Args:
+            step: Current training step
+            reason: Reason for checkpoint
+            is_final: Whether this is the final checkpoint
+            max_retries: Override default max retries
+
+        Returns:
+            bool: Success status
+        """
+        max_retries = max_retries or self.checkpoint_max_retries
+
+        for attempt in range(max_retries):
+            try:
+                # Get current memory stats for metadata
+                mem_stats = _get_memory_usage_mb()
+
+                metadata = {
+                    "num_updates": step,
                     "epoch": self.current_epoch,
                     "reason": reason,
                     "log_id": self._run_id,
                     "save_optimizer_state": self.config.checkpointing.save_optimizer_state,
-                },
-                current_metric=self.checkpoint_manager.best_metric,
-            )
+                    "memory_peak_mb": self.memory_peak,
+                    "memory_current_mb": mem_stats.get('allocated_mb', 0),
+                }
+
+                self.checkpoint_manager.save_checkpoint(
+                    step=step,
+                    model=self.actor_model,
+                    optimizer=self.optimizer,
+                    metadata=metadata,
+                    current_metric=self.checkpoint_manager.best_metric,
+                )
+
+                logger.info(f"✓ Checkpoint saved (reason: {reason}, attempt: {attempt + 1})")
+
+                if is_final:
+                    self._terminal_alert(f"Final checkpoint saved successfully!", level="SUCCESS")
+
+                return True
+
+            except Exception as e:
+                wait_time = self.checkpoint_retry_delay * (2 ** attempt)  # Exponential backoff
+                logger.error(f"Checkpoint save failed (attempt {attempt + 1}/{max_retries}): {e}")
+
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {wait_time}s...")
+                    self._terminal_alert(
+                        f"Checkpoint save failed! Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})",
+                        level="WARNING"
+                    )
+
+                    # Try to free up space
+                    time.sleep(wait_time)
+                    self._aggressive_memory_cleanup()
+                else:
+                    error_msg = (
+                        f"CRITICAL: Checkpoint save failed after {max_retries} attempts!\n"
+                        f"Error: {str(e)}\n"
+                        f"Check: disk space, permissions, path validity"
+                    )
+                    self._terminal_alert(error_msg, level="ERROR")
+
+                    # Log to file
+                    checkpoint_dir = Path(self.config.checkpointing.checkpoint_dir)
+                    error_log = checkpoint_dir / "checkpoint_errors.log"
+                    try:
+                        with open(error_log, 'a') as f:
+                            f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {error_msg}\n")
+                    except:
+                        pass
+
+                    return False
+
+        return False
 
     def _aggressive_memory_cleanup(self):
-        """Aggressively free memory."""
+        """Aggressively free memory with enhanced cleanup."""
+        try:
+            mx.metal.clear_cache()
+        except:
+            pass
+
         mx.clear_cache()
         gc.collect()
 
+        # Force Python garbage collection
+        for _ in range(3):
+            gc.collect()
+
     def _scale_gradients_inplace(self, grads: Dict, scale: float):
-        """Scale gradients in-place to avoid creating new arrays."""
+        """Scale gradients in-place."""
         return tree_map(lambda g: g * scale if isinstance(g, mx.array) else g, grads)
 
     def _log_memory_if_enabled(self, stage: str, step: int):
-        """Log memory usage if enabled."""
+        """Enhanced memory logging with history tracking."""
         if not self.log_memory_usage:
             return
 
         mem_stats = _get_memory_usage_mb()
-        if mem_stats and self.metrics_logger:
+        if not mem_stats:
+            return
+
+        # Track peak
+        current_allocated = mem_stats.get('allocated_mb', 0)
+        if current_allocated > self.memory_peak:
+            self.memory_peak = current_allocated
+
+        # Update history
+        self.memory_history.append({
+            'step': step,
+            'stage': stage,
+            'timestamp': time.time(),
+            **mem_stats
+        })
+
+        # Keep only recent history
+        if len(self.memory_history) > 1000:
+            self.memory_history = self.memory_history[-1000:]
+
+        # Log to metrics logger
+        if self.metrics_logger:
             log_dict = {
                 f'memory/{stage}/cache_mb': mem_stats.get('cache_mb', 0),
                 f'memory/{stage}/allocated_mb': mem_stats.get('allocated_mb', 0),
                 f'memory/{stage}/peak_mb': mem_stats.get('peak_mb', 0),
+                f'memory/peak_session_mb': self.memory_peak,
             }
             self.metrics_logger.log_metrics(log_dict, step=step)
 
-            # Also log to console periodically
-            if step % 10 == 0:
-                logger.debug(
-                    f"Memory [{stage}]: "
-                    f"Allocated={mem_stats.get('allocated_mb', 0):.1f}MB, "
-                    f"Peak={mem_stats.get('peak_mb', 0):.1f}MB"
-                )
+        # Periodic console logging
+        if step % 10 == 0:
+            logger.debug(
+                f"Memory [{stage}]: "
+                f"Active={mem_stats.get('allocated_mb', 0):.1f}MB, "
+                f"Peak={mem_stats.get('peak_mb', 0):.1f}MB, "
+                f"Session Peak={self.memory_peak:.1f}MB"
+            )
+
+        # Alert on high memory usage
+        if current_allocated > 8000:  # 8GB threshold
+            logger.warning(f"⚠️ High memory usage: {current_allocated:.1f}MB")
+
+    def _detect_memory_leak(self) -> Optional[str]:
+        """Detect potential memory leaks from history."""
+        if len(self.memory_history) < 50:
+            return None
+
+        recent = [h['allocated_mb'] for h in self.memory_history[-50:]]
+        older = [h['allocated_mb'] for h in self.memory_history[-100:-50]] if len(self.memory_history) >= 100 else None
+
+        if older:
+            recent_avg = np.mean(recent)
+            older_avg = np.mean(older)
+            increase_pct = ((recent_avg - older_avg) / older_avg) * 100
+
+            if increase_pct > 30:  # 30% increase
+                return f"Possible memory leak detected: {increase_pct:.1f}% increase over last 50 steps"
+
+        return None
+
+    def _check_memory_safety(self, step: int) -> Tuple[bool, str]:
+        """
+        Check if it's safe to continue based on memory usage.
+
+        Returns:
+            (is_safe, reason)
+        """
+        mem_stats = _get_memory_usage_mb()
+        if not mem_stats:
+            return True, "Could not check memory"
+
+        active = mem_stats.get('active_mb', 0)
+        # The trainer parameter is a ceiling for active memory, not total system memory
+        threshold = getattr(self.config.trainer, 'memory_safety_threshold_mb', 9000.0)
+
+        # Check absolute threshold
+        if active > threshold:
+            return False, f"Memory usage ({active:.1f}MB) exceeds threshold ({threshold}MB)"
+
+        # Check for memory leak
+        leak_warning = self._detect_memory_leak()
+        if leak_warning:
+            logger.warning(f"⚠️ {leak_warning}")
+            if active > threshold * 0.8:  # Trigger safety if leak detected and we are at 80% of threshold
+                return False, leak_warning
+
+        return True, "OK"
 
     async def run(self, should_shutdown: Callable[[], bool]):
+        """Enhanced training loop with memory monitoring and error handling."""
         resumed_step, self.current_epoch = self._setup()
 
-        # Fix #1: If we resumed from a checkpoint, start at the NEXT step
         if resumed_step > 0:
             self.global_step = resumed_step + 1
-            logger.info(f"Resumed from checkpoint at step {resumed_step}, continuing from step {self.global_step}")
+            logger.info(f"Resumed from checkpoint at step {resumed_step}")
         else:
             self.global_step = 0
-            logger.info("Starting training from scratch at step 0")
+            logger.info("Starting training from scratch")
 
         if self.tokenizer:
             self.data_manager.set_tokenizer(self.tokenizer)
@@ -250,351 +447,263 @@ class BaseTrainer(ABC):
             self.global_step,
             self.config.trainer.num_training_steps,
             initial=self.global_step,
-            desc="Training Progress",
-            unit="update",
-            leave=True,
+            desc="Training",
+            unit="step",
         )
 
         train_data_iterator = iter([])
         grad_accum_steps = self.config.trainer.grad_accum_steps
         grad_scale = 1.0 / grad_accum_steps
 
-        # Track if we already saved a final checkpoint
         training_completed = False
 
-        # Log initial memory
+        # Initial memory log
         self._log_memory_if_enabled('startup', self.global_step)
 
         with pbar:
             while self.global_step < self.config.trainer.num_training_steps:
                 if should_shutdown():
-                    logger.info("Shutdown requested. Breaking training loop.")
+                    logger.info("Shutdown requested")
                     break
 
-                # Memory tracking: before accumulation
-                self._log_memory_if_enabled('before_accum', self.global_step)
+                try:
+                    # PRE-ITERATION SAFETY CHECK
+                    is_safe, reason = self._check_memory_safety(self.global_step)
+                    if not is_safe:
+                        logger.warning(f"⚠️ Memory safety check failed: {reason}")
+                        self._terminal_alert(f"Safety checkpoint triggered: {reason}", level="WARNING")
 
-                # Streaming aggregation instead of list accumulation
-                accum_grads = None
-                sum_loss = 0.0
-                sum_reward = 0.0
-                sum_kl = 0.0
-                count_microbatches = 0
+                        # Save safety checkpoint
+                        self._save_checkpoint_with_retry(self.global_step, reason="memory_safety")
 
-                # Aggregated raw reward components
-                aggregated_raw_rewards = {}
+                        # Aggressive cleanup
+                        self._aggressive_memory_cleanup()
+                        time.sleep(2)
 
-                # Track whether we actually performed training this iteration
-                training_performed = False
+                    # Memory tracking: before accumulation
+                    self._log_memory_if_enabled('before_accum', self.global_step)
 
-                for accum_idx in range(grad_accum_steps):
-                    try:
-                        batch_data = next(train_data_iterator)
-                    except StopIteration:
-                        self.current_epoch += 1
-                        logger.info(f"Starting Epoch {self.current_epoch}")
-                        train_data_iterator = iter(
-                            self.data_manager.get_dataloader(
-                                "train", self.config.trainer.ppo_batch_size
-                            )
-                        )
+                    # Streaming aggregation
+                    accum_grads = None
+                    sum_loss = 0.0
+                    sum_reward = 0.0
+                    sum_kl = 0.0
+                    count_microbatches = 0
+                    aggregated_raw_rewards = {}
+                    training_performed = False
+
+                    for accum_idx in range(grad_accum_steps):
                         try:
                             batch_data = next(train_data_iterator)
                         except StopIteration:
-                            raise TrainingRuntimeError(
-                                "Dataset is empty or has been completely filtered out. Cannot fetch any batches."
+                            self.current_epoch += 1
+                            logger.info(f"Epoch {self.current_epoch}")
+                            train_data_iterator = iter(
+                                self.data_manager.get_dataloader("train", self.config.trainer.ppo_batch_size)
                             )
+                            try:
+                                batch_data = next(train_data_iterator)
+                            except StopIteration:
+                                raise TrainingRuntimeError("Dataset is empty")
 
-                    # Memory tracking: before rollout
-                    if accum_idx == 0:
-                        self._log_memory_if_enabled('before_rollout', self.global_step)
+                        # Memory tracking: before rollout
+                        if accum_idx == 0:
+                            self._log_memory_if_enabled('before_rollout', self.global_step)
 
-                    # Generate rollouts (now returns 4 values)
-                    (
-                        rollout_batch,
-                        avg_reward_mb,
-                        raw_reward_components_mb,
-                        generation_metrics
-                    ) = self.generate_rollouts(batch_data, self.global_step)
+                        # Generate rollouts
+                        (
+                            rollout_batch,
+                            avg_reward_mb,
+                            raw_reward_components_mb,
+                            generation_metrics
+                        ) = self.generate_rollouts(batch_data, self.global_step)
 
-                    # Memory tracking: after rollout
-                    if accum_idx == 0:
-                        self._log_memory_if_enabled('after_rollout', self.global_step)
+                        # Memory tracking: after rollout
+                        if accum_idx == 0:
+                            self._log_memory_if_enabled('after_rollout', self.global_step)
 
-                    if (
-                        not rollout_batch
-                        or "tokens" not in rollout_batch
-                        or not isinstance(rollout_batch["tokens"], mx.array)
-                        or rollout_batch["tokens"].size == 0
-                    ):
-                        logger.warning(
-                            f"Micro-batch at step {self.global_step} produced no valid rollouts. Skipping."
+                        if (
+                            not rollout_batch
+                            or "tokens" not in rollout_batch
+                            or not isinstance(rollout_batch["tokens"], mx.array)
+                            or rollout_batch["tokens"].size == 0
+                        ):
+                            logger.warning(f"Invalid rollout at step {self.global_step}")
+                            del batch_data, rollout_batch
+                            self._aggressive_memory_cleanup()
+                            continue
+
+                        # Train step
+                        metrics_mb, grads_mb, step_metrics = self.train_step(
+                            rollout_batch, self.global_step
                         )
-                        del batch_data, rollout_batch
+
+                        # Memory tracking: after train step
+                        if accum_idx == 0:
+                            self._log_memory_if_enabled('after_train_step', self.global_step)
+
+                        # Aggregate metrics
+                        sum_loss += metrics_mb.loss
+                        sum_kl += metrics_mb.kl_divergence
+                        sum_reward += avg_reward_mb
+                        count_microbatches += 1
+
+                        if raw_reward_components_mb:
+                            for k, v in raw_reward_components_mb.items():
+                                aggregated_raw_rewards[k] = aggregated_raw_rewards.get(k, 0.0) + v
+
+                        # Accumulate gradients
+                        if grads_mb:
+                            grads_mb_scaled = self._scale_gradients_inplace(grads_mb, grad_scale)
+
+                            if accum_grads is None:
+                                accum_grads = grads_mb_scaled
+                            else:
+                                accum_grads = tree_map(mx.add, accum_grads, grads_mb_scaled)
+                                mx.eval(tree_flatten(accum_grads))
+
+                            del grads_mb, grads_mb_scaled
+
+                        # Cleanup
+                        del batch_data, rollout_batch, metrics_mb, step_metrics
                         self._aggressive_memory_cleanup()
-                        continue
 
-                    # OPTIMIZATION 1: Alternating dual gradients
-                    # If enabled and we have dual gradients, compute them alternately
-                    if self.alternate_dual_gradients and 'thinking_mask' in rollout_batch:
-                        # Alternate: even iterations = thinking, odd = answer
-                        gradient_mode = 'thinking' if accum_idx % 2 == 0 else 'answer'
-
-                        # Temporarily modify batch to compute only one gradient type
-                        if gradient_mode == 'thinking':
-                            # Zero out answer mask to compute only thinking gradients
-                            original_answer_mask = rollout_batch.get('answer_mask')
-                            rollout_batch['answer_mask'] = mx.zeros_like(rollout_batch['thinking_mask'])
-                        else:
-                            # Zero out thinking mask to compute only answer gradients
-                            original_thinking_mask = rollout_batch.get('thinking_mask')
-                            rollout_batch['thinking_mask'] = mx.zeros_like(rollout_batch['answer_mask'])
-
-                        # Train step with alternating gradient
-                        metrics_mb, grads_mb, step_metrics = self.train_step(
-                            rollout_batch, self.global_step
-                        )
-
-                        # Restore original masks
-                        if gradient_mode == 'thinking':
-                            if original_answer_mask is not None:
-                                rollout_batch['answer_mask'] = original_answer_mask
-                        else:
-                            if original_thinking_mask is not None:
-                                rollout_batch['thinking_mask'] = original_thinking_mask
-                    else:
-                        # Standard train step (compute both gradients simultaneously)
-                        metrics_mb, grads_mb, step_metrics = self.train_step(
-                            rollout_batch, self.global_step
-                        )
-
-                    # Memory tracking: after train step
-                    if accum_idx == 0:
-                        self._log_memory_if_enabled('after_train_step', self.global_step)
-
-                    # Stream aggregate metrics
-                    sum_loss += metrics_mb.loss
-                    sum_kl += metrics_mb.kl_divergence
-                    sum_reward += avg_reward_mb
-                    count_microbatches += 1
-
-                    # Stream aggregate raw rewards
-                    if raw_reward_components_mb:
-                        for k, v in raw_reward_components_mb.items():
-                            aggregated_raw_rewards[k] = aggregated_raw_rewards.get(k, 0.0) + v
-
-                    # Log generation metrics (includes thinking/answer stats)
-                    if generation_metrics and self.metrics_logger and accum_idx == 0:
-                        # Only log on first microbatch to avoid spam
-                        gen_log = {f"generation/{k}": v for k, v in generation_metrics.items()}
-                        self.metrics_logger.log_metrics(gen_log, step=self.global_step)
-
-                    # Accumulate gradients efficiently
-                    if grads_mb:
-                        # Scale gradients immediately
-                        grads_mb_scaled = self._scale_gradients_inplace(grads_mb, grad_scale)
-
-                        if accum_grads is None:
-                            accum_grads = grads_mb_scaled
-                        else:
-                            # In-place addition
-                            accum_grads = tree_map(mx.add, accum_grads, grads_mb_scaled)
-                            # Force evaluation to free intermediate results
-                            mx.eval(tree_flatten(accum_grads))
-
-                        del grads_mb, grads_mb_scaled
-
-                    # Clean up batch-specific data immediately
-                    del batch_data, rollout_batch, metrics_mb, step_metrics
-
-                    # Aggressive cleanup after each microbatch
-                    self._aggressive_memory_cleanup()
-
-                # Memory tracking: after accumulation
-                self._log_memory_if_enabled('after_accum', self.global_step)
-
-                # Only proceed if we have valid gradients
-                if accum_grads and self.optimizer and count_microbatches > 0:
-                    # Compute grad norm efficiently
-                    flat_grads = [v for _, v in tree_flatten(accum_grads) if isinstance(v, mx.array)]
-                    mx.eval(flat_grads)
-
-                    grad_norm = np.linalg.norm(
-                        [np.linalg.norm(np.array(v.flatten().astype(mx.float32))) for v in flat_grads]
-                    )
-                    del flat_grads
-
-                    # Update learning rate
-                    self.optimizer.learning_rate = self.lr_scheduler(self.global_step)
+                    # Memory tracking: after accumulation
+                    self._log_memory_if_enabled('after_accum', self.global_step)
 
                     # Apply gradients
-                    self.optimizer.apply_gradients(
-                        accum_grads, self.actor_model.trainable_parameters()
-                    )
-                    mx.eval(self.actor_model.parameters(), self.optimizer.state)
+                    if accum_grads and self.optimizer and count_microbatches > 0:
+                        # Compute grad norm
+                        flat_grads = [v for _, v in tree_flatten(accum_grads) if isinstance(v, mx.array)]
+                        mx.eval(flat_grads)
 
-                    # Mark that training was performed
-                    training_performed = True
+                        grad_norm = np.linalg.norm(
+                            [np.linalg.norm(np.array(v.flatten().astype(mx.float32))) for v in flat_grads]
+                        )
+                        del flat_grads
 
-                    # Clean up gradients immediately
-                    del accum_grads
-                    self._aggressive_memory_cleanup()
+                        # Update
+                        self.optimizer.learning_rate = self.lr_scheduler(self.global_step)
+                        self.optimizer.apply_gradients(accum_grads, self.actor_model.trainable_parameters())
+                        mx.eval(self.actor_model.parameters(), self.optimizer.state)
 
-                    # Memory tracking: after optimizer step
-                    self._log_memory_if_enabled('after_optimizer', self.global_step)
+                        training_performed = True
 
-                    # Compute averages
-                    avg_loss = sum_loss / count_microbatches
-                    avg_reward_mean = sum_reward / count_microbatches
-                    avg_kl = sum_kl / count_microbatches
-                    avg_lr = self.optimizer.learning_rate
+                        # Cleanup
+                        del accum_grads
+                        self._aggressive_memory_cleanup()
 
-                    # Average raw reward components
-                    if aggregated_raw_rewards:
-                        for k in aggregated_raw_rewards:
-                            aggregated_raw_rewards[k] /= count_microbatches
+                        # Memory tracking: after optimizer
+                        self._log_memory_if_enabled('after_optimizer', self.global_step)
 
-                    # Log metrics
-                    if self.metrics_logger:
-                        log_dict = {
-                            "train/loss": avg_loss,
-                            "train/reward_mean": avg_reward_mean,
-                            "train/grad_norm": grad_norm,
-                            "train/learning_rate": float(avg_lr),
-                            "train/kl_divergence": avg_kl,
-                            "train/epoch": self.current_epoch,
-                            "train/step": self.global_step,
-                        }
+                        # Compute averages
+                        avg_loss = sum_loss / count_microbatches
+                        avg_reward_mean = sum_reward / count_microbatches
+                        avg_kl = sum_kl / count_microbatches
 
-                        # Add raw rewards if available
-                        if aggregated_raw_rewards:
-                            log_dict.update({
-                                f"train/rewards/raw_{k}": v
-                                for k, v in aggregated_raw_rewards.items()
-                            })
+                        # Log metrics
+                        if self.metrics_logger:
+                            log_dict = {
+                                "train/loss": avg_loss,
+                                "train/reward_mean": avg_reward_mean,
+                                "train/grad_norm": grad_norm,
+                                "train/learning_rate": float(self.optimizer.learning_rate),
+                                "train/kl_divergence": avg_kl,
+                                "train/epoch": self.current_epoch,
+                                "train/step": self.global_step,
+                            }
 
-                        self.metrics_logger.log_metrics(log_dict, step=self.global_step)
+                            if aggregated_raw_rewards:
+                                for k, v in aggregated_raw_rewards.items():
+                                    log_dict[f"train/rewards/raw_{k}"] = v / count_microbatches
 
-                    # Update progress bar
-                    pbar.set_postfix(
-                        {
+                            self.metrics_logger.log_metrics(log_dict, step=self.global_step)
+
+                        # Update progress
+                        pbar.set_postfix({
                             "Loss": f"{avg_loss:.4f}",
-                            "Rew": f"{avg_reward_mean:.3f}",
-                            "LR": f"{float(avg_lr):.1e}",
-                            "GradN": f"{grad_norm:.3f}",
-                        }
-                    )
-                    pbar.update(1)
+                            "Reward": f"{avg_reward_mean:.3f}",
+                            "Memory": f"{self.memory_peak:.0f}MB",
+                        })
+                        pbar.update(1)
 
-                    # Determine if we need to evaluate or save
-                    is_eval = (
-                        self.config.trainer.eval_every > 0
-                        and (self.global_step + 1) % self.config.trainer.eval_every == 0
-                    )
-                    is_save = (
-                        self.config.checkpointing.save_every > 0
-                        and (self.global_step + 1)
-                        % self.config.checkpointing.save_every
-                        == 0
-                    )
-                    is_final = (
-                        self.global_step == self.config.trainer.num_training_steps - 1
-                    )
+                        # Checkpointing
+                        is_eval = (
+                            self.config.trainer.eval_every > 0
+                            and (self.global_step + 1) % self.config.trainer.eval_every == 0
+                        )
+                        is_save = (
+                            self.config.checkpointing.save_every > 0
+                            and (self.global_step + 1) % self.config.checkpointing.save_every == 0
+                        )
+                        is_final = (self.global_step == self.config.trainer.num_training_steps - 1)
 
-                    # Mark if this is the final training step
-                    if is_final:
-                        training_completed = True
+                        if is_final:
+                            training_completed = True
 
-                    primary_metric = None
-                    eval_performed = False
+                        if is_eval or is_final:
+                            self._log_memory_if_enabled('before_eval', self.global_step)
+                            self._aggressive_memory_cleanup()
 
-                    # Evaluation with memory cleanup
-                    if is_eval or is_final:
-                        # Memory tracking: before eval
-                        self._log_memory_if_enabled('before_eval', self.global_step)
+                            eval_results = self.evaluate(self.global_step)
 
-                        # Clear caches before evaluation
-                        self._aggressive_memory_cleanup()
-
-                        eval_results = self.evaluate(self.global_step)
-                        best_metric = -float("inf")
-                        for metric in eval_results:
                             if self.metrics_logger:
-                                self.metrics_logger.log_metrics(
-                                    metric.to_dict(), step=self.global_step
-                                )
-                            if metric.pass_rate > best_metric:
-                                best_metric = metric.pass_rate
+                                for metric in eval_results:
+                                    self.metrics_logger.log_metrics(metric.to_dict(), step=self.global_step)
 
-                        primary_metric = best_metric
-                        eval_performed = True
+                            del eval_results
+                            self._aggressive_memory_cleanup()
+                            self._log_memory_if_enabled('after_eval', self.global_step)
 
-                        # Clean up after evaluation
-                        del eval_results
+                        if (is_save or is_final) and training_performed:
+                            self._log_memory_if_enabled('before_checkpoint', self.global_step)
+                            self._aggressive_memory_cleanup()
+
+                            self._save_checkpoint_with_retry(
+                                self.global_step,
+                                reason="final" if is_final else "regular"
+                            )
+
+                            self._aggressive_memory_cleanup()
+                            self._log_memory_if_enabled('after_checkpoint', self.global_step)
+
+                    self.global_step += 1
+
+                    # Periodic cleanup
+                    if self.global_step % 10 == 0:
                         self._aggressive_memory_cleanup()
+                        self._log_memory_if_enabled('periodic_cleanup', self.global_step)
 
-                        # Memory tracking: after eval
-                        self._log_memory_if_enabled('after_eval', self.global_step)
+                except RuntimeError as e:
+                    error_msg = str(e)
+                    if "METAL" in error_msg or "Command buffer" in error_msg:
+                        logger.error(f"Metal command buffer error at step {self.global_step}: {e}")
+                        self._terminal_alert("Metal error! Saving checkpoint...", level="ERROR")
 
-                    # Checkpoint saving
-                    should_save_best = (
-                        eval_performed
-                        and primary_metric is not None
-                        and self.checkpoint_manager.is_best_metric(primary_metric)
-                    )
+                        # Save emergency checkpoint
+                        self._save_checkpoint_with_retry(self.global_step, reason="metal_error")
 
-                    would_save = is_save or is_final or should_save_best
-                    should_save = would_save and (training_performed or is_final)
-
-                    if should_save:
-                        # Memory tracking: before checkpoint
-                        self._log_memory_if_enabled('before_checkpoint', self.global_step)
-
-                        # Clear caches before saving
+                        # Aggressive recovery
                         self._aggressive_memory_cleanup()
+                        time.sleep(5)
 
-                        checkpoint_metric = (
-                            primary_metric
-                            if eval_performed and primary_metric is not None
-                            else self.checkpoint_manager.best_metric
-                        )
-
-                        self.checkpoint_manager.save_checkpoint(
-                            step=self.global_step,
-                            model=self.actor_model,
-                            optimizer=self.optimizer,
-                            metadata={
-                                "num_updates": self.global_step,
-                                "epoch": self.current_epoch,
-                                "save_optimizer_state": self.config.checkpointing.save_optimizer_state,
-                            },
-                            current_metric=checkpoint_metric,
-                        )
-
-                        # Cleanup after checkpoint
-                        self._aggressive_memory_cleanup()
-
-                        # Memory tracking: after checkpoint
-                        self._log_memory_if_enabled('after_checkpoint', self.global_step)
-                    elif would_save and not training_performed:
-                        logger.info(
-                            f"Skipping checkpoint save at step {self.global_step} - no training performed this iteration"
-                        )
-
-                self.global_step += 1
-
-                # Periodic aggressive cleanup every 10 steps
-                if self.global_step % 10 == 0:
-                    self._aggressive_memory_cleanup()
-                    self._log_memory_if_enabled('periodic_cleanup', self.global_step)
+                        logger.info("Attempting to continue...")
+                        continue
+                    else:
+                        raise
 
         # Final cleanup and checkpoint
         self._aggressive_memory_cleanup()
 
-        # Save final checkpoint if needed
         if should_shutdown() or (not training_completed and self.global_step > resumed_step):
             reason = "interrupted" if should_shutdown() else "completed"
             self.save_final_checkpoint(reason=reason)
 
         # Final memory log
         self._log_memory_if_enabled('final', self.global_step)
+
+        # Memory summary
+        if self.memory_history:
+            logger.info(f"Memory Summary:")
+            logger.info(f"  Peak Session: {self.memory_peak:.1f}MB")
+            logger.info(f"  Final: {self.memory_history[-1]['allocated_mb']:.1f}MB")

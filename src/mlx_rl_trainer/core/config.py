@@ -303,7 +303,7 @@ class TrainerParams(BaseModel):
     optimizer_beta1: NonNegativeFloat = Field(0.9)
     optimizer_beta2: NonNegativeFloat = Field(0.95)
     optimizer_weight_decay: NonNegativeFloat = Field(0.01)
-    grad_clip_norm: Optional[NonNegativeFloat] = Field(0.5)
+    grad_clip_norm: Optional[NonNegativeFloat] = Field(0.35)
 
     # Learning Rate Schedule
     lr_schedule_config: Dict[str, Any] = Field(default_factory=dict)
