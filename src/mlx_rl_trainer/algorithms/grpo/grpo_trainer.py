@@ -42,6 +42,13 @@ from .grpo_algorithm import GRPOAlgorithm
 
 logger = logging.getLogger(__name__)
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    logger.warning("psutil not installed. Memory safety checks will be less accurate. Run 'pip install psutil'.")
+
 
 @dataclass
 class TokenTracker:
@@ -477,7 +484,8 @@ class GRPOTrainer(BaseTrainer):
 
         return is_safe, reason
 
-    def _save_checkpoint_with_retry(self, step: int, reason: str = "regular", max_retries: int = 3):
+    def _save_checkpoint_with_retry(self, step: int, reason: str = "regular", is_final: bool = False,
+    max_retries: Optional[int] = 3):
         """
         Save checkpoint with retry logic and backoff.
 
