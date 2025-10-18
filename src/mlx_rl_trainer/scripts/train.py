@@ -131,7 +131,7 @@ async def _async_main():
             wandb_cfg["run_id"] = run_id
             wandb_run = wandb.init(
                 project=config.monitoring.wandb_project,
-                entity=config.monitoring.wandb_entity,
+                # entity=config.monitoring.wandb_entity,
                 name=config.monitoring.wandb_run_name or run_id,
                 config=wandb_cfg,
                 resume="allow",

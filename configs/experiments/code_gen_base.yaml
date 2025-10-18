@@ -24,9 +24,9 @@ trainer:
   # SFT configuration
   use_sft_on_answer: true
   sft_mode: "all" # Recommended for System 1/2
-  sft_weight: 0.4
-  sft_thinking_weight: 0.3 # For 'weighted' mode
-  sft_answer_weight: 0.9 # For 'weighted' mode
+  sft_weight: 0.1
+  sft_thinking_weight: 0.1 # For 'weighted' mode
+  sft_answer_weight: 1.0 # For 'weighted' mode
 
 model:
   model_path: "/Users/adeelahmad/work/mlx_rl_trainer/outputs/model"
@@ -35,16 +35,42 @@ model:
   use_lora: false
   lora_rank: 16
 
+generation:
+  force_close_think_after: 100
+  # ... your existing temperature settings ...
+
+  # For structural guidance
+  bias_close_think: 9.0
+  bias_answer_start: 6.0
+  punish_extra_think_end: -12.0
+  min_think_tokens: 16
+  think_end_early_bias: -10.0
+
+  # For MCQ handling
+  hard_mask_mcq_first_token: true
+  mcq_letter_lift: 8.0
+  mcq_ban_first_bias: -14.0
+
+  # For content control
+  ban_phrases_for_bias:
+    - "I'm not sure"
+    - "Insufficient information"
+    - "Let me think"
+  encourage_phrases_for_bias:
+    - "∴"
+    - "chk"
+    - "calc"
+
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/vl.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/joint-outed.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/joint-out.jsonl"
   max_prompt_len: 150
-  max_gen_len: 192
+  max_gen_len: 256
   loader_type: "jsonl"
   shuffle_data: true
 
 # The system_prompt from your ExperimentConfig will be used automatically by the trainer.
-# You don't need to specify it here unless you want to override the default.
+# You don't need to specify it here unless you want to overridpe the default.
 
 rewards:
   - name: "format_structure"
