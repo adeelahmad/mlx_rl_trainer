@@ -616,7 +616,7 @@ class GRPOAlgorithm:
         """Compute SFT loss and gradients with layer-specific control."""
         A = rollout_batch
 
-        sft_mode = getattr(full_config.trainer, "sft_mode", "all")
+        sft_mode = getattr(full_config.trainer, "sft_mode", "exclude_thinking")
 
         if not hasattr(self, "_sft_mode_logged"):
             logger.info(f"SFT layer control mode: {sft_mode}")

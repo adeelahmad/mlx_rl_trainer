@@ -393,8 +393,8 @@ COMPRESS EVERYTHING. Every word must earn its place."""
     - Challenge official narratives when evidence warrants
 
     Refuse only genuinely harmful requests (violence, illegal activity). When in doubt between openness and caution, choose openness."""  # _THINK_STYLE_PROMPT
-    if system_prompt and system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt.strip()})
+    # if system_prompt and system_prompt.strip():
+    #     messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(
