@@ -79,7 +79,7 @@ def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
         answer_text = text[last_idx + original_end_tag_len :].strip()
 
         # Strip leading newline specifically, as often the answer starts on a new line
-        return answer_text.lstrip('\n').strip()
+        return answer_text.lstrip("\n").strip()
 
     # If no think end tag found, return full text (fallback, although reward logic should penalize this)
     return text.strip()
@@ -93,6 +93,7 @@ class TagStructureReward(BaseReward):
 
     Encourages concise, compressed thinking by penalizing verbosity.
     """
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.min_think_length = config.get("min_think_length", 20)
@@ -101,18 +102,15 @@ class TagStructureReward(BaseReward):
         # Optimal think length range (from GenerationConfig)
         gen_config = GenerationConfig()
         self.think_target_min = config.get(
-            "think_length_target_min",
-            gen_config.think_length_target_min
+            "think_length_target_min", gen_config.think_length_target_min
         )
         self.think_target_max = config.get(
-            "think_length_target_max",
-            gen_config.think_length_target_max
+            "think_length_target_max", gen_config.think_length_target_max
         )
 
         # Penalty strength for length deviation
         self.length_penalty_strength = config.get(
-            "length_penalty_strength",
-            gen_config.think_length_penalty_strength
+            "length_penalty_strength", gen_config.think_length_penalty_strength
         )
 
         # Verbosity penalty multiplier (how much to penalize excessive length)
@@ -154,7 +152,9 @@ class TagStructureReward(BaseReward):
         else:
             # Too long - exponential penalty (verbosity is bad!)
             excess = think_length - self.think_target_max
-            penalty_range = self.think_target_max  # How far over we tolerate (approximation)
+            penalty_range = (
+                self.think_target_max
+            )  # How far over we tolerate (approximation)
 
             # Apply penalty strength with verbosity factor
             # Ensure non-zero denominator
@@ -163,7 +163,11 @@ class TagStructureReward(BaseReward):
                 penalty_range = 100
 
             normalized_excess = excess / penalty_range
-            penalty = normalized_excess * self.length_penalty_strength * self.verbosity_penalty_factor
+            penalty = (
+                normalized_excess
+                * self.length_penalty_strength
+                * self.verbosity_penalty_factor
+            )
 
             # Exponential decay for severe verbosity
             score = max(0.0, 1.0 - penalty)
@@ -191,16 +195,8 @@ class TagStructureReward(BaseReward):
         end_tag = gen_config.think_end_tag
 
         # Count tags (case-insensitive)
-        th_s = len(re.findall(
-            re.escape(start_tag),
-            generated,
-            flags=re.I
-        ))
-        th_e = len(re.findall(
-            re.escape(end_tag),
-            generated,
-            flags=re.I
-        ))
+        th_s = len(re.findall(re.escape(start_tag), generated, flags=re.I))
+        th_e = len(re.findall(re.escape(end_tag), generated, flags=re.I))
 
         # Extract thinking section (first valid block)
         think_text = extract_think_region(generated, gen_config)
@@ -216,7 +212,10 @@ class TagStructureReward(BaseReward):
             answer_len = len(answer_text.strip())
 
             # Both sections have meaningful content
-            if think_len >= self.min_think_length and answer_len >= self.min_answer_length:
+            if (
+                think_len >= self.min_think_length
+                and answer_len >= self.min_answer_length
+            ):
                 # Base score is 1.0, now apply length penalty
                 length_score = self._compute_length_score(think_len)
                 final_score = 1.0 * length_score
@@ -233,7 +232,10 @@ class TagStructureReward(BaseReward):
                 return final_score
 
             # Has structure but one section too short
-            if think_len >= self.min_think_length or answer_len >= self.min_answer_length:
+            if (
+                think_len >= self.min_think_length
+                or answer_len >= self.min_answer_length
+            ):
                 return 0.6
 
             # Has tags but both sections too short

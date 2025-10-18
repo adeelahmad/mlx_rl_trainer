@@ -246,7 +246,9 @@ class ModelManager:
                 suggestions.append("Try re-downloading the model")
 
             if suggestions:
-                error_msg += "\n\nSuggestions:\n" + "\n".join(f"  - {s}" for s in suggestions)
+                error_msg += "\n\nSuggestions:\n" + "\n".join(
+                    f"  - {s}" for s in suggestions
+                )
 
             raise ModelLoadError(error_msg) from e
 
@@ -276,8 +278,7 @@ class ModelManager:
 
             # Verify LoRA was applied
             lora_count = sum(
-                1 for _, m in model.named_modules()
-                if isinstance(m, MLXLoRALinear)
+                1 for _, m in model.named_modules() if isinstance(m, MLXLoRALinear)
             )
 
             if lora_count == 0:
@@ -400,6 +401,7 @@ class ModelManager:
 
                 # Sample
                 from mlx_rl_trainer.utils.mlx_utils import safe_make_sampler
+
                 sampler = safe_make_sampler(self.config, temp=temp)
                 next_token = sampler(processed_logits)
 
@@ -412,7 +414,9 @@ class ModelManager:
                 # Check for EOS
                 ended_prev = ended
                 if tokenizer.eos_token_id is not None:
-                    ended = mx.logical_or(ended_prev, next_token == tokenizer.eos_token_id)
+                    ended = mx.logical_or(
+                        ended_prev, next_token == tokenizer.eos_token_id
+                    )
 
                 # Apply padding to ended sequences
                 tokens_to_add = mx.where(ended_prev, tokenizer.pad_token_id, next_token)
@@ -431,9 +435,13 @@ class ModelManager:
                     break
 
                 # Continue generation
-                logits_output = model(tokens_to_add[:, None].astype(mx.int64), cache=cache)
+                logits_output = model(
+                    tokens_to_add[:, None].astype(mx.int64), cache=cache
+                )
                 logits = (
-                    logits_output[0] if isinstance(logits_output, tuple) else logits_output
+                    logits_output[0]
+                    if isinstance(logits_output, tuple)
+                    else logits_output
                 )[:, -1, :].astype(mx.float32)
 
                 # Periodic cleanup
@@ -467,7 +475,7 @@ class ModelManager:
             batch_size = prompts.shape[0]
             return (
                 mx.zeros((batch_size, 0), dtype=mx.int32),
-                mx.zeros((batch_size, 0), dtype=mx.float32)
+                mx.zeros((batch_size, 0), dtype=mx.float32),
             )
 
     def get_statistics(self) -> Dict[str, Any]:
@@ -477,7 +485,7 @@ class ModelManager:
         NEW: Useful for monitoring
         """
         return {
-            'models_loaded': self.models_loaded,
-            'load_errors': self.load_errors,
-            'generation_count': self.generation_count,
+            "models_loaded": self.models_loaded,
+            "load_errors": self.load_errors,
+            "generation_count": self.generation_count,
         }

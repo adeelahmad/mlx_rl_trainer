@@ -34,8 +34,10 @@ from .exceptions import CheckpointError
 try:
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
 except ImportError:
+
     class MLXLoRALinear:
         pass
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +45,19 @@ logger = logging.getLogger(__name__)
 def _terminal_alert(message: str, level: str = "INFO"):
     """Create terminal alert with color and bell."""
     try:
-        sys.stdout.write('\a')
+        sys.stdout.write("\a")
         sys.stdout.flush()
 
         colors = {
-            'INFO': '\033[94m',
-            'WARNING': '\033[93m',
-            'ERROR': '\033[91m',
-            'SUCCESS': '\033[92m',
-            'RESET': '\033[0m',
+            "INFO": "\033[94m",
+            "WARNING": "\033[93m",
+            "ERROR": "\033[91m",
+            "SUCCESS": "\033[92m",
+            "RESET": "\033[0m",
         }
 
-        color = colors.get(level, colors['INFO'])
-        reset = colors['RESET']
+        color = colors.get(level, colors["INFO"])
+        reset = colors["RESET"]
 
         box_width = min(len(message) + 4, 80)
         print(f"\n{color}{'=' * box_width}{reset}")
@@ -78,11 +80,15 @@ def _check_disk_space(path: Path, required_mb: float = 1000.0) -> Tuple[bool, st
     """
     try:
         import shutil as sh
+
         stat = sh.disk_usage(path)
         available_mb = stat.free / (1024 * 1024)
 
         if available_mb < required_mb:
-            return False, f"Low disk space: {available_mb:.1f}MB available, {required_mb:.1f}MB required"
+            return (
+                False,
+                f"Low disk space: {available_mb:.1f}MB available, {required_mb:.1f}MB required",
+            )
 
         return True, f"Sufficient disk space: {available_mb:.1f}MB available"
     except Exception as e:
@@ -168,7 +174,7 @@ class CheckpointManager:
 
             # Check metadata is valid JSON
             try:
-                with open(metadata_file, 'r') as f:
+                with open(metadata_file, "r") as f:
                     metadata = json.load(f)
             except json.JSONDecodeError:
                 return False, "Corrupted metadata.json"
@@ -178,7 +184,10 @@ class CheckpointManager:
             has_model = (checkpoint_path / "model.safetensors").exists()
 
             if not (has_adapters or has_model):
-                return False, "Missing model weights (adapters.safetensors or model.safetensors)"
+                return (
+                    False,
+                    "Missing model weights (adapters.safetensors or model.safetensors)",
+                )
 
             return True, "Checkpoint is valid"
 
@@ -200,7 +209,9 @@ class CheckpointManager:
                     if step is not None:
                         found_dirs_with_steps.append((step, p))
                 else:
-                    logger.warning(f"Corrupted checkpoint detected: {p.name} - {message}")
+                    logger.warning(
+                        f"Corrupted checkpoint detected: {p.name} - {message}"
+                    )
                     corrupted_checkpoints.append(p)
 
         # Remove corrupted checkpoints
@@ -208,7 +219,7 @@ class CheckpointManager:
             _terminal_alert(
                 f"Found {len(corrupted_checkpoints)} corrupted checkpoints. "
                 "These will be removed to prevent loading issues.",
-                level="WARNING"
+                level="WARNING",
             )
 
             for corrupted in corrupted_checkpoints:
@@ -216,7 +227,9 @@ class CheckpointManager:
                     shutil.rmtree(corrupted, ignore_errors=True)
                     logger.info(f"Removed corrupted checkpoint: {corrupted.name}")
                 except Exception as e:
-                    logger.error(f"Failed to remove corrupted checkpoint {corrupted.name}: {e}")
+                    logger.error(
+                        f"Failed to remove corrupted checkpoint {corrupted.name}: {e}"
+                    )
 
         found_dirs_with_steps.sort(key=lambda x: x[0])
         self._checkpoints = [p for _, p in found_dirs_with_steps]
@@ -232,7 +245,9 @@ class CheckpointManager:
                     if metadata_file.is_file():
                         with open(metadata_file, "r") as f:
                             metadata = json.load(f)
-                            self.best_metric = metadata.get("current_metric", -float("inf"))
+                            self.best_metric = metadata.get(
+                                "current_metric", -float("inf")
+                            )
                             del metadata
             except FileNotFoundError:
                 logger.warning("Symlink 'best' is dangling. Removing it.")
@@ -302,13 +317,15 @@ class CheckpointManager:
             current_metric = self.best_metric
 
         # Check disk space BEFORE attempting save
-        has_space, space_message = _check_disk_space(self.output_dir, self.min_disk_space_mb)
+        has_space, space_message = _check_disk_space(
+            self.output_dir, self.min_disk_space_mb
+        )
         if not has_space:
             error_msg = f"Cannot save checkpoint: {space_message}"
             logger.error(error_msg)
             _terminal_alert(
                 f"{error_msg}\nPlease free up disk space or adjust checkpoint settings.",
-                level="ERROR"
+                level="ERROR",
             )
             self.failed_save_count += 1
             raise CheckpointError(error_msg)
@@ -385,7 +402,9 @@ class CheckpointManager:
             # Verify checkpoint before finalizing
             is_valid, verify_message = self._verify_checkpoint_integrity(temp_path)
             if not is_valid:
-                raise CheckpointError(f"Checkpoint verification failed: {verify_message}")
+                raise CheckpointError(
+                    f"Checkpoint verification failed: {verify_message}"
+                )
 
             # Atomic rename
             os.rename(temp_path, final_path)
@@ -394,10 +413,10 @@ class CheckpointManager:
             save_duration = time.time() - start_time
             try:
                 metadata_file = final_path / "metadata.json"
-                with open(metadata_file, 'r') as f:
+                with open(metadata_file, "r") as f:
                     md = json.load(f)
                 md["save_duration_s"] = save_duration
-                with open(metadata_file, 'w') as f:
+                with open(metadata_file, "w") as f:
                     json.dump(md, f, indent=2, default=str)
             except:
                 pass  # Non-critical
@@ -455,7 +474,9 @@ class CheckpointManager:
                 suggestions.append("Choose a different output directory")
 
             if suggestions:
-                error_msg += f"\n\nSuggestions:\n" + "\n".join(f"  - {s}" for s in suggestions)
+                error_msg += f"\n\nSuggestions:\n" + "\n".join(
+                    f"  - {s}" for s in suggestions
+                )
 
             logger.error(error_msg)
             raise CheckpointError(error_msg) from e
@@ -479,7 +500,9 @@ class CheckpointManager:
                 try:
                     chosen_path = latest_symlink.resolve(strict=True)
                 except FileNotFoundError:
-                    logger.warning("Symlink 'latest' is dangling. Searching for last checkpoint.")
+                    logger.warning(
+                        "Symlink 'latest' is dangling. Searching for last checkpoint."
+                    )
                     latest_symlink.unlink()
                     if self._checkpoints:
                         chosen_path = self._checkpoints[-1]
@@ -498,7 +521,7 @@ class CheckpointManager:
             _terminal_alert(
                 f"{error_msg}\nThis checkpoint is corrupted. "
                 "Training will start from scratch or use an earlier checkpoint.",
-                level="ERROR"
+                level="ERROR",
             )
 
             # Try to find an earlier valid checkpoint
@@ -510,7 +533,9 @@ class CheckpointManager:
                     break
             else:
                 # No valid checkpoint found
-                rprint("[yellow]No valid checkpoints found. Starting from scratch.[/yellow]")
+                rprint(
+                    "[yellow]No valid checkpoints found. Starting from scratch.[/yellow]"
+                )
                 return 0, {}
 
         rprint(f"Resuming from: [green]{chosen_path.name}[/green]")
@@ -522,13 +547,16 @@ class CheckpointManager:
                 metadata = json.load(f)
 
             # Determine checkpoint type
-            is_lora = any(isinstance(m, MLXLoRALinear) for _, m in model.named_modules())
+            is_lora = any(
+                isinstance(m, MLXLoRALinear) for _, m in model.named_modules()
+            )
             adapters_file = chosen_path / "adapters.safetensors"
             model_file = chosen_path / "model.safetensors"
 
             # Load model weights
             if is_lora and adapters_file.is_file():
                 from mlx_lm.tuner.utils import load_adapters
+
                 load_adapters(model, str(chosen_path))
                 rprint("✓ Loaded LoRA adapters")
             elif model_file.is_file():
@@ -549,7 +577,9 @@ class CheckpointManager:
                 optimizer_file = chosen_path / "optimizer.safetensors"
                 if metadata.get("save_optimizer_state") and optimizer_file.is_file():
                     try:
-                        optimizer_state_items = list(mx.load(str(optimizer_file)).items())
+                        optimizer_state_items = list(
+                            mx.load(str(optimizer_file)).items()
+                        )
                         optimizer.state = tree_unflatten(optimizer_state_items)
                         del optimizer_state_items
                         optimizer_loaded = True
@@ -621,7 +651,7 @@ class CheckpointManager:
                 best_symlink.unlink()
 
         # Keep last N and best
-        checkpoints_to_keep: Set[Path] = set(self._checkpoints[-self.keep_last_n:])
+        checkpoints_to_keep: Set[Path] = set(self._checkpoints[-self.keep_last_n :])
         if best_path:
             checkpoints_to_keep.add(best_path)
 
@@ -659,11 +689,11 @@ class CheckpointManager:
         NEW: Useful for monitoring and debugging
         """
         return {
-            'total_checkpoints': len(self._checkpoints),
-            'save_count': self.save_count,
-            'failed_save_count': self.failed_save_count,
-            'best_metric': self.best_metric,
-            'last_save_time': self.last_save_time,
-            'keep_last_n': self.keep_last_n,
-            'save_best': self.save_best,
+            "total_checkpoints": len(self._checkpoints),
+            "save_count": self.save_count,
+            "failed_save_count": self.failed_save_count,
+            "best_metric": self.best_metric,
+            "last_save_time": self.last_save_time,
+            "keep_last_n": self.keep_last_n,
+            "save_best": self.save_best,
         }

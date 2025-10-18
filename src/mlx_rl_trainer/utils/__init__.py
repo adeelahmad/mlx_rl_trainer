@@ -20,7 +20,7 @@ from .mlx_utils import (
     metal_before_update,
     _global_grad_norm,
     _maybe_clip_grad_norm,
-    limit_memory
+    limit_memory,
 )
 
 from .text_utils import (

@@ -26,8 +26,10 @@ import numpy as np
 try:
     import pandas as pd
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+
     PANDAS_AVAILABLE = MPL_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = MPL_AVAILABLE = False
@@ -164,8 +166,10 @@ class MetricsLogger:
 
                 # Periodic cleanup
                 current_time = time.time()
-                if (self._write_count % self._cleanup_interval == 0 or
-                    current_time - self._last_cleanup_time > 60):  # Every 60 seconds
+                if (
+                    self._write_count % self._cleanup_interval == 0
+                    or current_time - self._last_cleanup_time > 60
+                ):  # Every 60 seconds
                     _aggressive_memory_cleanup()
                     self._last_cleanup_time = current_time
 
@@ -188,10 +192,12 @@ class MetricsLogger:
         NEW: Useful for monitoring
         """
         return {
-            'write_count': self._write_count,
-            'error_count': self._error_count,
-            'file_size_mb': self.file_path.stat().st_size / (1024 * 1024) if self.file_path.exists() else 0,
-            'last_cleanup_time': self._last_cleanup_time,
+            "write_count": self._write_count,
+            "error_count": self._error_count,
+            "file_size_mb": self.file_path.stat().st_size / (1024 * 1024)
+            if self.file_path.exists()
+            else 0,
+            "last_cleanup_time": self._last_cleanup_time,
         }
 
     def close(self):
@@ -201,7 +207,9 @@ class MetricsLogger:
                 try:
                     self._file.flush()
                     self._file.close()
-                    logger.info(f"Metrics logger closed. Total writes: {self._write_count}")
+                    logger.info(
+                        f"Metrics logger closed. Total writes: {self._write_count}"
+                    )
                 except Exception as e:
                     logger.error(f"Error closing metrics logger: {e}")
                 finally:
@@ -213,10 +221,7 @@ class MetricsLogger:
 
 
 def _emit_plots_from_csv(
-    csv_path: Path,
-    out_dir: Path,
-    config: ExperimentConfig = None,
-    run_id: str = None
+    csv_path: Path, out_dir: Path, config: ExperimentConfig = None, run_id: str = None
 ):
     """
     Generate plots from CSV metrics file.
@@ -237,7 +242,7 @@ def _emit_plots_from_csv(
 
     try:
         # Read CSV with error handling
-        df = pd.read_csv(csv_path, on_bad_lines='skip')
+        df = pd.read_csv(csv_path, on_bad_lines="skip")
 
         if df.empty:
             logger.warning("CSV is empty, cannot generate plots")
@@ -248,13 +253,13 @@ def _emit_plots_from_csv(
         x_col = "update_step"
         if x_col in df.columns:
             # Remove duplicates, keeping last entry
-            df = df.drop_duplicates(subset=[x_col], keep='last')
+            df = df.drop_duplicates(subset=[x_col], keep="last")
             df = df.sort_values(by=x_col).reset_index(drop=True)
 
         # If dataset is very large, sample it for plotting
         if len(df) > 10000:
             logger.info(f"Large dataset ({len(df)} rows), sampling for plots...")
-            df = df.iloc[::max(1, len(df) // 10000)]  # Sample ~10k points
+            df = df.iloc[:: max(1, len(df) // 10000)]  # Sample ~10k points
 
         # Define plot metrics
         plot_metrics = {
@@ -308,10 +313,18 @@ def _emit_plots_from_csv(
                 if len(x_data) > 50:
                     try:
                         from scipy.signal import savgol_filter
+
                         window = min(51, len(y_data) // 10 * 2 + 1)  # Odd number
                         if window >= 5:
                             y_smooth = savgol_filter(y_data, window, 3)
-                            ax.plot(x_data, y_smooth, 'r-', linewidth=2, alpha=0.6, label='Trend')
+                            ax.plot(
+                                x_data,
+                                y_smooth,
+                                "r-",
+                                linewidth=2,
+                                alpha=0.6,
+                                label="Trend",
+                            )
                             ax.legend()
                     except:
                         pass  # Scipy not available or smoothing failed
@@ -319,9 +332,9 @@ def _emit_plots_from_csv(
                 fig.tight_layout()
 
                 # Save
-                safe_y_col = y_col.replace('/', '_').replace('.', '_')
+                safe_y_col = y_col.replace("/", "_").replace(".", "_")
                 plot_path = plots_dir / f"{safe_y_col}_{fname_suffix}.png"
-                fig.savefig(plot_path, dpi=100, bbox_inches='tight')
+                fig.savefig(plot_path, dpi=100, bbox_inches="tight")
                 plt.close(fig)
 
                 # Cleanup
@@ -329,7 +342,7 @@ def _emit_plots_from_csv(
 
             except Exception as e:
                 logger.warning(f"Failed to plot {y_col}: {e}")
-                plt.close('all')
+                plt.close("all")
 
         # Generate plots
         successful_plots = 0
@@ -346,14 +359,14 @@ def _emit_plots_from_csv(
 
         # Cleanup
         del df
-        plt.close('all')
+        plt.close("all")
         _aggressive_memory_cleanup()
 
         logger.info(f"Generated {successful_plots} plots in: {plots_dir}")
 
     except Exception as e:
         logger.error(f"Plot generation failed: {e}", exc_info=True)
-        plt.close('all')
+        plt.close("all")
         _aggressive_memory_cleanup()
 
 
@@ -406,14 +419,17 @@ def _maybe_log_samples(
                     gen_text = decoded_responses[i]
 
                     # Construct reference text efficiently
-                    ref_dict = original_sample.get('ref', {
-                        "completion": (
-                            f"{config.generation.think_start_tag}\n"
-                            f"{original_sample.get('ref_think_str', '')}"
-                            f"{config.generation.think_end_tag}\n"
-                            f"{original_sample.get('ref_answer_str', '')}"
-                        )
-                    })
+                    ref_dict = original_sample.get(
+                        "ref",
+                        {
+                            "completion": (
+                                f"{config.generation.think_start_tag}\n"
+                                f"{original_sample.get('ref_think_str', '')}"
+                                f"{config.generation.think_end_tag}\n"
+                                f"{original_sample.get('ref_answer_str', '')}"
+                            )
+                        },
+                    )
                     ref_text = (
                         ref_dict.get("completion", "")
                         if isinstance(ref_dict, dict)
@@ -484,37 +500,39 @@ def generate_summary_report(csv_path: Path, output_path: Path):
         return
 
     try:
-        df = pd.read_csv(csv_path, on_bad_lines='skip')
+        df = pd.read_csv(csv_path, on_bad_lines="skip")
 
         if df.empty:
             return
 
         # Calculate summary statistics
         summary = {
-            'total_steps': len(df),
-            'training_time_estimate_hours': len(df) * df.get('train/step_time_s', pd.Series([0])).mean() / 3600,
+            "total_steps": len(df),
+            "training_time_estimate_hours": len(df)
+            * df.get("train/step_time_s", pd.Series([0])).mean()
+            / 3600,
         }
 
         # Add metrics summaries
         metrics_of_interest = [
-            'train/loss',
-            'train/reward_mean',
-            'train/grad_norm',
-            'train/kl_divergence',
-            'memory/after_optimizer/allocated_mb',
+            "train/loss",
+            "train/reward_mean",
+            "train/grad_norm",
+            "train/kl_divergence",
+            "memory/after_optimizer/allocated_mb",
         ]
 
         for metric in metrics_of_interest:
             if metric in df.columns:
                 col_data = df[metric].dropna()
                 if len(col_data) > 0:
-                    summary[f'{metric}_final'] = float(col_data.iloc[-1])
-                    summary[f'{metric}_mean'] = float(col_data.mean())
-                    summary[f'{metric}_min'] = float(col_data.min())
-                    summary[f'{metric}_max'] = float(col_data.max())
+                    summary[f"{metric}_final"] = float(col_data.iloc[-1])
+                    summary[f"{metric}_mean"] = float(col_data.mean())
+                    summary[f"{metric}_min"] = float(col_data.min())
+                    summary[f"{metric}_max"] = float(col_data.max())
 
         # Write summary
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(summary, f, indent=2)
 
         logger.info(f"Training summary saved to: {output_path}")

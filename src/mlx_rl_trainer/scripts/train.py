@@ -9,6 +9,8 @@ from rich.logging import RichHandler
 from rich import print as rprint, traceback as rich_traceback
 import numpy as np
 import psutil
+from mlx.utils import tree_flatten, tree_unflatten
+
 
 # Add src to path for local imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -157,7 +159,7 @@ async def _async_main():
         config.trainer.output_dir / config.checkpointing.save_dir,
         keep_last_n=config.checkpointing.keep_last_n,  # CORRECTED from keep_best_n
         save_best=True,
-        base_model_path=config.model.model_path
+        base_model_path=config.model.model_path,
     )
     if args.resume:
         checkpoint_manager.resume_from_path = Path(args.resume)
@@ -209,17 +211,17 @@ async def _async_main():
 def main():
     rprint(f"MLX using device: [bold cyan]{mx.default_device()}[/bold cyan]")
 
-
-
     # Log memory usage (optional)
     current_peak_mem = mx.get_peak_memory()
     initial_peak_mem = mx.get_peak_memory()
     if current_peak_mem > initial_peak_mem:
-         logging.debug(f"Peak Mem: {current_peak_mem / 1e9:.3f} GB (Delta: {(current_peak_mem - initial_peak_mem) / 1e9:.3f} GB)")
+        logging.debug(
+            f"Peak Mem: {current_peak_mem / 1e9:.3f} GB (Delta: {(current_peak_mem - initial_peak_mem) / 1e9:.3f} GB)"
+        )
     else:
-         process = psutil.Process()
-         mem_info = process.memory_info()
-         logging.debug(f"RSS Mem: {mem_info.rss / (1024 * 1024):.2f} MB")
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        logging.debug(f"RSS Mem: {mem_info.rss / (1024 * 1024):.2f} MB")
 
     limit_memory(80)
 

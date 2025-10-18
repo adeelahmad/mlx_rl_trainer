@@ -1,8 +1,8 @@
 """Abstract base class for reward functions."""
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Tuple
+from collections import deque
 import logging
-import numpy as np
 
 from .context import RewardContext
 
@@ -17,6 +17,8 @@ class BaseReward(ABC):
     the `compute()` method.
     """
 
+    __slots__ = ("config", "name", "weight", "smoothing_window_size", "_reward_history")
+
     def __init__(self, config: Dict[str, Any]):
         """
         Initializes the BaseReward.
@@ -26,13 +28,9 @@ class BaseReward(ABC):
         """
         self.config = config
         self.name = self.__class__.__name__
-        self.weight = config.get(
-            "weight", 1.0
-        )  # Weight is now part of the reward's own config too
-        self.smoothing_window_size = config.get(
-            "smoothing_window_size", 5
-        )  # For internal smoothing
-        self._reward_history: List[float] = []  # For internal reward smoothing
+        self.weight = config.get("weight", 1.0)
+        self.smoothing_window_size = config.get("smoothing_window_size", 5)
+        self._reward_history = deque(maxlen=self.smoothing_window_size)
 
         logger.debug(f"Initialized {self.name} with config: {config}")
 
@@ -52,9 +50,7 @@ class BaseReward(ABC):
     def _smooth_reward(self, current_reward: float) -> float:
         """Applies simple moving average smoothing to the reward."""
         self._reward_history.append(current_reward)
-        if len(self._reward_history) > self.smoothing_window_size:
-            self._reward_history.pop(0)
-        return float(np.mean(self._reward_history))
+        return sum(self._reward_history) / len(self._reward_history)
 
     def batch_compute(self, contexts: List[RewardContext]) -> List[Dict[str, float]]:
         """
@@ -75,19 +71,16 @@ class BaseReward(ABC):
         for context in contexts:
             try:
                 raw_score = self.compute(context)
-                # Apply internal smoothing
                 smoothed_score = self._smooth_reward(raw_score)
                 rewards_list.append(
                     {self.name: smoothed_score, "total": smoothed_score}
-                )  # Return internal name and total
+                )
             except Exception as e:
                 logger.error(
                     f"Batch computation failed in {self.name} for a context: {e}",
                     exc_info=True,
                 )
-                rewards_list.append(
-                    {self.name: 0.0, "total": 0.0}
-                )  # Return 0.0 on error
+                rewards_list.append({self.name: 0.0, "total": 0.0})
         return rewards_list
 
     def validate_inputs(self, context: RewardContext) -> None:
@@ -123,6 +116,8 @@ class RewardComposer:
     Calculates a single weighted sum of all individual rewards, returning detailed breakdown.
     """
 
+    __slots__ = ("rewards", "total_weight_sum", "context_cls", "_inv_weight_sum")
+
     def __init__(
         self, rewards: List[Tuple[BaseReward, float]], context_cls: type = RewardContext
     ):
@@ -135,6 +130,9 @@ class RewardComposer:
         """
         self.rewards = rewards
         self.total_weight_sum = sum(weight for _, weight in rewards)
+        self._inv_weight_sum = (
+            1.0 / self.total_weight_sum if self.total_weight_sum > 0 else 1.0
+        )
         self.context_cls = context_cls
 
         if not (0.99 <= self.total_weight_sum <= 1.01):
@@ -160,25 +158,17 @@ class RewardComposer:
         for reward_fn, weight in self.rewards:
             try:
                 score = reward_fn.compute(context)
-
-                if hasattr(reward_fn, "_smooth_reward") and callable(
-                    getattr(reward_fn, "_smooth_reward")
-                ):
-                    score = reward_fn._smooth_reward(score)
-
+                score = reward_fn._smooth_reward(score)
                 individual_results[reward_fn.name] = score
                 weighted_sum += score * weight
-
             except Exception as e:
                 logger.warning(
                     f"Reward '{reward_fn.name}' failed to compute for context ID {id(context)}: {e}"
                 )
                 individual_results[reward_fn.name] = 0.0
 
-        final_total = weighted_sum / (
-            self.total_weight_sum if self.total_weight_sum > 0 else 1.0
-        )
-        individual_results["total"] = float(np.clip(final_total, 0.0, 1.0))
+        final_total = weighted_sum * self._inv_weight_sum
+        individual_results["total"] = max(0.0, min(1.0, final_total))
 
         return individual_results
 
@@ -187,14 +177,12 @@ class RewardComposer:
         Computes rewards for a batch of `RewardContext` objects, leveraging batch_compute
         of individual reward functions where available, then composes them.
         """
-        all_individual_batch_results: Dict[str, List[Dict[str, float]]] = {}
+        all_individual_batch_results = {
+            reward_fn.name: reward_fn.batch_compute(contexts)
+            for reward_fn, _ in self.rewards
+        }
 
-        for reward_fn, _ in self.rewards:
-            all_individual_batch_results[reward_fn.name] = reward_fn.batch_compute(
-                contexts
-            )
-
-        composed_batch_results: List[Dict[str, float]] = []
+        composed_batch_results = []
         for i in range(len(contexts)):
             individual_results_for_sample = {}
             weighted_sum_for_sample = 0.0
@@ -204,23 +192,18 @@ class RewardComposer:
                     raw_score_for_sample = all_individual_batch_results[reward_fn.name][
                         i
                     ].get("total", 0.0)
-
                     individual_results_for_sample[reward_fn.name] = raw_score_for_sample
                     weighted_sum_for_sample += raw_score_for_sample * weight
-
                 except Exception as e:
                     logger.warning(
                         f"Batch compose failed for reward '{reward_fn.name}' sample idx {i}: {e}"
                     )
                     individual_results_for_sample[reward_fn.name] = 0.0
 
-            final_total_for_sample = weighted_sum_for_sample / (
-                self.total_weight_sum if self.total_weight_sum > 0 else 1.0
+            final_total_for_sample = weighted_sum_for_sample * self._inv_weight_sum
+            individual_results_for_sample["total"] = max(
+                0.0, min(1.0, final_total_for_sample)
             )
-            individual_results_for_sample["total"] = float(
-                np.clip(final_total_for_sample, 0.0, 1.0)
-            )
-
             composed_batch_results.append(individual_results_for_sample)
 
         return composed_batch_results

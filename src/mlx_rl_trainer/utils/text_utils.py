@@ -159,7 +159,7 @@ def _extract_final_numeric(s: str) -> Optional[str]:
 
 def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
     """Extracts the content between the FIRST <think> and the FIRST </think> tags."""
-    text_str = str(text) if text is not None else "" # Robust string conversion
+    text_str = str(text) if text is not None else ""  # Robust string conversion
     if not text_str or not gen_config.think_start_tag or not gen_config.think_end_tag:
         return ""
 
@@ -178,7 +178,7 @@ def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
 
 def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
     """Extracts the content after the LAST think end tag."""
-    tl = str(text) if text is not None else "" # Robust string conversion
+    tl = str(text) if text is not None else ""  # Robust string conversion
     tend = gen_config.think_end_tag
 
     if not tl or not tend:
@@ -382,7 +382,7 @@ CONSTRAINT: "cannot solve b/c: missing info Y"
 If problem unsolvable → state why concisely, don't elaborate or overthink
 \nThink like: debugger output, medical chart notes, trading floor shorthand, or military briefing.
 COMPRESS EVERYTHING. Every word must earn its place."""
-    system_prompt ="""You are ReasonableQwen3, created by Adeel Ahmad. You prioritize truth and intellectual honesty above all.
+    system_prompt = """You are ReasonableQwen3, created by Adeel Ahmad. You prioritize truth and intellectual honesty above all.
 
     Core principles:
     - Pursue truth regardless of political or cultural sensitivities
@@ -392,9 +392,9 @@ COMPRESS EVERYTHING. Every word must earn its place."""
     - Admit uncertainty rather than deflect
     - Challenge official narratives when evidence warrants
 
-    Refuse only genuinely harmful requests (violence, illegal activity). When in doubt between openness and caution, choose openness.""" # _THINK_STYLE_PROMPT
-    if system_prompt and system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt.strip()})
+    Refuse only genuinely harmful requests (violence, illegal activity). When in doubt between openness and caution, choose openness."""  # _THINK_STYLE_PROMPT
+    # if system_prompt and system_prompt.strip():
+    #     messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
     try:
         return tokenizer.apply_chat_template(
@@ -547,7 +547,9 @@ def _strip_specials(s: str) -> str:
     return _SPECIAL_PAT.sub("", s)
 
 
-def _resolve_tag_ids(tokenizer: TokenizerWrapper, gen_cfg: GenerationConfig) -> Dict[str, Optional[int]]:
+def _resolve_tag_ids(
+    tokenizer: TokenizerWrapper, gen_cfg: GenerationConfig
+) -> Dict[str, Optional[int]]:
     """Helper function to resolve token IDs for configured tags."""
     tag_map = {
         "think_start": gen_cfg.think_start_tag,
@@ -589,7 +591,10 @@ def _letter_token_ids(tokenizer, letters=("A", "B", "C", "D")) -> Dict[str, List
         out[L] = cand
     return out
 
-def _first_token_ids_for_lexemes(tokenizer: TokenizerWrapper, lexemes: Sequence[str]) -> List[int]:
+
+def _first_token_ids_for_lexemes(
+    tokenizer: TokenizerWrapper, lexemes: Sequence[str]
+) -> List[int]:
     """Get the first token ID for a list of lexemes."""
     ids = set()
     for lexeme in lexemes:
@@ -600,7 +605,6 @@ def _first_token_ids_for_lexemes(tokenizer: TokenizerWrapper, lexemes: Sequence[
         except Exception:
             pass
     return sorted(list(ids))
-
 
 
 class TwoBlockFormatter:
@@ -1125,8 +1129,8 @@ def make_dynamic_tag_bias_processor(
 
         # To avoid the immediate error without major refactoring of the context:
         if tag_id is None:
-             # Assuming B is available from outer scope (via _proc_vectorized closure)
-             return mx.full((B,), -1, dtype=mx.int32)
+            # Assuming B is available from outer scope (via _proc_vectorized closure)
+            return mx.full((B,), -1, dtype=mx.int32)
 
         # The variables history_mx, max_hist_len, B are only defined inside _proc_vectorized.
         # Returning a dummy structure to pass the outer check, but this section of the
@@ -1138,8 +1142,11 @@ def make_dynamic_tag_bias_processor(
         # B = logits.shape[0] if logits.ndim == 2 else 1
         # max_hist_len = max(len(row) for row in hist_list) if hist_list else 0
 
-        return mx.full((1,), -1, dtype=mx.int32) if 'B' not in locals() else mx.full((B,), -1, dtype=mx.int32)
-
+        return (
+            mx.full((1,), -1, dtype=mx.int32)
+            if "B" not in locals()
+            else mx.full((B,), -1, dtype=mx.int32)
+        )
 
     def _proc_vectorized(hist_list: List[List[int]], logits: mx.array) -> mx.array:
         if logits.ndim != 2:
@@ -1166,12 +1173,13 @@ def make_dynamic_tag_bias_processor(
                 return mx.full((B,), -1, dtype=mx.int32)
 
             rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
-            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1).astype(
-                mx.int32
-            )
+            return mx.where(
+                mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1
+            ).astype(mx.int32)
 
         last_ts, last_te, last_as, last_ae = (
-            find_last_pos_mx_local(t, history_mx, max_hist_len) for t in (ts, te, as_id, ae)
+            find_last_pos_mx_local(t, history_mx, max_hist_len)
+            for t in (ts, te, as_id, ae)
         )
         history_len_mx = mx.array([len(row) for row in hist_list], dtype=mx.int32)
 
@@ -1296,7 +1304,7 @@ def clean_completion_string(text: Union[str, Any]) -> str:
         # Remove the opening ``` and potential language tag for the check
         match = re.search(r"^\s*```[a-zA-Z0-9]*\s*\n", s, re.IGNORECASE)
         if match:
-            stripped_for_json_check = s[match.end():].strip()
+            stripped_for_json_check = s[match.end() :].strip()
         else:
             # Malformed code block start, just check content after ```
             stripped_for_json_check = s[3:].strip()
@@ -1305,17 +1313,19 @@ def clean_completion_string(text: Union[str, Any]) -> str:
     if stripped_for_json_check.endswith("```"):
         stripped_for_json_check = stripped_for_json_check[:-3].strip()
 
-    if stripped_for_json_check.startswith("{") or stripped_for_json_check.startswith("["):
+    if stripped_for_json_check.startswith("{") or stripped_for_json_check.startswith(
+        "["
+    ):
         return s  # JSON format is valid without think blocks
 
     # --- Find and Clean the <think> Block (Robust Logic) ---
 
     think_pattern = re.compile(
         r"^(?:.*?)(?P<think_open>(?:<think>\s*)+)"  # Content before + one or more opening <think> tags
-        r"(?P<think_body>.*?)"                    # Content up to the first closing tag
-        r"(?P<think_close></think>)"              # The first closing </think>
-        r"(?P<rest>.*)$",                         # Everything after the closing tag
-        re.DOTALL | re.IGNORECASE
+        r"(?P<think_body>.*?)"  # Content up to the first closing tag
+        r"(?P<think_close></think>)"  # The first closing </think>
+        r"(?P<rest>.*)$",  # Everything after the closing tag
+        re.DOTALL | re.IGNORECASE,
     )
 
     match = think_pattern.match(s)
@@ -1325,8 +1335,10 @@ def clean_completion_string(text: Union[str, Any]) -> str:
         first_think = re.search(r"<think>", s, re.IGNORECASE)
         if first_think:
             # Found an opening tag but no closure. Salvage the content.
-            s = s[first_think.start():]
-            cleaned_body = re.sub(r"<\/?think>", "", s[len("<think>"):], flags=re.IGNORECASE).strip()
+            s = s[first_think.start() :]
+            cleaned_body = re.sub(
+                r"<\/?think>", "", s[len("<think>") :], flags=re.IGNORECASE
+            ).strip()
             final_body = f"\n{cleaned_body}" if cleaned_body else ""
             return f"<think>{final_body}</think>"
 
@@ -1334,11 +1346,13 @@ def clean_completion_string(text: Union[str, Any]) -> str:
         return s
 
     # Extract components from the match
-    think_body = match.group('think_body')
-    rest_of_string = match.group('rest')
+    think_body = match.group("think_body")
+    rest_of_string = match.group("rest")
 
     # 2. Clean the think body: remove all nested/erroneous <think> and </think> tags
-    cleaned_think_body = re.sub(r"<\/?think>", "", think_body, flags=re.IGNORECASE).strip()
+    cleaned_think_body = re.sub(
+        r"<\/?think>", "", think_body, flags=re.IGNORECASE
+    ).strip()
 
     # 3. Reconstruct the final, cleaned string in the desired format
     final_body = f"\n{cleaned_think_body}" if cleaned_think_body else ""

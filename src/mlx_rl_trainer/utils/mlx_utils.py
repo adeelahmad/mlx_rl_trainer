@@ -46,11 +46,9 @@ _TOOL_LIKE_MARKERS = [
 ]
 
 
-
 def limit_memory(max_memory_gb: float) -> Optional[int]:
     """Sets the MLX memory limit using updated API with error handling."""
     try:
-        # Check for mx.get_peak_memory() existence
         if hasattr(mx, "get_peak_memory"):
             logging.info(f"Initial peak memory: {mx.get_peak_memory() / 1e9:.3f} GB")
         else:
@@ -58,7 +56,6 @@ def limit_memory(max_memory_gb: float) -> Optional[int]:
 
         max_memory_bytes = int(max_memory_gb * 1024 * 1024 * 1024)
 
-        # Add try/except around mx.set_memory_limit()
         if hasattr(mx, "set_memory_limit"):
             previous_limit = mx.set_memory_limit(max_memory_bytes)
             logging.info(
@@ -85,7 +82,6 @@ def limit_memory(max_memory_gb: float) -> Optional[int]:
     except Exception as e:
         logging.error(f"Failed to set MLX memory limit: {e}", exc_info=True)
         return None
-
 
 
 def _is_metal_internal_error(err: BaseException) -> bool:
@@ -148,10 +144,6 @@ class ContentAlignBridge(nn.Module):
         gen_cfg: Optional[GenerationConfig] = None,
     ):
         super().__init__()
-        from mlx_rl_trainer.utils.text_utils import (
-            extract_answer_region,
-        )  # Local import
-
         self.tok_t, self.tok_s, self.pool, self.scale = (
             teacher_tokenizer,
             student_tokenizer,
@@ -178,43 +170,90 @@ class ContentAlignBridge(nn.Module):
         _freeze_module(self.s_emb)
         self.bridge.freeze()
 
-    @staticmethod
-    def _pool_vec(tok_emb: mx.array, pool: str) -> mx.array:
+    def _batch_tokenize_and_pad(
+        self, texts: List[str], tokenizer: TokenizerWrapper
+    ) -> Tuple[mx.array, mx.array]:
+        """Tokenizes a batch of texts and pads them to the same length."""
+        # Tokenize all texts
+        token_ids = [tokenizer.encode(s, add_special_tokens=False) or [] for s in texts]
+        lengths = [len(ids) for ids in token_ids]
+
+        # If all sequences are empty, return empty tensors
+        if not any(lengths):
+            return mx.array([], dtype=mx.int32), mx.array([], dtype=mx.bool_)
+
+        max_len = max(lengths)
+        pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+
+        # Create padded array and attention mask
+        padded_ids = mx.array(
+            [ids + [pad_id] * (max_len - len(ids)) for ids in token_ids], dtype=mx.int32
+        )
+        attention_mask = mx.arange(max_len)[None, :] < mx.array(lengths)[:, None]
+
+        return padded_ids, attention_mask
+
+    def _pool_vec_batch(
+        self, tok_emb: mx.array, attention_mask: mx.array, pool: str
+    ) -> mx.array:
+        """Performs pooling on a batch of token embeddings, respecting padding."""
         if tok_emb.size == 0:
-            return mx.zeros((tok_emb.shape[-1],), dtype=tok_emb.dtype)
-        return tok_emb[-1] if pool == "last" else tok_emb.mean(axis=0)
+            return mx.zeros((tok_emb.shape[0], tok_emb.shape[-1]), dtype=tok_emb.dtype)
+
+        if pool == "last":
+            # Find the index of the last non-padded token for each sequence
+            sequence_lengths = attention_mask.sum(axis=1) - 1
+            # Gather the embeddings at these indices
+            pooled_vec = mx.take_along_axis(
+                tok_emb, sequence_lengths[:, None, None], axis=1
+            ).squeeze(1)
+        else:  # Default to mean pooling
+            # Mask out padding tokens by multiplying with the attention mask
+            masked_emb = tok_emb * attention_mask[..., None].astype(tok_emb.dtype)
+            # Sum embeddings and divide by the number of non-padded tokens
+            sum_emb = masked_emb.sum(axis=1)
+            num_tokens = attention_mask.sum(axis=1, keepdims=True)
+            pooled_vec = sum_emb / mx.maximum(num_tokens, 1)
+
+        return pooled_vec
 
     def __call__(self, texts: List[str]) -> List[float]:
+        """
+        Computes alignment scores for a batch of texts in a fully vectorized manner.
+        """
         from mlx_rl_trainer.utils.text_utils import extract_answer_region
 
-        scores: List[float] = []
-        for s in texts:
-            ans = extract_answer_region(s or "", self.gen_cfg)
-            if not ans.strip():
-                scores.append(0.0)
-                continue
-            t_ids, s_ids = (
-                self.tok_t.encode(ans, add_special_tokens=False) or [],
-                self.tok_s.encode(ans, add_special_tokens=False) or [],
-            )
-            if not t_ids or not s_ids:
-                scores.append(0.0)
-                continue
-            t_vec = self._pool_vec(
-                self.t_emb(mx.array(t_ids, dtype=mx.int32)), self.pool
-            )
-            s_vec = self._pool_vec(
-                self.s_emb(mx.array(s_ids, dtype=mx.int32)), self.pool
-            )
-            mapped = self.bridge(t_vec)
-            a = mapped / (mx.norm(mapped) + 1e-8)
-            b = s_vec / (mx.norm(s_vec) + 1e-8)
-            cos = mx.sum(a * b)
-            score = 0.5 * (1.0 + cos)
-            scores.append(
-                max(0.0, min(1.0, float(mx.clip(score, 0.0, 1.0).item()) * self.scale))
-            )
-        return scores
+        if not texts:
+            return []
+
+        # Extract answer regions for all texts
+        answers = [extract_answer_region(s or "", self.gen_cfg) for s in texts]
+
+        # Batch tokenize and pad for both teacher and student models
+        t_ids, t_mask = self._batch_tokenize_and_pad(answers, self.tok_t)
+        s_ids, s_mask = self._batch_tokenize_and_pad(answers, self.tok_s)
+
+        # Get embeddings for the entire batch
+        t_emb_unpooled = self.t_emb(t_ids)
+        s_emb_unpooled = self.s_emb(s_ids)
+
+        # Pool the embeddings for the entire batch
+        t_vecs = self._pool_vec_batch(t_emb_unpooled, t_mask, self.pool)
+        s_vecs = self._pool_vec_batch(s_emb_unpooled, s_mask, self.pool)
+
+        # Map teacher vectors to student space for the entire batch
+        mapped_vecs = self.bridge(t_vecs)
+
+        # Normalize vectors and compute cosine similarity for the entire batch
+        a = mapped_vecs / (mx.linalg.norm(mapped_vecs, axis=-1, keepdims=True) + 1e-8)
+        b = s_vecs / (mx.linalg.norm(s_vecs, axis=-1, keepdims=True) + 1e-8)
+        cos_sim = mx.sum(a * b, axis=-1)
+
+        # Scale and clip scores
+        scores = 0.5 * (1.0 + cos_sim)
+        final_scores = mx.clip(scores, 0.0, 1.0) * self.scale
+
+        return final_scores.tolist()
 
 
 _LAYER_PAT = re.compile(r"(?:^|[^a-zA-Z0-9_])layers\.(\d+)(?:[^0-9_]|$)")
@@ -282,6 +321,7 @@ def scale_grads_by_band(
     return tree_unflatten(out)
 
 
+# the common `{'model': ...}` nesting from mlx-lm.
 def mask_grads_to_layer_band(
     grads_tree,
     start,
@@ -291,17 +331,34 @@ def mask_grads_to_layer_band(
     include_head=True,
     include_final_norm=True,
 ):
-    flat = tree_flatten(grads_tree)
+    # Check if the gradients are wrapped in a 'model' key and unwrap if necessary.
+    # This makes the function robust to different model structures.
+    is_wrapped = (
+        isinstance(grads_tree, dict)
+        and len(grads_tree) == 1
+        and "model" in grads_tree
+        and isinstance(grads_tree["model"], dict)
+    )
+    inner_grads_tree = grads_tree["model"] if is_wrapped else grads_tree
+
+    if not isinstance(inner_grads_tree, dict):
+        # Return an empty dict if the structure is unexpected to prevent errors
+        return {}
+
+    flat = tree_flatten(inner_grads_tree)
     kept = []
     for name, g in flat:
         if not isinstance(g, mx.array):
             kept.append((name, g))
             continue
+
         li = _find_layer_index(name)
         keep = False
         if li is not None:
+            # Mask layers based on the start and end range
             keep = (start is None or li >= start) and (end is None or li <= end)
         else:
+            # Handle non-layer parameters like embeddings and normalization layers
             lname = name.lower()
             if "embed" in lname or "embedding" in lname:
                 keep = include_embed
@@ -309,8 +366,17 @@ def mask_grads_to_layer_band(
                 keep = include_final_norm
             elif "head" in lname:
                 keep = include_head
+
         kept.append((name, g if keep else mx.zeros_like(g)))
-    return tree_unflatten(kept)
+
+    # Reconstruct the inner tree from the filtered list
+    unflattened_tree = tree_unflatten(kept)
+
+    # If the original was wrapped, re-wrap the result to maintain structure
+    if is_wrapped:
+        return {"model": unflattened_tree}
+    else:
+        return unflattened_tree
 
 
 def mask_grads_to_specific_layers(
@@ -585,17 +651,10 @@ def make_dynamic_tag_bias_processor(
         if eos_tok is not None:
             logits = logits.at[:, eos_tok].add(mx.where(ae_seen, B_EOS_ANS, 0.0))
 
-        # --- FIX START ---
-        # The .at[mask, list] indexing is ambiguous and can cause backend errors.
-        # This new method is more robust: create a full bias matrix and apply it with a mask.
         if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
-            # Create a bias array of the same shape as logits, initially all zeros.
             encourage_bias = mx.zeros_like(logits)
-            # Set the bias value for the target token IDs (columns) across all rows.
             encourage_bias = encourage_bias.at[:, encourage_ids].add(B_ENCOURAGE)
-            # Apply the bias only to the rows where `inside_think` is True by broadcasting the mask.
             logits = logits + (encourage_bias * inside_think[:, None])
-        # --- FIX END ---
 
         mcq_first_token_mask = mx.logical_and(
             is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
@@ -613,13 +672,11 @@ def make_dynamic_tag_bias_processor(
         non_mcq_first_answer = mx.logical_and(
             mx.logical_not(is_mcq_mask), mx.logical_and(inside_answer, (k_answer == 0))
         )
-        # --- FIX START ---
-        # Applying the same robust pattern here to avoid potential indexing errors.
+
         if ban_ids and BAN_NONMCQ != 0 and mx.any(non_mcq_first_answer).item():
             ban_bias = mx.zeros_like(logits)
             ban_bias = ban_bias.at[:, ban_ids].add(BAN_NONMCQ)
             logits = logits + (ban_bias * non_mcq_first_answer[:, None])
-        # --- FIX END ---
 
         if ae is not None:
             min_ans_len = mx.where(is_mcq_mask, MIN_ANS_MCQ, MIN_ANS)
