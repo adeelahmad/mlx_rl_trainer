@@ -89,7 +89,7 @@ monitoring:
   generate_at_checkpoints: true
 
   use_wandb: true
-  wandb_project: "mlx-rl-trainer-enhanced"
+  wandb_project: "mlx-grpo-qwen3-v5"
   wandb_entity: "adeelahmad"
   wandb_run_name: "experiment-001"
 
