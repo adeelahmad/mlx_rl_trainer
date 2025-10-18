@@ -401,6 +401,7 @@ class ExperimentConfig(BaseModel):
     use_grad_checkpointing: bool = Field(True)
     grad_checkpoint_layers: PositiveInt = Field(1)
 
+    max_kv_size:  PositiveInt = Field(1536)
 
     trainer: TrainerParams
     model: ModelConfig
