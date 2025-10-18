@@ -3,7 +3,8 @@ outputs
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.egg-info
+*.egg-info/**
 # Distribution / Installation
 .Python
 build/

@@ -34,8 +34,6 @@ src/mlx_rl_trainer/evaluation/reasoning/__init__.py
 src/mlx_rl_trainer/evaluation/reasoning/arc.py
 src/mlx_rl_trainer/evaluation/reasoning/gsm8k.py
 src/mlx_rl_trainer/generation/__init__.py
-src/mlx_rl_trainer/generation/async_server.py
-src/mlx_rl_trainer/generation/caching.py
 src/mlx_rl_trainer/generation/generator.py
 src/mlx_rl_trainer/generation/sampler_utils.py
 src/mlx_rl_trainer/generation/processors/__init__.py
@@ -59,11 +57,11 @@ src/mlx_rl_trainer/rewards/reasoning/thinking_quality.py
 src/mlx_rl_trainer/scripts/__init__.py
 src/mlx_rl_trainer/scripts/data_preprocessing.py
 src/mlx_rl_trainer/scripts/evaluate.py
-src/mlx_rl_trainer/scripts/serve.py
 src/mlx_rl_trainer/scripts/train.py
 src/mlx_rl_trainer/utils/__init__.py
 src/mlx_rl_trainer/utils/distributed.py
 src/mlx_rl_trainer/utils/math_utils.py
 src/mlx_rl_trainer/utils/mcq_utils.py
 src/mlx_rl_trainer/utils/mlx_utils.py
+src/mlx_rl_trainer/utils/reward_shaping_utils.py
 src/mlx_rl_trainer/utils/text_utils.py
