@@ -35,23 +35,22 @@ import psutil
 logger = logging.getLogger(__name__)
 
 
-
 def _get_memory_usage_mb() -> Dict[str, float]:
     """Get current memory usage in MB from both MLX and the system process."""
     stats = {}
     try:
         # MLX Metal specific memory
-        stats['mlx_cache_mb'] = mx.metal.get_cache_memory() / (1024 * 1024)
-        stats['mlx_active_mb'] = mx.metal.get_active_memory() / (1024 * 1024)
-        stats['mlx_peak_mb'] = mx.metal.get_peak_memory() / (1024 * 1024)
+        stats["mlx_cache_mb"] = mx.metal.get_cache_memory() / (1024 * 1024)
+        stats["mlx_active_mb"] = mx.metal.get_active_memory() / (1024 * 1024)
+        stats["mlx_peak_mb"] = mx.metal.get_peak_memory() / (1024 * 1024)
 
         # System memory via psutil for a more holistic view
         process = psutil.Process()
         mem_info = process.memory_info()
-        stats['process_rss_mb'] = mem_info.rss / (1024 * 1024)
+        stats["process_rss_mb"] = mem_info.rss / (1024 * 1024)
 
         # Use MLX active memory as the primary metric for checks, but log both
-        stats['active_mb'] = stats.get('mlx_active_mb', 0)
+        stats["active_mb"] = stats.get("mlx_active_mb", 0)
         return stats
     except Exception as e:
         logger.debug(f"Could not get memory stats: {e}")

@@ -39,7 +39,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/vl.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/joint-out.jsonl"
   max_prompt_len: 150
-  max_gen_len: 512
+  max_gen_len: 296
   loader_type: "jsonl"
   shuffle_data: true
 

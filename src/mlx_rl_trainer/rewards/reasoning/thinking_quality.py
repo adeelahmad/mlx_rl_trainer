@@ -57,6 +57,7 @@ class ThinkingQualityReward(BaseReward):
             [
                 "<|endoftext|>",
                 "<|im_start|>",
+                "<think><think>",
                 "<|im_end|>",
                 "<|end|>",
                 "<|begin|>",
@@ -103,7 +104,7 @@ class ThinkingQualityReward(BaseReward):
             ],
         )
 
-        self.tag_misuse_penalty = config.get("tag_misuse_penalty", 0.001)
+        self.tag_misuse_penalty = config.get("tag_misuse_penalty", 0.3)
 
         logger.info(
             f"ThinkingQualityReward initialized: "
@@ -119,8 +120,8 @@ class ThinkingQualityReward(BaseReward):
         start_tag = gen_config.think_start_tag
         end_tag = gen_config.think_end_tag
 
-        # if not start_tag or not end_tag:
-        #     return 0.0
+        if not start_tag or not end_tag:
+            return 0.0
 
         start_count = len(re.findall(re.escape(start_tag), text, flags=re.I))
         end_count = len(re.findall(re.escape(end_tag), text, flags=re.I))
