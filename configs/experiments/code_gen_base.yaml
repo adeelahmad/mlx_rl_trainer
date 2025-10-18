@@ -5,12 +5,12 @@ trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_006"
   num_training_steps: 80000
-  learning_rate: 1e-3 # CORRECTED: Lowered to a safe value for fine-tuning.
+  learning_rate: 8e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
   grad_accum_steps: 2
   # CORRECTED: Increased beta to prevent model collapse.
-  grpo_beta: 0.0015
+  grpo_beta: 0.25
   seed: -1
 
 model:
@@ -21,7 +21,7 @@ model:
   lora_rank: 16
 
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/tr2.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/joint-outed.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/surgical/valid.jsonl"
   max_prompt_len: 150
   max_gen_len: 128

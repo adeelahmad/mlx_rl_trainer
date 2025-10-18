@@ -288,7 +288,7 @@ class TrainerParams(BaseModel):
     grad_accum_steps: PositiveInt = Field(1)
     # Only enable alternating gradients
     alternate_dual_gradients:bool = Field(True) #  true
-    use_mixed_precision:bool = Field(False) # false  # Disabled for stability
+    use_mixed_precision:bool = Field(True) # false  # Disabled for stability
     log_memory_usage:bool = Field(True) # false
 
     alternate_dual_gradients:bool = Field(True) #
@@ -393,7 +393,7 @@ class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     use_grad_checkpointing: bool = Field(True)
-    grad_checkpoint_layers: PositiveInt = Field(1)
+    grad_checkpoint_layers: PositiveInt = Field(6)
 
 
     trainer: TrainerParams
