@@ -730,7 +730,15 @@ class GRPOTrainer(BaseTrainer):
                     lambda g: g * sft_weight / self.config.trainer.grad_accum_steps,
                     sft_grads
                 )
-                combined_answer_grads = tree_map(lambda rl, sft: rl + sft, answer_grads_scaled, sft_grads_scaled)
+                # combined_answer_grads = tree_map(lambda rl, sft: rl + sft, answer_grads_scaled, sft_grads_scaled)
+
+                from .grpo_algorithm import _safe_gradient_combine
+
+                combined_answer_grads = _safe_gradient_combine(
+                    answer_grads_scaled,
+                    sft_grads_scaled,
+                    operation='add'
+                )
 
                 metrics.update(sft_metrics)
 

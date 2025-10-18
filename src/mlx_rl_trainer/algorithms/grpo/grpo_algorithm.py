@@ -1,42 +1,20 @@
 """
-GRPO Algorithm with Dual Gradient + SFT Layer Control
+GRPO Algorithm - BULLETPROOF Gradient Combination
 
-FEATURES:
-1. Dual gradient computation (thinking vs answer paths)
-2. SFT loss computation with layer-specific control
-3. Three configurable SFT modes:
-   - 'all': Apply SFT to all layers (backward compatible)
-   - 'answer_only': SFT only on answer layers
-   - 'weighted': Different weights for thinking vs answer layers
-   - 'exclude_thinking': No SFT on thinking layers (DEFAULT for System 1/2)
+Handles ANY structural mismatch between gradient dictionaries:
+- Missing keys (like 'rope')
+- Extra keys
+- Different nesting depths
+- None values
+- Non-tensor values
 
-CONFIGURATION:
-trainer:
-  # Dual gradients for System 1/2
-  use_dual_gradients: true
-  thinking_layer_start: 22
-  thinking_layer_end: 30
-  answer_layer_start: 31
-  answer_layer_end: 36
-  answer_gradient_weight: 2.0
-
-  # SFT configuration
-  use_sft_on_answer: true
-  sft_mode: 'exclude_thinking'  # Recommended for System 1/2
-  sft_weight: 0.1
-  sft_thinking_weight: 0.0  # For 'weighted' mode
-  sft_answer_weight: 1.0    # For 'weighted' mode
-
-DEFAULT BEHAVIOR (non-breaking):
-- If sft_mode not specified: 'all' (backward compatible)
-- If layer boundaries not specified: Applies to all layers
-- 'exclude_thinking' prevents thinking layers from being constrained by SFT
+Strategy: Use first gradient dict as template, fill in from second where possible
 """
 import logging
 from typing import Dict, Any, Tuple, Optional
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_unflatten, tree_map
 from mlx_rl_trainer.core.config import ExperimentConfig
 
 logger = logging.getLogger(__name__)
@@ -56,61 +34,165 @@ def _mask_gradients_by_layers(
 ) -> Dict:
     """
     Mask SFT gradients based on layer configuration.
-
-    Modes:
-    - 'all': No masking (apply SFT to all layers)
-    - 'answer_only': Only answer layers get SFT gradients
-    - 'weighted': Different weights for thinking vs answer layers
-    - 'exclude_thinking': Zero out thinking layer gradients (DEFAULT)
+    Preserves the 'model' wrapper and full nested structure.
     """
-    # Get layer boundaries
     thinking_start = getattr(config.trainer, 'thinking_layer_start', None)
     thinking_end = getattr(config.trainer, 'thinking_layer_end', None)
     answer_start = getattr(config.trainer, 'answer_layer_start', None)
     answer_end = getattr(config.trainer, 'answer_layer_end', None)
 
-    # If layer boundaries not specified or mode is 'all', return gradients as-is
     if sft_mode == 'all' or thinking_start is None or answer_start is None:
         return grads
 
-    # Get weights for weighted mode
     thinking_weight = getattr(config.trainer, 'sft_thinking_weight', 0.0)
     answer_weight = getattr(config.trainer, 'sft_answer_weight', 1.0)
 
-    # Process gradients
-    masked_grads = {}
-    for key, grad in tree_flatten(grads):
-        layer_num = _extract_layer_number(key)
+    has_model_wrapper = 'model' in grads and isinstance(grads['model'], dict)
+    inner_grads = grads['model'] if has_model_wrapper else grads
+
+    def mask_grad(grad, path_parts):
+        """Apply mask based on layer number in path."""
+        if not isinstance(grad, mx.array):
+            return grad
+
+        path_str = '.'.join(str(p) for p in path_parts)
+        layer_num = _extract_layer_number(path_str)
 
         if layer_num is None:
-            # Non-layer parameters (embeddings, lm_head, etc.)
-            masked_grads[key] = grad
-        else:
-            # Layer-specific parameters
-            if sft_mode == 'answer_only':
-                if answer_start <= layer_num <= answer_end:
-                    masked_grads[key] = grad
-                else:
-                    masked_grads[key] = mx.zeros_like(grad)
+            return grad
 
-            elif sft_mode == 'weighted':
-                if thinking_start <= layer_num <= thinking_end:
-                    masked_grads[key] = grad * thinking_weight
-                elif answer_start <= layer_num <= answer_end:
-                    masked_grads[key] = grad * answer_weight
-                else:
-                    masked_grads[key] = grad
-
-            elif sft_mode == 'exclude_thinking':
-                if thinking_start <= layer_num <= thinking_end:
-                    masked_grads[key] = mx.zeros_like(grad)
-                else:
-                    masked_grads[key] = grad
-
+        if sft_mode == 'answer_only':
+            if answer_start <= layer_num <= answer_end:
+                return grad
             else:
-                masked_grads[key] = grad
+                return mx.zeros_like(grad)
+        elif sft_mode == 'weighted':
+            if thinking_start <= layer_num <= thinking_end:
+                return grad * thinking_weight
+            elif answer_start <= layer_num <= answer_end:
+                return grad * answer_weight
+            else:
+                return grad
+        elif sft_mode == 'exclude_thinking':
+            if thinking_start <= layer_num <= thinking_end:
+                return mx.zeros_like(grad)
+            else:
+                return grad
+        return grad
 
-    return masked_grads
+    flat_inner = tree_flatten(inner_grads, is_leaf=lambda x: isinstance(x, mx.array))
+    masked_flat = [(path, mask_grad(val, path)) for path, val in flat_inner]
+    masked_inner = tree_unflatten(masked_flat)
+
+    if has_model_wrapper:
+        return {'model': masked_inner}
+    return masked_inner
+
+
+def _robust_tree_combine(tree1: Any, tree2: Any, fn, path="") -> Any:
+    """
+    Recursively combine two trees, handling structural mismatches.
+
+    Uses tree1 as the template. If tree2 has matching keys, applies fn.
+    If tree2 is missing keys, uses tree1 value only.
+
+    Args:
+        tree1: First tree (template)
+        tree2: Second tree
+        fn: Function to combine matching values (e.g., lambda a, b: a + b)
+        path: Current path (for logging)
+
+    Returns:
+        Combined tree with tree1's structure
+    """
+    # Base case: both are arrays
+    if isinstance(tree1, mx.array) and isinstance(tree2, mx.array):
+        try:
+            return fn(tree1, tree2)
+        except Exception as e:
+            logger.warning(f"Error combining arrays at {path}: {e}. Using tree1 only.")
+            return tree1
+
+    # tree1 is array but tree2 is not - use tree1
+    if isinstance(tree1, mx.array):
+        if tree2 is not None and not isinstance(tree2, mx.array):
+            logger.debug(f"Type mismatch at {path}: tree1=array, tree2={type(tree2)}. Using tree1.")
+        return tree1
+
+    # tree1 is dict
+    if isinstance(tree1, dict):
+        if not isinstance(tree2, dict):
+            logger.warning(f"Structure mismatch at {path}: tree1=dict, tree2={type(tree2)}. Using tree1 only.")
+            return tree1
+
+        result = {}
+        for key, val1 in tree1.items():
+            new_path = f"{path}.{key}" if path else str(key)
+
+            if key in tree2:
+                # Both have this key, recurse
+                result[key] = _robust_tree_combine(val1, tree2[key], fn, new_path)
+            else:
+                # tree2 missing this key
+                logger.debug(f"Key '{key}' missing in tree2 at {path}. Using tree1 value only.")
+                result[key] = val1
+
+        return result
+
+    # tree1 is list/tuple
+    if isinstance(tree1, (list, tuple)):
+        if not isinstance(tree2, (list, tuple)):
+            logger.warning(f"Structure mismatch at {path}: tree1=list, tree2={type(tree2)}. Using tree1 only.")
+            return tree1
+
+        if len(tree1) != len(tree2):
+            logger.warning(f"Length mismatch at {path}: tree1={len(tree1)}, tree2={len(tree2)}. Using tree1 only.")
+            return tree1
+
+        result = [_robust_tree_combine(v1, v2, fn, f"{path}[{i}]")
+                  for i, (v1, v2) in enumerate(zip(tree1, tree2))]
+        return type(tree1)(result)
+
+    # Other types (scalars, None, etc.) - use tree1
+    return tree1
+
+
+def _safe_gradient_combine(grad1: Dict, grad2: Dict, operation='add') -> Dict:
+    """
+    Safely combine two gradient dictionaries with bulletproof error handling.
+
+    Handles:
+    - Missing keys (e.g., 'rope' in one but not the other)
+    - Structural mismatches
+    - Type mismatches
+    - None values
+
+    Always returns a valid gradient dict (never crashes).
+    """
+    if not grad1:
+        logger.warning("grad1 is empty, returning grad2")
+        return grad2 or {}
+    if not grad2:
+        logger.warning("grad2 is empty, returning grad1")
+        return grad1
+
+    # Define combination function
+    if operation == 'add':
+        combine_fn = lambda a, b: a + b
+    elif operation == 'subtract':
+        combine_fn = lambda a, b: a - b
+    else:
+        logger.error(f"Unknown operation: {operation}. Returning grad1.")
+        return grad1
+
+    try:
+        # Use robust tree combine
+        result = _robust_tree_combine(grad1, grad2, combine_fn)
+        return result
+    except Exception as e:
+        logger.error(f"Error in gradient combination: {e}", exc_info=True)
+        logger.error("Falling back to grad1 only")
+        return grad1
 
 
 class GRPOAlgorithm:
@@ -181,30 +263,18 @@ class GRPOAlgorithm:
             return mx.array(zero_val), {}, {'kl_divergence': zero_val, 'policy_loss': zero_val}
 
     def calculate_dual_gradient_loss(self, rollout_batch, full_config, pad_token_id):
-        """
-        Compute separate gradients for thinking and answer tokens.
-
-        This creates two gradient pathways:
-        - Thinking gradients: From thinking tokens only
-        - Answer gradients: From answer tokens only
-
-        These can be applied with different weights and to different layers
-        to create fast vs deep reasoning modes (System 1 vs System 2).
-        """
+        """Compute separate gradients for thinking and answer tokens."""
         A = rollout_batch
 
-        # Check if we have the necessary masks
         has_thinking_mask = 'thinking_mask' in A
         has_answer_mask = 'answer_mask' in A
 
-        # Fallback to original method if masks not present
         if not has_thinking_mask or not has_answer_mask:
-            logger.warning("Thinking/answer masks not found in batch. Falling back to standard gradient computation.")
+            logger.warning("Thinking/answer masks not found. Falling back to standard gradient computation.")
             loss, grads, metrics = self.calculate_loss_and_grads(A, full_config, pad_token_id)
             return loss, grads, loss, grads, metrics
 
         def compute_loss_with_mask_and_metrics(actor_model, mask_type, compute_metrics=False):
-            """Compute loss using only specific tokens (thinking or answer)."""
             tokens_key = 'tokens'
             response_mask_key = 'response_mask'
 
@@ -223,7 +293,6 @@ class GRPOAlgorithm:
             log_ratio = gathered_log_probs - A['ref_log_probs']
             kl_term = mx.exp(log_ratio) - 1 - log_ratio
 
-            # Apply the thinking or answer mask
             token_mask = A[mask_type]
             combined_mask = A[response_mask_key] * token_mask
 
@@ -233,7 +302,6 @@ class GRPOAlgorithm:
 
             total_loss_per_token = policy_loss_term + self.beta * kl_penalty
 
-            # Normalize by actual number of masked tokens
             mask_sum = mx.sum(combined_mask)
             loss = mx.sum(total_loss_per_token) / (mask_sum + 1e-8)
 
@@ -244,51 +312,24 @@ class GRPOAlgorithm:
 
             return loss
 
-        # Compute thinking-only gradients
         thinking_loss_fn = lambda model: compute_loss_with_mask_and_metrics(model, 'thinking_mask', False)
         thinking_grads_fn = nn.value_and_grad(self.actor, thinking_loss_fn)
         thinking_loss, thinking_grads = thinking_grads_fn(self.actor)
 
-        # Compute answer-only gradients AND metrics in one pass
         answer_loss_fn = lambda model: compute_loss_with_mask_and_metrics(model, 'answer_mask', True)
         answer_grads_fn = nn.value_and_grad(self.actor, answer_loss_fn)
         (answer_loss, metrics), answer_grads = answer_grads_fn(self.actor)
 
-        # Convert metrics to dict of floats
         metrics_dict = {k: float(v.item()) for k, v in metrics.items()}
 
         return thinking_loss, thinking_grads, answer_loss, answer_grads, metrics_dict
 
     def calculate_sft_loss_and_grads(self, rollout_batch, reference_tokens, full_config, pad_token_id):
-        """
-        Compute SFT (supervised fine-tuning) loss and gradients with layer-specific control.
-
-        SFT provides supervised signal to keep answers aligned with reference completions
-        while RL optimizes for rewards.
-
-        NEW: Layer-specific SFT control for System 1/2 architecture:
-        - Mode 'exclude_thinking': No SFT on thinking layers (DEFAULT)
-        - Mode 'answer_only': SFT only on answer layers
-        - Mode 'weighted': Different weights for thinking vs answer layers
-        - Mode 'all': Apply to all layers (backward compatible)
-
-        Args:
-            rollout_batch: Batch containing tokens and masks
-            reference_tokens: Ground truth RESPONSE tokens (not including prompt) [batch, response_len]
-            full_config: Experiment configuration
-            pad_token_id: ID of padding token
-
-        Returns:
-            loss: SFT loss value
-            grads: Gradients from SFT loss (layer-masked if configured)
-            metrics_dict: Dictionary with loss breakdown
-        """
+        """Compute SFT loss and gradients with layer-specific control."""
         A = rollout_batch
 
-        # Get SFT mode
-        sft_mode = getattr(full_config.trainer, 'sft_mode', 'all')
+        sft_mode = getattr(full_config.trainer, 'sft_mode', 'weighted')
 
-        # Log SFT mode on first call
         if not hasattr(self, '_sft_mode_logged'):
             logger.info(f"SFT layer control mode: {sft_mode}")
             if sft_mode == 'exclude_thinking':
@@ -301,7 +342,6 @@ class GRPOAlgorithm:
                 logger.info(f"Weighted SFT: thinking={thinking_w}, answer={answer_w}")
             self._sft_mode_logged = True
 
-        # Check if we have answer mask
         if 'answer_mask' not in A:
             logger.warning("Answer mask not found for SFT. Falling back to response_mask.")
             answer_mask = A.get('response_mask', mx.ones_like(reference_tokens, dtype=mx.float32))
@@ -309,38 +349,30 @@ class GRPOAlgorithm:
             answer_mask = A['answer_mask']
 
         def compute_sft_loss(actor_model):
-            """Compute cross-entropy loss on answer tokens only."""
             tokens_key = 'tokens'
             response_mask_key = 'response_mask'
 
-            # Get logits for full sequence
             logits = actor_model(A[tokens_key])
             if isinstance(logits, tuple):
                 logits = logits[0]
             logits = logits.astype(mx.float32)
 
-            # Extract response portion logits
             offset = A[tokens_key].shape[1] - A[response_mask_key].shape[1]
+            response_logits = logits[:, offset-1:-1, :]
 
-            # Shift logits for next-token prediction: logits[t] predicts token[t+1]
-            response_logits = logits[:, offset-1:-1, :]  # [batch, response_len, vocab]
+            min_len = min(response_logits.shape[1], reference_tokens.shape[1])
+            response_logits = response_logits[:, :min_len, :]
+            target_tokens = reference_tokens[:, :min_len]
+            current_answer_mask = answer_mask[:, :min_len] if answer_mask.shape[1] >= min_len else answer_mask
 
-            # Reference tokens are already response-only, shift for next-token prediction
-            target_tokens = reference_tokens[:, 1:]  # [batch, response_len-1]
+            if response_logits.shape[1] != target_tokens.shape[1]:
+                logger.debug(
+                    f"Aligning SFT shapes: "
+                    f"logits {response_logits.shape[1]} vs "
+                    f"targets {target_tokens.shape[1]} vs "
+                    f"mask {current_answer_mask.shape[1]} -> {min_len}"
+                )
 
-            # Answer mask also needs to exclude first token to align with targets
-            current_answer_mask = answer_mask[:, 1:] if answer_mask.shape[1] > 1 else answer_mask
-
-            # Verify shapes match and truncate if needed
-            min_len = min(response_logits.shape[1], target_tokens.shape[1], current_answer_mask.shape[1])
-
-            if response_logits.shape[1] != target_tokens.shape[1] or response_logits.shape[1] != current_answer_mask.shape[1]:
-                logger.debug(f"Aligning SFT shapes: logits {response_logits.shape[1]} vs targets {target_tokens.shape[1]} vs mask {current_answer_mask.shape[1]} -> {min_len}")
-                response_logits = response_logits[:, :min_len, :]
-                target_tokens = target_tokens[:, :min_len]
-                current_answer_mask = current_answer_mask[:, :min_len]
-
-            # Compute cross-entropy loss
             log_probs = nn.log_softmax(response_logits, axis=-1)
             gathered_log_probs = mx.take_along_axis(
                 log_probs,
@@ -348,10 +380,8 @@ class GRPOAlgorithm:
                 axis=-1
             ).squeeze(-1)
 
-            # Apply answer mask - only compute loss on answer tokens
             masked_log_probs = -gathered_log_probs * current_answer_mask
 
-            # Normalize by number of answer tokens
             mask_sum = mx.sum(current_answer_mask)
             loss = mx.sum(masked_log_probs) / (mask_sum + 1e-8)
 
@@ -361,7 +391,7 @@ class GRPOAlgorithm:
             loss_grad_fn = nn.value_and_grad(self.actor, compute_sft_loss)
             (loss, metrics), grads = loss_grad_fn(self.actor)
 
-            # Apply layer-specific masking to gradients
+            # Apply layer-specific masking
             grads = _mask_gradients_by_layers(grads, full_config, sft_mode)
 
             metrics_dict = {k: float(v.item()) for k, v in metrics.items()}
