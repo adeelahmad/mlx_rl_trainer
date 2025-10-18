@@ -387,7 +387,7 @@ class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     use_grad_checkpointing: bool = Field(True)
-    grad_checkpoint_layers: PositiveInt = Field(8)
+    grad_checkpoint_layers: PositiveInt = Field(1)
 
     trainer: TrainerParams
     model: ModelConfig

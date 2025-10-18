@@ -5,10 +5,10 @@ trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_006"
   num_training_steps: 80000
-  learning_rate: 1e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
+  learning_rate: 2e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
-  num_rollout_samples: 1
-  grad_accum_steps: 2
+  num_rollout_samples: 3
+  grad_accum_steps: 1
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.0015
   seed: -1
@@ -24,7 +24,7 @@ trainer:
   # SFT configuration
   use_sft_on_answer: true
   sft_mode: "weighted" # Recommended for System 1/2
-  sft_weight: 0.2
+  sft_weight: 0.4
   sft_thinking_weight: 0.3 # For 'weighted' mode
   sft_answer_weight: 0.9 # For 'weighted' mode
 
@@ -39,7 +39,7 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/vl.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/joint-out.jsonl"
   max_prompt_len: 150
-  max_gen_len: 296
+  max_gen_len: 256
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -65,14 +65,14 @@ rewards:
       use_trainer_thinking_limits: false # Use trainer max_thinking_tokens
 
   - name: "semantic_similarity"
-    weight: 0.75
+    weight: 0.70
     config:
       method: "jaccard"
 
-  # - name: "steps_coverage"
-  #   weight: 0.05
-  #   config:
-  #     required_steps: 2
+  - name: "steps_coverage"
+    weight: 0.05
+    config:
+      required_steps: 2
 
 evaluation:
   - name: "human_eval"
