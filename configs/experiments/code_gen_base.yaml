@@ -84,6 +84,18 @@ monitoring:
   log_samples_every: 1 # Log samples at every update step to debug easily.
   max_logged_samples: 50 # Log a few samples to see the outputs.
 
+  # Chart generation
+  generate_charts_every: 100
+  generate_at_checkpoints: true
+
+  use_wandb: true
+  wandb_project: "mlx-rl-trainer-enhanced"
+  wandb_entity: "adeelahmad"
+  wandb_run_name: "experiment-001"
+
+  # Logging frequency
+  log_prompts: true
+
 # Checkpointing Configuration - Enhanced with Retry Logic
 checkpointing:
   checkpoint_dir: "checkpoints"
