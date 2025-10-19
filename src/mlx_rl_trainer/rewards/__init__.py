@@ -17,7 +17,6 @@ import mlx_rl_trainer.rewards.content.steps_coverage
 import mlx_rl_trainer.rewards.content.answer_quality
 
 
-
 __all__ = [
     "BaseReward",
     "RewardComposer",

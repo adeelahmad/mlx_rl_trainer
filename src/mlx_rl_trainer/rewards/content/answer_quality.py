@@ -54,7 +54,6 @@ class AnswerQualityReward(BaseReward):
                 "they want to know",
                 "you are asking",
                 "you want to know",
-
                 # Thinking aloud
                 "let me think",
                 "let me start",
@@ -70,7 +69,6 @@ class AnswerQualityReward(BaseReward):
                 "i will recall",
                 "i will think",
                 "i will consider",
-
                 # Planning/process description
                 "first, i need",
                 "first, i should",
@@ -79,7 +77,6 @@ class AnswerQualityReward(BaseReward):
                 "okay, let me",
                 "alright, let me",
                 "so let me",
-
                 # Filler starts (common in leaked thinking)
                 "hmm,",
                 "okay,",
@@ -88,7 +85,6 @@ class AnswerQualityReward(BaseReward):
                 "wait,",
                 "hold on,",
                 "well,",
-
                 # Meta-cognitive verbs
                 "i remember that",
                 "i recall that",
@@ -97,7 +93,6 @@ class AnswerQualityReward(BaseReward):
                 "thinking about",
                 "considering that",
                 "recalling that",
-
                 # Question analysis (belongs in thinking)
                 "the question is about",
                 "this question asks",
@@ -105,20 +100,18 @@ class AnswerQualityReward(BaseReward):
                 "we need to find",
                 "we need to determine",
                 "we need to figure out",
-
                 # Uncertainty markers (should be in thinking, not answer)
                 "i'm not sure",
                 "i'm unsure",
                 "i don't know if",
                 "maybe it's",
                 "perhaps it's",
-
                 # Process commentary
                 "looking at this",
                 "analyzing this",
                 "breaking this down",
                 "unpacking this",
-            ]
+            ],
         )
 
         self.phrase_penalty = config.get("phrase_penalty", 0.2)
@@ -164,7 +157,7 @@ class AnswerQualityReward(BaseReward):
             answer = parts[1].strip()
 
             # Strip common garbage characters that appear after </think>
-            lines = answer.split('\n', 1)
+            lines = answer.split("\n", 1)
             if len(lines) > 1 and len(lines[0]) <= 2:
                 answer = lines[1].strip()
                 if self.debug_logging:
@@ -195,11 +188,15 @@ class AnswerQualityReward(BaseReward):
 
             position = check_text.find(check_phrase)
             if position != -1:
-                violations.append({
-                    'phrase': phrase,
-                    'position': position,
-                    'context': answer_text[max(0, position-20):position+len(phrase)+20]
-                })
+                violations.append(
+                    {
+                        "phrase": phrase,
+                        "position": position,
+                        "context": answer_text[
+                            max(0, position - 20) : position + len(phrase) + 20
+                        ],
+                    }
+                )
 
         return violations
 

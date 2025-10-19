@@ -473,7 +473,9 @@ def _create_4d_attention_mask(
 
 
 def safe_make_sampler(
-    config_or_args: Union[ExperimentConfig, GenerationConfig], temp: float
+    config_or_args: Union[ExperimentConfig, GenerationConfig],
+    temp: float,
+    tokenizer: TokenizerWrapper,
 ) -> Callable:
     gen_cfg = (
         config_or_args.generation
@@ -481,12 +483,39 @@ def safe_make_sampler(
         else config_or_args
     )
     try:
+        # sampler = make_sampler(
+        #     temperature,
+        #     top_p=1.0,
+        #     min_p=0.0,
+        #     min_tokens_to_keep=1,
+        #     top_k=0,
+        #     xtc_probability=0.0,
+        #     xtc_threshold=0.0,
+        #     xtc_special_tokens=tokenizer.encode("\n")
+        #     + list(tokenizer.eos_token_ids),
+        # )
+
+        # prompt_cache = cache.make_prompt_cache(model)
+        # completion: str | List[int] = generate(
+        #     model=model,
+        #     tokenizer=tokenizer,
+        #     prompt=prompt_text,
+        #     max_tokens=max_tokens,
+        #     verbose=False,
+        #     sampler=sampler,
+        #     prompt_cache=prompt_cache,
+        # )
         return make_sampler(
-            temp=temp,
-            top_p=gen_cfg.sampling_top_p,
-            min_p=gen_cfg.sampling_min_p,
-            top_k=gen_cfg.sampling_top_k,
+            temp,
+            top_p=1.0,
+            min_p=0.0,
+            min_tokens_to_keep=1,
+            top_k=0,
+            xtc_probability=0.0,
+            xtc_threshold=0.0,
+            xtc_special_tokens=tokenizer.encode("\n") + list(tokenizer.eos_token_ids),
         )
+
     except TypeError:
         return make_sampler(temp=temp, top_p=gen_cfg.sampling_top_p)
 

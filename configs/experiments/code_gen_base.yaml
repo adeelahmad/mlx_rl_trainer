@@ -94,7 +94,7 @@ rewards:
       excessive_length_threshold: 300 # ⭐ Was 90 - CRITICAL FIX!
       excessive_length_penalty: 0.3
       conciseness_bonus: 0.15
-      use_trainer_thinking_limits: true
+      use_trainer_thinking_limits: false
       debug_logging: true
 
   - name: "answer_quality"

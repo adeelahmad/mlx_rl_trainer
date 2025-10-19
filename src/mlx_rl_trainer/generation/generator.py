@@ -743,7 +743,7 @@ def generate_rollouts_for_batch(
                 if step < config.generation.think_boost_tokens
                 else config.generation.answer_temperature
             )
-            sampler = safe_make_sampler(config, temp=temp)
+            sampler = safe_make_sampler(config, temp=temp, tokenizer=tokenizer)
 
             # The new processor is called here, just like the old one.
             logits_proc = logit_processor(hist_tokens, next_logits)
@@ -774,7 +774,7 @@ def generate_rollouts_for_batch(
             )
             del out
 
-        del sample_cache, hist_tokens, ended, logit_processor
+            del sample_cache, hist_tokens, ended, logit_processor
         if sample_idx % 10 == 0:
             mx.clear_cache()
             gc.collect()
