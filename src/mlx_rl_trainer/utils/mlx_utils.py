@@ -505,12 +505,20 @@ def safe_make_sampler(
         #     sampler=sampler,
         #     prompt_cache=prompt_cache,
         # )
+        # Determine temperature based on training phase
+        # if update_step < 1000:
+        #     temperature = 0.9   # High exploration early
+        # elif update_step < 5000:
+        #     temperature = 0.85  # Balanced
+        # else:
+        temperature = 0.18   # More conservative later
+
         return make_sampler(
-            temp,
-            top_p=1.0,
-            min_p=0.0,
+            temperature=temperature,
+            top_p=0.92,              # Nucleus sampling
+            min_p=0.04,              # Min probability filter
             min_tokens_to_keep=1,
-            top_k=0,
+            top_k=50,                # Top-k filtering
             xtc_probability=0.0,
             xtc_threshold=0.0,
             xtc_special_tokens=tokenizer.encode("\n") + list(tokenizer.eos_token_ids),

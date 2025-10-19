@@ -39,7 +39,7 @@ def apply_thinking_length_penalty(
             - thinking_tokens: Number of thinking tokens
     """
     # Get constraints from config
-    max_thinking_tokens = getattr(config.trainer, "max_thinking_tokens", 80)
+    max_thinking_tokens = getattr(config.trainer, "max_thinking_tokens", 30)
     thinking_penalty_rate = getattr(config.trainer, "thinking_penalty_rate", 0.05)
 
     # Extract thinking portion

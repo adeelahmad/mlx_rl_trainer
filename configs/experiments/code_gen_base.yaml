@@ -5,16 +5,16 @@ trainer:
   algorithm: "grpo"
   output_dir: "./outputs/code_gen_run_01"
   num_training_steps: 80000
-  learning_rate: 1e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
+  learning_rate: 3e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
   grad_accum_steps: 2
   # CORRECTED: Increased beta to prevent model collapse.
-  grpo_beta: 0.02
+  grpo_beta: 0.01
   seed: -1
 
   # Dual gradients for System 1/2
-  use_dual_gradients: true
+  use_dual_gradients: false
   thinking_layer_start: 26
   thinking_layer_end: 36
   answer_layer_start: 21
@@ -22,7 +22,7 @@ trainer:
   answer_gradient_weight: 1.5
 
   # SFT configuration
-  use_sft_on_answer: true
+  use_sft_on_answer: false
   sft_mode: "all" # Recommended for System 1/2
   sft_weight: 0.1
   sft_thinking_weight: 0.1 # For 'weighted' mode
@@ -40,7 +40,7 @@ generation:
   # ... your existing temperature settings ...
 
   # For structural guidance
-  bias_close_think: 9.0
+  bias_close_think: 3.0
   bias_answer_start: 6.0
   punish_extra_think_end: -12.0
   min_think_tokens: 16
@@ -51,21 +51,11 @@ generation:
   mcq_letter_lift: 8.0
   mcq_ban_first_bias: -14.0
 
-  # For content control
-  ban_phrases_for_bias:
-    - "I'm not sure"
-    - "Insufficient information"
-    - "Let me think"
-  # encourage_phrases_for_bias:
-  #   - "∴"
-  #   - "chk"
-  #   - "calc"
-
 data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 128
+  max_gen_len: 256
   loader_type: "jsonl"
   shuffle_data: true
 
@@ -80,7 +70,7 @@ rewards:
       min_answer_length: 15
       think_length_target_min: 80 # ⭐ Characters, not tokens!
       think_length_target_max: 250 # ⭐ Was 80 - MUST CHANGE
-      length_penalty_strength: 0.3
+      length_penalty_strength: 0.6
       verbosity_penalty_factor: 1.5
       debug_logging: true
 
@@ -92,13 +82,13 @@ rewards:
       optimal_length_min: 100
       optimal_length_max: 200
       excessive_length_threshold: 300 # ⭐ Was 90 - CRITICAL FIX!
-      excessive_length_penalty: 0.3
+      excessive_length_penalty: 0.5
       conciseness_bonus: 0.15
       use_trainer_thinking_limits: false
       debug_logging: true
 
   - name: "answer_quality"
-    weight: 0.10
+    weight: 0.20
     config:
       max_penalty: 1.0
       case_sensitive: false
@@ -106,7 +96,7 @@ rewards:
       phrase_penalty: 0.25
 
   - name: "semantic_similarity"
-    weight: 0.70
+    weight: 0.60
     config:
       method: "jaccard"
       min_length: 5

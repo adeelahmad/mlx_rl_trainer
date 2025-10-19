@@ -140,6 +140,7 @@ class DataConfig(BaseModel):
             "jpg",
             "Another way",
             "Adeel",
+            'Choices',
         ],
         description="Keywords to filter out samples.",
     )
@@ -575,7 +576,11 @@ COMPRESS EVERYTHING. Every word must earn its place."""
             "Put simply",
             "Basically what happens",
             "Long story short",
+            "I will not provide",
             "At the end of the day",
+            "refusal",
+            "I cannot comply",
+            "I cannot fulfill this request"
         ]
     )
 
