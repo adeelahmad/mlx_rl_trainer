@@ -13,7 +13,7 @@ Prevents endless thinking rambling while maintaining reasoning quality.
 import re
 from typing import Dict, Any, Optional
 from mlx_rl_trainer.rewards.base_reward import BaseReward
-from mlx_rl_trainer.rewards.registry import register_reward
+from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.utils.text_utils import extract_think_region
 from mlx_rl_trainer.core.config import GenerationConfig
@@ -22,7 +22,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@register_reward("thinking_quality")
+@RewardRegistry.register("thinking_quality")
 class ThinkingQualityReward(BaseReward):
     """
     Evaluates thinking section quality with adaptive length penalties.

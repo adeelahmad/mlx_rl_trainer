@@ -97,6 +97,19 @@ rewards:
       use_trainer_thinking_limits: true
       debug_logging: true
 
+  - name: "answer_quality" # ⭐ NEW REWARD
+    weight: 0.05
+    config:
+      phrase_penalty: 0.2 # Penalty per forbidden phrase
+      max_penalty: 1.0 # Maximum total penalty
+      case_sensitive: false # Case-insensitive matching
+      debug_logging: true
+      # Optional: Override forbidden phrases list
+      # forbidden_phrases:
+      #   - "the user is asking"
+      #   - "let me think"
+      #   - "okay,"
+
   - name: "semantic_similarity"
     weight: 0.70
     config:

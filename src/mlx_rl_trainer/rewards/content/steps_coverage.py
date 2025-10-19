@@ -1,6 +1,6 @@
 from typing import Dict, Any, Set
 from mlx_rl_trainer.rewards.base_reward import BaseReward
-from mlx_rl_trainer.rewards.registry import register_reward
+from mlx_rl_trainer.rewards.registry import RewardRegistry
 from mlx_rl_trainer.rewards.context import RewardContext
 from mlx_rl_trainer.utils.text_utils import _extract_action_phrases
 import logging
@@ -8,7 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@register_reward("steps_coverage")
+@RewardRegistry.register("steps_coverage")
 class StepsCoverageReward(BaseReward):
     """
     Calculates a reward based on how many of the required steps are covered in the generated text.
