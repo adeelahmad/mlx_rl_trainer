@@ -78,44 +78,39 @@ rewards:
     config:
       min_think_length: 20
       min_answer_length: 15
-      think_length_target_min: 80 # ← MUST UPDATE
-      think_length_target_max: 250 # ← MUST UPDATE
-      length_penalty_strength: 0.3 # ← Reduce penalty
-      verbosity_penalty_factor: 1.5 # ← Reduce penalty
+      think_length_target_min: 80 # ⭐ Characters, not tokens!
+      think_length_target_max: 250 # ⭐ Was 80 - MUST CHANGE
+      length_penalty_strength: 0.3
+      verbosity_penalty_factor: 1.5
       debug_logging: true
 
   - name: "thinking_quality"
-    weight: 0.23
+    weight: 0.18
     config:
-      target_length_min: 80 # ← MUST UPDATE
-      target_length_max: 250 # ← MUST UPDATE
+      target_length_min: 80 # ⭐ MUST UPDATE
+      target_length_max: 250 # ⭐ Was 80 - MUST CHANGE
       optimal_length_min: 100
       optimal_length_max: 200
-      excessive_length_threshold: 300 # ← MUST UPDATE (was 90!)
-      excessive_length_penalty: 0.3 # ← Reduce penalty
+      excessive_length_threshold: 300 # ⭐ Was 90 - CRITICAL FIX!
+      excessive_length_penalty: 0.3
       conciseness_bonus: 0.15
       use_trainer_thinking_limits: true
       debug_logging: true
 
-  - name: "answer_quality" # ⭐ NEW REWARD
+  - name: "answer_quality"
     weight: 0.05
     config:
-      phrase_penalty: 0.2 # Penalty per forbidden phrase
-      max_penalty: 1.0 # Maximum total penalty
-      case_sensitive: false # Case-insensitive matching
+      phrase_penalty: 0.2
+      max_penalty: 1.0
+      case_sensitive: false
       debug_logging: true
-      # Optional: Override forbidden phrases list
-      # forbidden_phrases:
-      #   - "the user is asking"
-      #   - "let me think"
-      #   - "okay,"
 
   - name: "semantic_similarity"
     weight: 0.70
     config:
       method: "jaccard"
       min_length: 5
-      remove_stop_words: true # ⭐ ADD THIS - Set to false for A/B testing
+      remove_stop_words: true
       debug_logging: true
 
 monitoring:
