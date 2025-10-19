@@ -718,6 +718,7 @@ def generate_rollouts_for_batch(
             continue
 
         out = model(sample_prompt.astype(mx.int64), cache=sample_cache)
+        ended = mx.array([False], dtype=mx.bool_)
         next_logits = (out[0] if isinstance(out, tuple) else out)[:, -1, :].astype(
             mx.float32
         )
@@ -732,10 +733,9 @@ def generate_rollouts_for_batch(
         # =====================================================================
 
         hist_tokens = sample_prompt.tolist()[0]
-        ended = mx.array([False], dtype=mx.bool_)
 
         for step in range(max_gen_len):
-            if ended[0].item():
+            if ended[0].item():  # ⭐ Also simplified - no need for 'ended and'
                 break
 
             temp = (
@@ -743,9 +743,8 @@ def generate_rollouts_for_batch(
                 if step < config.generation.think_boost_tokens
                 else config.generation.answer_temperature
             )
-            sampler = safe_make_sampler(config, temp=temp, tokenizer=tokenizer)
+            sampler = safe_make_sampler(config, temp, tokenizer)
 
-            # The new processor is called here, just like the old one.
             logits_proc = logit_processor(hist_tokens, next_logits)
 
             token = sampler(logits_proc)
@@ -774,10 +773,14 @@ def generate_rollouts_for_batch(
             )
             del out
 
-            del sample_cache, hist_tokens, ended, logit_processor
+        # Cleanup AFTER the step loop completes
+        del sample_cache, hist_tokens, ended, logit_processor
+
         if sample_idx % 10 == 0:
             mx.clear_cache()
             gc.collect()
+
+        del sample_cache, hist_tokens, ended, logit_processor
 
     mx.clear_cache()
     gc.collect()
