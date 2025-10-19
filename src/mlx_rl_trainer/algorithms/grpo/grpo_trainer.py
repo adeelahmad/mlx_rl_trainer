@@ -560,6 +560,98 @@ class GRPOTrainer(BaseTrainer):
 
         return False
 
+    def _generate_charts(self, step: int):
+        """Generate training progress charts with memory efficiency."""
+        try:
+            import matplotlib as mpl
+
+            mpl.use("Agg")
+            import matplotlib.pyplot as plt
+
+            output_dir = self.config.trainer.output_dir / "charts"
+            output_dir.mkdir(exist_ok=True, parents=True)
+
+            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+            fig.suptitle(f"Training Progress - Step {step}", fontsize=16)
+
+            # Loss plot
+            if self.chart_data["loss_history"]:
+                ax = axes[0, 0]
+                steps = [entry["step"] for entry in self.chart_data["loss_history"]]
+                losses = [entry["loss"] for entry in self.chart_data["loss_history"]]
+                ax.plot(steps, losses, "b-", linewidth=2)
+                ax.set_xlabel("Step")
+                ax.set_ylabel("Loss")
+                ax.set_title("Training Loss")
+                ax.grid(True, alpha=0.3)
+
+            # Reward plot
+            if self.chart_data["reward_history"]:
+                ax = axes[0, 1]
+                steps = [entry["step"] for entry in self.chart_data["reward_history"]]
+                rewards = [
+                    entry["reward"] for entry in self.chart_data["reward_history"]
+                ]
+                ax.plot(steps, rewards, "g-", linewidth=2)
+                ax.set_xlabel("Step")
+                ax.set_ylabel("Reward")
+                ax.set_title("Average Reward")
+                ax.grid(True, alpha=0.3)
+
+            # Memory plot
+            if self.chart_data["memory_history"]:
+                ax = axes[1, 0]
+                steps = [entry["step"] for entry in self.chart_data["memory_history"]]
+                active = [
+                    entry.get("mlx_active_mb", 0)
+                    for entry in self.chart_data["memory_history"]
+                ]
+                peak = [
+                    entry.get("mlx_peak_mb", 0)
+                    for entry in self.chart_data["memory_history"]
+                ]
+                ax.plot(steps, active, "r-", label="Active MLX", linewidth=2)
+                ax.plot(steps, peak, "r--", label="Peak MLX", linewidth=1, alpha=0.5)
+                ax.set_xlabel("Step")
+                ax.set_ylabel("Memory (MB)")
+                ax.set_title("Memory Usage")
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+            # Token distribution plot
+            if self.chart_data["token_history"]:
+                ax = axes[1, 1]
+                steps = [entry["step"] for entry in self.chart_data["token_history"]]
+                thinking = [
+                    entry["thinking"] for entry in self.chart_data["token_history"]
+                ]
+                answer = [entry["answer"] for entry in self.chart_data["token_history"]]
+                ax.plot(steps, thinking, "b-", label="Thinking", linewidth=2)
+                ax.plot(steps, answer, "orange", label="Answer", linewidth=2)
+                ax.set_xlabel("Step")
+                ax.set_ylabel("Token Count")
+                ax.set_title("Token Distribution")
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+
+            chart_path = output_dir / f"training_chart_step_{step}.png"
+            plt.savefig(chart_path, dpi=150, bbox_inches="tight")
+            plt.close()
+
+            logger.info(f"Chart saved: {chart_path}")
+
+            if self.wandb and self.wandb.run:
+                self.wandb.log(
+                    {"training_chart": self.wandb.Image(str(chart_path))}, step=step
+                )
+
+            del fig, axes
+
+        except Exception as e:
+            logger.warning(f"Could not generate charts: {e}")
+
     def _aggressive_memory_cleanup(self):
         """Aggressive memory cleanup."""
         try:

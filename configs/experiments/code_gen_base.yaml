@@ -8,7 +8,7 @@ trainer:
   learning_rate: 3e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
   num_rollout_samples: 2
-  grad_accum_steps: 2
+  grad_accum_steps: 1
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.01
   seed: -1
@@ -55,53 +55,107 @@ data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
   val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 150
-  max_gen_len: 256
+  max_gen_len: 512
   loader_type: "jsonl"
   shuffle_data: true
 
 # The system_prompt from your ExperimentConfig will be used automatically by the trainer.
 # You don't need to specify it here unless you want to overridpe the default.
 
+# In your config.yaml file
+
 rewards:
   - name: "format_structure"
-    weight: 0.07
+    weight: 0.05 # Lowered: Model seems good at structure, focus elsewhere.
     config:
       min_think_length: 20
       min_answer_length: 15
-      think_length_target_min: 80 # ⭐ Characters, not tokens!
-      think_length_target_max: 250 # ⭐ Was 80 - MUST CHANGE
-      length_penalty_strength: 0.6
-      verbosity_penalty_factor: 1.5
+      think_length_target_min: 80
+      think_length_target_max: 250
       debug_logging: true
 
   - name: "thinking_quality"
-    weight: 0.18
+    weight: 0.20 # Kept moderate to encourage good reasoning.
     config:
-      target_length_min: 80 # ⭐ MUST UPDATE
-      target_length_max: 250 # ⭐ Was 80 - MUST CHANGE
+      target_length_min: 80
+      target_length_max: 250
       optimal_length_min: 100
       optimal_length_max: 200
-      excessive_length_threshold: 300 # ⭐ Was 90 - CRITICAL FIX!
-      excessive_length_penalty: 0.5
-      conciseness_bonus: 0.15
-      use_trainer_thinking_limits: false
+      excessive_length_threshold: 300
       debug_logging: true
 
   - name: "answer_quality"
-    weight: 0.20
+    weight: 0.30 # Increased: Focus on the quality of the final answer.
     config:
       max_penalty: 1.0
-      case_sensitive: false
-      debug_logging: true
       phrase_penalty: 0.25
+      debug_logging: true
 
   - name: "semantic_similarity"
-    weight: 0.60
+    weight: 0.5 # High weight to make length & quality a priority.
     config:
-      method: "jaccard"
-      min_length: 5
-      remove_stop_words: true
+      # --- Core Settings ---
+      method: "tfidf" # More accurate than jaccard for semantic meaning.
+      min_length: 15
       debug_logging: true
+
+      # --- Length Adjustment Settings ---
+      length_adjustment_method: "dynamic_content" # ⭐ Use the new content-aware method.
+
+      # Configs for 'dynamic_content' method:
+      dynamic_strength: 1.0 # A neutral starting point. Increase for a harsher penalty.
+      remove_stop_words: true # Ensures we only compare meaningful words.
+
+#   - name: "semantic_similarity"
+#     weight: 0.45 # Highest weight: This now controls both meaning and length.
+#     config:
+#       method: "tfidf" # Recommended for better semantic understanding.
+#       min_length: 10
+#       debug_logging: true
+#       apply_length_penalty: true # Renamed to apply_brevity_penalty in code.
+#       apply_verbosity_penalty: true # ⭐ CRITICAL: Enable the new penalty.
+#       verbosity_penalty_strength:  # ⭐ TUNEABLE: A strong but fair starting point.
+
+# # rewards:
+#   - name: "format_structure"
+#     weight: 0.1
+#     config:
+#       min_think_length: 20
+#       min_answer_length: 15
+#       think_length_target_min: 80 # ⭐ Characters, not tokens!
+#       think_length_target_max: 250 # ⭐ Was 80 - MUST CHANGE
+#       length_penalty_strength: 0.6
+#       verbosity_penalty_factor: 1.5
+#       debug_logging: true
+
+#   - name: "thinking_quality"
+#     weight: 0.23
+#     config:
+#       target_length_min: 80 # ⭐ MUST UPDATE
+#       target_length_max: 250 # ⭐ Was 80 - MUST CHANGE
+#       optimal_length_min: 100
+#       optimal_length_max: 200
+#       excessive_length_threshold: 300 # ⭐ Was 90 - CRITICAL FIX!
+#       excessive_length_penalty: 0.5
+#       conciseness_bonus: 0.15
+#       use_trainer_thinking_limits: false
+#       debug_logging: true
+
+#   - name: "answer_quality"
+#     weight: 0.25
+#     config:
+#       max_penalty: 1.0
+#       case_sensitive: false
+#       debug_logging: true
+#       phrase_penalty: 0.25
+#   - name: "semantic_similarity"
+#     weight: 0.37 # Or whatever weight you assign
+#     config:
+#       method: "tfidf"
+#       min_length: 5
+#       debug_logging: true
+#       apply_length_penalty: True # <-- Enable the feature
+#       length_penalty_method: "brevity_penalty" # <-- Choose the method
 
 monitoring:
   log_samples_every: 1 # Log samples at every update step to debug easily.
@@ -120,10 +174,10 @@ monitoring:
 # Checkpointing Configuration - Enhanced with Retry Logic
 checkpointing:
   checkpoint_dir: "checkpoints"
-  save_every: 10 # Save checkpoint every N steps
+  save_every: 20 # Save checkpoint every N steps
   keep_last_n: 2 # Keep only last N checkpoints
   save_optimizer_state: false
 
   # NEW: Retry Logic
   max_retries: 3 # Number of retry attempts for failed checkpoint saves
-  retry_delay_seconds: 2 # Initial delay (exponential backoff)
+  retry_delay_seconds: 30 # Initial delay (exponential backoff)
