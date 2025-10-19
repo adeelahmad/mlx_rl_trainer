@@ -36,12 +36,78 @@ except ImportError:
     logger.warning("NLTK not installed. Using basic stop words list.")
     # Basic fallback stop words list from previous version
     STOP_WORDS = {
-        "a", "an", "the", "in", "on", "at", "is", "are", "was", "were", "and", "or", "but", "if", "of", "to",
-        "for", "with", "about", "against", "between", "into", "through", "during", "before", "after", "above",
-        "below", "from", "up", "down", "out", "over", "under", "again", "further", "then", "once", "here",
-        "there", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other",
-        "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t",
-        "can", "will", "just", "don", "should", "now"
+        "a",
+        "an",
+        "the",
+        "in",
+        "on",
+        "at",
+        "is",
+        "are",
+        "was",
+        "were",
+        "and",
+        "or",
+        "but",
+        "if",
+        "of",
+        "to",
+        "for",
+        "with",
+        "about",
+        "against",
+        "between",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "from",
+        "up",
+        "down",
+        "out",
+        "over",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "s",
+        "t",
+        "can",
+        "will",
+        "just",
+        "don",
+        "should",
+        "now",
     }
 
 
@@ -103,11 +169,15 @@ class SemanticSimilarityReward(BaseReward):
         self.gaussian_tolerance = config.get("gaussian_tolerance", 0.25)
 
         self.gen_config = GenerationConfig()
-        self.extract_after_tag = config.get("extract_after_tag", self.gen_config.think_end_tag)
+        self.extract_after_tag = config.get(
+            "extract_after_tag", self.gen_config.think_end_tag
+        )
 
         if self.method == "tfidf":
             self.max_features = config.get("max_features", 1000)
-            self.vectorizer = TfidfVectorizer(max_features=self.max_features, stop_words="english", lowercase=True)
+            self.vectorizer = TfidfVectorizer(
+                max_features=self.max_features, stop_words="english", lowercase=True
+            )
 
         logger.info(
             f"SemanticSimilarityReward initialized with length adjustment "
@@ -116,7 +186,8 @@ class SemanticSimilarityReward(BaseReward):
 
     def _extract_answer_text(self, text: str) -> str:
         """Extracts answer text after the think tag."""
-        if not text: return ""
+        if not text:
+            return ""
         if self.extract_after_tag and self.extract_after_tag in text:
             parts = text.split(self.extract_after_tag, 1)
             if len(parts) > 1:
@@ -125,44 +196,49 @@ class SemanticSimilarityReward(BaseReward):
 
     def _calculate_length_adjustment(self, gen_ans: str, ref_ans: str) -> float:
         """Dispatcher to select the configured length adjustment method."""
-        if self.length_adjustment_method == 'dynamic_content':
+        if self.length_adjustment_method == "dynamic_content":
             return self._calculate_dynamic_content_adjustment(gen_ans, ref_ans)
 
         gen_len, ref_len = len(gen_ans), len(ref_ans)
-        if self.length_adjustment_method == 'hybrid':
+        if self.length_adjustment_method == "hybrid":
             return self._calculate_hybrid_adjustment(gen_len, ref_len)
 
         return self._calculate_static_adjustment(gen_len, ref_len)
 
     def _calculate_static_adjustment(self, gen_len: int, ref_len: int) -> float:
         """Calculates penalty based on raw character length."""
-        if gen_len <= 0 or ref_len <= 0: return 1.0
+        if gen_len <= 0 or ref_len <= 0:
+            return 1.0
         if self.apply_brevity_penalty and gen_len < ref_len:
             return np.exp(1.0 - ref_len / gen_len)
         if self.apply_verbosity_penalty and gen_len > ref_len:
             return (ref_len / gen_len) ** self.verbosity_penalty_strength
         return 1.0
 
-    def _calculate_dynamic_content_adjustment(self, gen_ans: str, ref_ans: str) -> float:
+    def _calculate_dynamic_content_adjustment(
+        self, gen_ans: str, ref_ans: str
+    ) -> float:
         """Calculates penalty based on the ratio of content words."""
         gen_words = _tokenize_set(gen_ans, self.remove_stop_words)
         ref_words = _tokenize_set(ref_ans, self.remove_stop_words)
         gen_content_len, ref_content_len = len(gen_words), len(ref_words)
 
-        if ref_content_len == 0 or gen_content_len == 0: return 1.0
+        if ref_content_len == 0 or gen_content_len == 0:
+            return 1.0
 
         content_ratio = gen_content_len / ref_content_len
 
         if content_ratio > 1.0:
             return (1.0 / content_ratio) ** self.dynamic_strength
         else:
-            return content_ratio ** self.dynamic_strength
+            return content_ratio**self.dynamic_strength
 
     def _calculate_hybrid_adjustment(self, gen_len: int, ref_len: int) -> float:
         """Uses Gaussian penalty for short texts, static for long texts."""
         if ref_len < self.hybrid_length_threshold:
             stdev = ref_len * self.gaussian_tolerance
-            if stdev == 0: return 1.0 if gen_len == ref_len else 0.0
+            if stdev == 0:
+                return 1.0 if gen_len == ref_len else 0.0
             return np.exp(-0.5 * ((gen_len - ref_len) / stdev) ** 2)
         else:
             return self._calculate_static_adjustment(gen_len, ref_len)
@@ -178,7 +254,7 @@ class SemanticSimilarityReward(BaseReward):
                 # ⭐ MODIFIED: Return a dict even on failure
                 return {"reward": 0.0, "log": {"error": "Text too short"}}
 
-            if self.method == 'tfidf':
+            if self.method == "tfidf":
                 score = self._compute_tfidf_similarity(gen_ans, ref_ans)
             else:
                 score = self._compute_jaccard_similarity(gen_ans, ref_ans)
@@ -222,7 +298,8 @@ class SemanticSimilarityReward(BaseReward):
         try:
             A = _tokenize_set(text1, remove_stop_words=self.remove_stop_words)
             B = _tokenize_set(text2, remove_stop_words=self.remove_stop_words)
-            if not A and not B: return 1.0
+            if not A and not B:
+                return 1.0
             intersection = len(A.intersection(B))
             union = len(A.union(B))
             return float(intersection / union) if union > 0 else 0.0
