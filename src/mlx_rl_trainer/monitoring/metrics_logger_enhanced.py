@@ -16,12 +16,14 @@ import numpy as np
 
 try:
     import pandas as pd
+
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
 
 try:
     import mlx.core as mx
+
     MLX_AVAILABLE = True
 except ImportError:
     MLX_AVAILABLE = False
@@ -87,22 +89,13 @@ class EnhancedMetricsLogger:
     def _open_csv_file(self) -> None:
         """Open CSV file for writing."""
         try:
-            self._csv_file = open(
-                self.csv_path,
-                'a',
-                newline='',
-                encoding='utf-8'
-            )
+            self._csv_file = open(self.csv_path, "a", newline="", encoding="utf-8")
             logger.info(f"Opened CSV file: {self.csv_path}")
         except OSError as e:
             logger.error(f"Failed to open CSV file: {e}")
             self._csv_file = None
 
-    def log_metrics(
-        self,
-        metrics: Dict[str, Any],
-        step: int
-    ) -> None:
+    def log_metrics(self, metrics: Dict[str, Any], step: int) -> None:
         """
         Log metrics to all outputs.
 
@@ -114,16 +107,16 @@ class EnhancedMetricsLogger:
             return
 
         # Prepare data
-        data = {
-            'step': step,
-            'run_id': self.run_id,
-            'timestamp': time.time()
-        }
+        data = {"step": step, "run_id": self.run_id, "timestamp": time.time()}
 
         # Convert metrics
         for key, value in metrics.items():
             try:
-                if isinstance(value, (mx.array, np.ndarray)) if MLX_AVAILABLE else isinstance(value, np.ndarray):
+                if (
+                    isinstance(value, (mx.array, np.ndarray))
+                    if MLX_AVAILABLE
+                    else isinstance(value, np.ndarray)
+                ):
                     if value.size == 1:
                         data[key] = float(value.item())
                     else:
@@ -138,7 +131,7 @@ class EnhancedMetricsLogger:
                     data[key] = str(value)
             except Exception as e:
                 logger.warning(f"Failed to convert metric '{key}': {e}")
-                data[key] = 'conversion_error'
+                data[key] = "conversion_error"
 
         # Write to CSV
         with self._lock:
@@ -146,12 +139,12 @@ class EnhancedMetricsLogger:
                 # Update CSV writer if needed
                 fieldnames = sorted(data.keys())
                 if self._csv_writer is None or self._headers != fieldnames:
-                    needs_header = not self.csv_path.exists() or self.csv_path.stat().st_size == 0
+                    needs_header = (
+                        not self.csv_path.exists() or self.csv_path.stat().st_size == 0
+                    )
                     self._headers = fieldnames
                     self._csv_writer = csv.DictWriter(
-                        self._csv_file,
-                        fieldnames=self._headers,
-                        extrasaction='ignore'
+                        self._csv_file, fieldnames=self._headers, extrasaction="ignore"
                     )
                     if needs_header:
                         self._csv_writer.writeheader()
@@ -166,8 +159,10 @@ class EnhancedMetricsLogger:
 
                 # Periodic cleanup
                 current_time = time.time()
-                if (self._write_count % self._cleanup_interval == 0 or
-                    current_time - self._last_cleanup_time > 60):
+                if (
+                    self._write_count % self._cleanup_interval == 0
+                    or current_time - self._last_cleanup_time > 60
+                ):
                     self._cleanup()
                     self._last_cleanup_time = current_time
 
@@ -198,7 +193,7 @@ class EnhancedMetricsLogger:
             filepath = self.json_path
 
         with self._lock:
-            with open(filepath, 'w') as f:
+            with open(filepath, "w") as f:
                 json.dump(self._json_data, f, indent=2)
 
         logger.info(f"Exported metrics to JSON: {filepath}")
@@ -213,30 +208,27 @@ class EnhancedMetricsLogger:
             if PANDAS_AVAILABLE:
                 df = pd.DataFrame(self._json_data)
 
-                summary = {
-                    'total_steps': len(df),
-                    'metrics': {}
-                }
+                summary = {"total_steps": len(df), "metrics": {}}
 
                 # Calculate statistics for numeric columns
                 numeric_cols = df.select_dtypes(include=[np.number]).columns
                 for col in numeric_cols:
-                    if col not in ['step', 'timestamp']:
-                        summary['metrics'][col] = {
-                            'mean': float(df[col].mean()),
-                            'std': float(df[col].std()),
-                            'min': float(df[col].min()),
-                            'max': float(df[col].max()),
-                            'final': float(df[col].iloc[-1])
+                    if col not in ["step", "timestamp"]:
+                        summary["metrics"][col] = {
+                            "mean": float(df[col].mean()),
+                            "std": float(df[col].std()),
+                            "min": float(df[col].min()),
+                            "max": float(df[col].max()),
+                            "final": float(df[col].iloc[-1]),
                         }
 
                 return summary
             else:
                 # Basic summary without pandas
                 return {
-                    'total_steps': len(self._json_data),
-                    'write_count': self._write_count,
-                    'error_count': self._error_count
+                    "total_steps": len(self._json_data),
+                    "write_count": self._write_count,
+                    "error_count": self._error_count,
                 }
 
     def export_summary(self, filepath: Optional[Path] = None) -> None:
@@ -246,7 +238,7 @@ class EnhancedMetricsLogger:
 
         summary = self.generate_summary()
 
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(summary, f, indent=2)
 
         logger.info(f"Exported summary: {filepath}")
@@ -254,11 +246,13 @@ class EnhancedMetricsLogger:
     def get_statistics(self) -> Dict[str, Any]:
         """Get logger statistics."""
         return {
-            'write_count': self._write_count,
-            'error_count': self._error_count,
-            'file_size_mb': self.csv_path.stat().st_size / 1048576 if self.csv_path.exists() else 0,
-            'json_entries': len(self._json_data),
-            'last_cleanup_time': self._last_cleanup_time
+            "write_count": self._write_count,
+            "error_count": self._error_count,
+            "file_size_mb": self.csv_path.stat().st_size / 1048576
+            if self.csv_path.exists()
+            else 0,
+            "json_entries": len(self._json_data),
+            "last_cleanup_time": self._last_cleanup_time,
         }
 
     def close(self) -> None:

@@ -8,7 +8,10 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from mlx_rl_trainer.monitoring.stats_collector import ComprehensiveStatsCollector, TrainingStats
+from mlx_rl_trainer.monitoring.stats_collector import (
+    ComprehensiveStatsCollector,
+    TrainingStats,
+)
 from mlx_rl_trainer.monitoring.chart_generator import ChartGenerator
 from mlx_rl_trainer.monitoring.wandb_logger import EnhancedWandBLogger
 from mlx_rl_trainer.utils.memory_profiler import MemoryProfiler
@@ -33,7 +36,7 @@ class MonitoringManager:
         self,
         config: ExperimentConfig,
         run_id: str,
-        viz_config: Optional[VisualizationConfig] = None
+        viz_config: Optional[VisualizationConfig] = None,
     ):
         """Initialize monitoring manager."""
         self.config = config
@@ -49,7 +52,7 @@ class MonitoringManager:
             output_dir=config.trainer.output_dir / "charts",
             style=self.viz_config.style,
             palette=self.viz_config.palette,
-            dpi=self.viz_config.dpi
+            dpi=self.viz_config.dpi,
         )
 
         self.memory_profiler = MemoryProfiler()
@@ -62,7 +65,7 @@ class MonitoringManager:
                     project=config.monitoring.wandb_project,
                     entity=config.monitoring.wandb_entity,
                     name=config.monitoring.wandb_run_name or run_id,
-                    config=config.model_dump()
+                    config=config.model_dump(),
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize WandB: {e}")
@@ -76,7 +79,7 @@ class MonitoringManager:
         reward: float,
         grad_norm: float,
         learning_rate: float,
-        **kwargs
+        **kwargs,
     ) -> None:
         """Log training step metrics."""
         # Create training stats
@@ -84,7 +87,7 @@ class MonitoringManager:
             total_loss=loss,
             reward_mean=reward,
             grad_norm=grad_norm,
-            learning_rate=learning_rate
+            learning_rate=learning_rate,
         )
         stats.update_from_dict(kwargs)
 
@@ -99,7 +102,7 @@ class MonitoringManager:
                 grad_norm=grad_norm,
                 learning_rate=learning_rate,
                 step=step,
-                **kwargs
+                **kwargs,
             )
 
     def generate_charts(self, step: int) -> None:
@@ -112,32 +115,26 @@ class MonitoringManager:
             if trends:
                 # Training curves
                 self.chart_generator.plot_training_curves(
-                    data=trends,
-                    filename=f"training_curves_step_{step}.png"
+                    data=trends, filename=f"training_curves_step_{step}.png"
                 )
 
                 # Dashboard
                 self.chart_generator.create_dashboard(
-                    stats_data=trends,
-                    filename=f"dashboard_step_{step}.png"
+                    stats_data=trends, filename=f"dashboard_step_{step}.png"
                 )
 
                 # Memory usage
-                memory_data = {
-                    k: v for k, v in trends.items()
-                    if 'memory' in k.lower()
-                }
+                memory_data = {k: v for k, v in trends.items() if "memory" in k.lower()}
                 if memory_data:
                     self.chart_generator.plot_memory_usage(
-                        memory_data=memory_data,
-                        filename=f"memory_step_{step}.png"
+                        memory_data=memory_data, filename=f"memory_step_{step}.png"
                     )
 
                 # Reward distribution
-                if 'step/reward_mean' in trends:
+                if "step/reward_mean" in trends:
                     self.chart_generator.plot_reward_distribution(
-                        rewards=trends['step/reward_mean'],
-                        filename=f"reward_dist_step_{step}.png"
+                        rewards=trends["step/reward_mean"],
+                        filename=f"reward_dist_step_{step}.png",
                     )
 
             logger.info(f"Generated charts at step {step}")
@@ -158,9 +155,7 @@ class MonitoringManager:
             # Alert via WandB
             if self.wandb_logger:
                 self.wandb_logger.alert(
-                    title="Memory Warning",
-                    text=message,
-                    level='WARN'
+                    title="Memory Warning", text=message, level="WARN"
                 )
 
         return is_healthy
@@ -175,7 +170,8 @@ class MonitoringManager:
         summary_path = self.config.trainer.output_dir / "monitoring_summary.json"
 
         import json
-        with open(summary_path, 'w') as f:
+
+        with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
 
         logger.info("Exported all monitoring data")

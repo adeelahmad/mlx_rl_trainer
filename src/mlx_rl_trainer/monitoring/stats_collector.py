@@ -17,6 +17,7 @@ import mlx.core as mx
 
 try:
     import pandas as pd
+
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MetricStats:
     """Statistics for a single metric over time."""
+
     name: str
     values: deque = field(default_factory=lambda: deque(maxlen=10000))
     timestamps: deque = field(default_factory=lambda: deque(maxlen=10000))
@@ -43,15 +45,15 @@ class MetricStats:
 
         values_array = np.array(list(self.values))
         return {
-            'mean': float(np.mean(values_array)),
-            'std': float(np.std(values_array)),
-            'min': float(np.min(values_array)),
-            'max': float(np.max(values_array)),
-            'median': float(np.median(values_array)),
-            'q25': float(np.percentile(values_array, 25)),
-            'q75': float(np.percentile(values_array, 75)),
-            'last': float(values_array[-1]),
-            'count': len(values_array)
+            "mean": float(np.mean(values_array)),
+            "std": float(np.std(values_array)),
+            "min": float(np.min(values_array)),
+            "max": float(np.max(values_array)),
+            "median": float(np.median(values_array)),
+            "q25": float(np.percentile(values_array, 25)),
+            "q75": float(np.percentile(values_array, 75)),
+            "last": float(values_array[-1]),
+            "count": len(values_array),
         }
 
     def get_recent(self, n: int = 100) -> List[float]:
@@ -64,7 +66,7 @@ class MetricStats:
             return list(self.values)
 
         values_array = np.array(list(self.values))
-        return list(np.convolve(values_array, np.ones(window)/window, mode='valid'))
+        return list(np.convolve(values_array, np.ones(window) / window, mode="valid"))
 
 
 @dataclass
@@ -139,10 +141,7 @@ class ComprehensiveStatsCollector:
     """
 
     def __init__(
-        self,
-        output_dir: Path,
-        max_history: int = 10000,
-        aggregation_window: int = 100
+        self, output_dir: Path, max_history: int = 10000, aggregation_window: int = 100
     ):
         """
         Initialize stats collector.
@@ -179,7 +178,7 @@ class ComprehensiveStatsCollector:
         self,
         name: str,
         value: Union[float, int, mx.array, np.ndarray],
-        step: Optional[int] = None
+        step: Optional[int] = None,
     ) -> None:
         """
         Record a metric value.
@@ -287,17 +286,17 @@ class ComprehensiveStatsCollector:
 
         with self._lock:
             export_data = {
-                'session_info': {
-                    'start_time': self.session_start_time,
-                    'total_steps': self.total_steps,
-                    'current_step': self.current_step,
-                    'duration_hours': (time.time() - self.session_start_time) / 3600
+                "session_info": {
+                    "start_time": self.session_start_time,
+                    "total_steps": self.total_steps,
+                    "current_step": self.current_step,
+                    "duration_hours": (time.time() - self.session_start_time) / 3600,
                 },
-                'aggregated_stats': self.get_aggregated_stats(),
-                'recent_stats': self.get_all_current_stats()
+                "aggregated_stats": self.get_aggregated_stats(),
+                "recent_stats": self.get_all_current_stats(),
             }
 
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(export_data, f, indent=2)
 
         logger.info(f"Exported stats to {filepath}")
@@ -312,11 +311,9 @@ class ComprehensiveStatsCollector:
             data = []
             for name, metric in self.metrics.items():
                 for value, timestamp in zip(metric.values, metric.timestamps):
-                    data.append({
-                        'metric': name,
-                        'value': value,
-                        'timestamp': timestamp
-                    })
+                    data.append(
+                        {"metric": name, "value": value, "timestamp": timestamp}
+                    )
 
         if not data:
             return None
@@ -329,20 +326,20 @@ class ComprehensiveStatsCollector:
             duration = time.time() - self.session_start_time
 
             report = {
-                'session': {
-                    'duration_hours': duration / 3600,
-                    'total_steps': self.total_steps,
-                    'avg_step_time': duration / max(self.total_steps, 1),
-                    'metrics_tracked': len(self.metrics)
+                "session": {
+                    "duration_hours": duration / 3600,
+                    "total_steps": self.total_steps,
+                    "avg_step_time": duration / max(self.total_steps, 1),
+                    "metrics_tracked": len(self.metrics),
                 },
-                'metrics': {}
+                "metrics": {},
             }
 
             # Add statistics for each metric
             for name, metric in self.metrics.items():
                 stats = metric.get_statistics()
                 if stats:
-                    report['metrics'][name] = stats
+                    report["metrics"][name] = stats
 
             return report
 
@@ -362,8 +359,12 @@ class ComprehensiveStatsCollector:
         with self._lock:
             for metric in self.metrics.values():
                 if len(metric.values) > keep_last_n:
-                    metric.values = deque(list(metric.values)[-keep_last_n:], maxlen=10000)
-                    metric.timestamps = deque(list(metric.timestamps)[-keep_last_n:], maxlen=10000)
+                    metric.values = deque(
+                        list(metric.values)[-keep_last_n:], maxlen=10000
+                    )
+                    metric.timestamps = deque(
+                        list(metric.timestamps)[-keep_last_n:], maxlen=10000
+                    )
 
         logger.info(f"Cleaned up old data, keeping last {keep_last_n} entries")
 

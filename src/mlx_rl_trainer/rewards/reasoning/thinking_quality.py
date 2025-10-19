@@ -106,6 +106,9 @@ class ThinkingQualityReward(BaseReward):
 
         self.tag_misuse_penalty = config.get("tag_misuse_penalty", 0.3)
 
+        # Debug logging flag
+        self.debug_logging = config.get("debug_logging", True)
+
         logger.info(
             f"ThinkingQualityReward initialized: "
             f"target_length=[{self.target_length_min}, {self.target_length_max}], "
@@ -131,21 +134,35 @@ class ThinkingQualityReward(BaseReward):
         # Multiple tags or mismatched counts
         if start_count > 1 or end_count > 1 or abs(start_count - end_count) > 1:
             penalty = self.tag_misuse_penalty
+            if self.debug_logging:
+                logger.warning(
+                    f"Tag misuse: start={start_count}, end={end_count}, penalty={penalty}"
+                )
 
         # Nested tags within thinking region
         if start_count == 1 and end_count == 1:
             think_content = extract_think_region(text, gen_config)
             if re.search(r"<think>|<\/think>", think_content, flags=re.I):
                 penalty = self.tag_misuse_penalty
+                if self.debug_logging:
+                    logger.warning(f"Nested tags detected, penalty={penalty}")
 
         return penalty
 
     def _check_special_tokens_penalty(self, think_content: str) -> float:
         """Penalize presence of special tokens in thinking."""
         penalty = 0.0
+        found_tokens = []
         for token in self.special_tokens:
             if token in think_content:
                 penalty += self.special_token_penalty
+                found_tokens.append(token)
+
+        if found_tokens and self.debug_logging:
+            logger.warning(
+                f"Special tokens found: {found_tokens}, total_penalty={penalty:.3f}"
+            )
+
         return penalty
 
     def _compute_length_score(
@@ -173,39 +190,45 @@ class ThinkingQualityReward(BaseReward):
             effective_excessive = self.excessive_length_threshold
 
         score = 1.0
+        status = "optimal"
 
         # Too short penalty
         if think_length < self.target_length_min:
             # Linear scale from 0 to 1
             score = max(0.0, think_length / self.target_length_min)
+            status = "too_short"
 
         # Too long penalty
         elif think_length > effective_max:
             # Gradual penalty
             excess_ratio = (think_length - effective_max) / effective_max
             score = max(0.0, 1.0 - (excess_ratio * 0.5))
+            status = "too_long"
 
         # Optimal length bonus
         if self.optimal_length_min <= think_length <= self.optimal_length_max:
             score += self.conciseness_bonus
+            status = "optimal_with_bonus"
 
         # Excessive length harsh penalty (critical for 128 token budget!)
         if think_length > effective_excessive:
             excess_ratio = think_length / effective_excessive
             harsh_penalty = self.excessive_length_penalty * excess_ratio
             score -= harsh_penalty
+            status = "excessive"
 
             # Log warning for monitoring
-            if (
-                think_length > trainer_max_tokens
-                if trainer_max_tokens
-                else effective_excessive
-            ):
+            if self.debug_logging:
                 logger.warning(
-                    f"Thinking length {think_length} exceeds limit "
-                    f"({trainer_max_tokens or effective_excessive}), "
-                    f"penalty={harsh_penalty:.3f}"
+                    f"EXCESSIVE thinking length {think_length} > {effective_excessive}, "
+                    f"harsh_penalty={harsh_penalty:.3f}, score={score:.3f}"
                 )
+
+        if self.debug_logging:
+            logger.info(
+                f"Length score: length={think_length}, status={status}, "
+                f"effective_max={effective_max}, score={score:.3f}"
+            )
 
         return max(0.0, score)
 
@@ -214,24 +237,36 @@ class ThinkingQualityReward(BaseReward):
         text = context.generated_text
 
         if not text or len(text.strip()) < 10:
+            if self.debug_logging:
+                logger.warning(
+                    f"ThinkingQuality: Empty or too short text (len={len(text) if text else 0})"
+                )
             return 0.0
 
         gen_config = GenerationConfig()
         think_content = extract_think_region(text, gen_config)
 
         if not think_content:
+            if self.debug_logging:
+                logger.warning("ThinkingQuality: No thinking content found")
             return 0.0
 
         # Base score
         score = 1.0
+        penalties = {}
+        bonuses = {}
 
         # Tag misuse penalty
         tag_penalty = self._check_tag_misuse_penalty(text, gen_config)
-        score -= tag_penalty
+        if tag_penalty > 0:
+            score -= tag_penalty
+            penalties["tag_misuse"] = tag_penalty
 
         # Special tokens penalty
         special_token_penalty = self._check_special_tokens_penalty(think_content)
-        score -= special_token_penalty
+        if special_token_penalty > 0:
+            score -= special_token_penalty
+            penalties["special_tokens"] = special_token_penalty
 
         # Length scoring with trainer limits
         think_length = len(think_content.strip())
@@ -245,23 +280,37 @@ class ThinkingQualityReward(BaseReward):
         # Structure bonus (lists, bullet points)
         if re.search(r"(\n\s*[-*•]|\n\s*\d+\.\s+)", think_content):
             score += 0.1
+            bonuses["structure"] = 0.1
 
         # Bad phrases penalty
         think_lower = think_content.lower()
+        bad_phrase_count = 0
+        found_phrases = []
         for phrase in self.bad_phrases:
             if phrase in think_lower:
-                score -= 0.15  # Reduced from 0.2 to allow some natural language
+                score -= 0.15
+                bad_phrase_count += 1
+                found_phrases.append(phrase)
+
+        if bad_phrase_count > 0:
+            penalties["bad_phrases"] = 0.15 * bad_phrase_count
+            if self.debug_logging:
+                logger.warning(
+                    f"Bad phrases found: {found_phrases[:5]}... (total={bad_phrase_count})"
+                )
 
         # Final clipping
         final_score = max(0.0, min(1.0, score))
 
-        # Periodic logging for monitoring
-        if context.update_step % 50 == 0:
-            logger.debug(
-                f"ThinkingQuality: length={think_length}, "
+        # ALWAYS log detailed breakdown
+        if self.debug_logging:
+            logger.info(
+                f"ThinkingQuality | length={think_length}, "
                 f"length_score={length_score:.3f}, "
-                f"tag_penalty={tag_penalty:.3f}, "
+                f"penalties={penalties}, bonuses={bonuses}, "
                 f"final={final_score:.3f}"
             )
+            # Log preview of thinking content
+            logger.debug(f"Think preview: {think_content[:150]}...")
 
         return final_score

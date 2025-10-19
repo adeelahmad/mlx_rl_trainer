@@ -30,8 +30,6 @@ def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
         return ""
 
     # Use re.search for robust, case-insensitive, non-greedy match to find the first block
-    # Note: re.escape is not needed here as tags are typically simple strings and we
-    # rely on string methods in the reward for counting tags.
     pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
 
     m = re.search(pattern, text, flags=re.I | re.S)
@@ -71,8 +69,6 @@ def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
 
     if last_idx != -1:
         # The length of the original tag must be used to slice the original text
-        # Assumes the tags are simple strings defined in config.
-        # Find the end of the *original* tag, based on the lowercased match index.
         original_end_tag_len = len(end_tag)
 
         # Take everything AFTER the last end tag
@@ -116,6 +112,9 @@ class TagStructureReward(BaseReward):
         # Verbosity penalty multiplier (how much to penalize excessive length)
         self.verbosity_penalty_factor = config.get("verbosity_penalty_factor", 2.0)
 
+        # Debug logging flag
+        self.debug_logging = config.get("debug_logging", True)
+
     def _compute_length_score(self, think_length: int) -> float:
         """
         Compute a score based on think length relative to target range.
@@ -141,7 +140,6 @@ class TagStructureReward(BaseReward):
                 return 0.0  # Way too short
 
             # Scale from min_think_length to target_min
-            # Ensure denominator is not zero
             range_diff = self.think_target_min - self.min_think_length
             if range_diff <= 0:
                 return 0.5  # Neutral if min/target are equal or inverted
@@ -152,15 +150,7 @@ class TagStructureReward(BaseReward):
         else:
             # Too long - exponential penalty (verbosity is bad!)
             excess = think_length - self.think_target_max
-            penalty_range = (
-                self.think_target_max
-            )  # How far over we tolerate (approximation)
-
-            # Apply penalty strength with verbosity factor
-            # Ensure non-zero denominator
-            if penalty_range <= 0:
-                # If target max is zero or less, any length > 0 is penalized heavily
-                penalty_range = 100
+            penalty_range = self.think_target_max if self.think_target_max > 0 else 100
 
             normalized_excess = excess / penalty_range
             penalty = (
@@ -187,9 +177,13 @@ class TagStructureReward(BaseReward):
         """
         generated = context.generated_text
         if not generated or len(generated.strip()) < 10:
+            if self.debug_logging:
+                logger.warning(
+                    f"TagStructureReward: Empty or too short generation (len={len(generated) if generated else 0})"
+                )
             return 0.0
 
-        # Use GenerationConfig to get standard tags (default is <think> and </think>)
+        # Use GenerationConfig to get standard tags
         gen_config = GenerationConfig()
         start_tag = gen_config.think_start_tag
         end_tag = gen_config.think_end_tag
@@ -204,13 +198,25 @@ class TagStructureReward(BaseReward):
         # Extract answer section (text after last </think>)
         answer_text = extract_answer_region(generated, gen_config)
 
+        # Calculate lengths
+        think_len = len(think_text.strip())
+        answer_len = len(answer_text.strip())
+
+        # ALWAYS log when debug is enabled (remove the % 50 condition!)
+        if self.debug_logging:
+            logger.info(
+                f"TagStructure | start_tags={th_s}, end_tags={th_e}, "
+                f"think_len={think_len}, answer_len={answer_len}, "
+                f"min_think={self.min_think_length}, min_ans={self.min_answer_length}"
+            )
+            # Log first 100 chars of each section for inspection
+            logger.debug(f"Think preview: {think_text[:100]}...")
+            logger.debug(f"Answer preview: {answer_text[:100]}...")
+
         # === SCORING LOGIC ===
 
         # Perfect: Exactly one pair of tags with good content
         if th_s == 1 and th_e == 1:
-            think_len = len(think_text.strip())
-            answer_len = len(answer_text.strip())
-
             # Both sections have meaningful content
             if (
                 think_len >= self.min_think_length
@@ -220,13 +226,9 @@ class TagStructureReward(BaseReward):
                 length_score = self._compute_length_score(think_len)
                 final_score = 1.0 * length_score
 
-                # Log for debugging (remove after tuning)
-                if context.update_step % 50 == 0:
-                    logger.debug(
-                        f"Format reward: think_len={think_len}, "
-                        f"answer_len={answer_len}, "
-                        f"length_score={length_score:.3f}, "
-                        f"final={final_score:.3f}"
+                if self.debug_logging:
+                    logger.info(
+                        f"TagStructure PASS: length_score={length_score:.3f}, final={final_score:.3f}"
                     )
 
                 return final_score
@@ -236,24 +238,41 @@ class TagStructureReward(BaseReward):
                 think_len >= self.min_think_length
                 or answer_len >= self.min_answer_length
             ):
+                if self.debug_logging:
+                    logger.info(
+                        f"TagStructure PARTIAL: One section too short, returning 0.6"
+                    )
                 return 0.6
 
             # Has tags but both sections too short
+            if self.debug_logging:
+                logger.info(
+                    f"TagStructure FAIL: Both sections too short, returning 0.3"
+                )
             return 0.3
 
         # Started thinking but never closed (incomplete)
         if th_s >= 1 and th_e == 0:
+            if self.debug_logging:
+                logger.warning(
+                    f"TagStructure INCOMPLETE: Started thinking but no close tag"
+                )
             return 0.3
 
         # Multiple think tags (confused model)
         if th_s > 1 or th_e > 1:
+            if self.debug_logging:
+                logger.warning(f"TagStructure CONFUSED: Multiple tags detected")
             return 0.2
 
         # No structure at all but has some text
         if th_s == 0 and th_e == 0:
-            if len(generated.strip()) > 30:
-                return 0.1  # At least it tried to generate something
-            return 0.0
+            score = 0.1 if len(generated.strip()) > 30 else 0.0
+            if self.debug_logging:
+                logger.warning(f"TagStructure NO_TAGS: Returning {score}")
+            return score
 
         # Fallback for weird edge cases
+        if self.debug_logging:
+            logger.warning(f"TagStructure FALLBACK: Unexpected case, returning 0.2")
         return 0.2

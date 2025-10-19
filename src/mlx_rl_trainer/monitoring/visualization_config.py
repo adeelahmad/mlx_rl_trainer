@@ -12,6 +12,7 @@ from pathlib import Path
 @dataclass
 class ChartConfig:
     """Configuration for a single chart type."""
+
     enabled: bool = True
     filename: str = ""
     title: str = ""
@@ -43,64 +44,79 @@ class VisualizationConfig:
     generate_at_checkpoints: bool = True
 
     # Individual chart configs
-    training_curves: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="training_curves.png",
-        title="Training Curves"
-    ))
+    training_curves: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="training_curves.png", title="Training Curves"
+        )
+    )
 
-    reward_distribution: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="reward_distribution.png",
-        title="Reward Distribution"
-    ))
+    reward_distribution: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="reward_distribution.png", title="Reward Distribution"
+        )
+    )
 
-    memory_usage: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="memory_usage.png",
-        title="Memory Usage"
-    ))
+    memory_usage: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="memory_usage.png", title="Memory Usage"
+        )
+    )
 
-    gradient_flow: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="gradient_flow.png",
-        title="Gradient Flow"
-    ))
+    gradient_flow: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="gradient_flow.png", title="Gradient Flow"
+        )
+    )
 
-    token_distribution: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="token_distribution.png",
-        title="Token Distribution"
-    ))
+    token_distribution: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="token_distribution.png", title="Token Distribution"
+        )
+    )
 
-    correlation_matrix: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="correlation_matrix.png",
-        title="Metric Correlations",
-        figsize=(12, 10)
-    ))
+    correlation_matrix: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="correlation_matrix.png",
+            title="Metric Correlations",
+            figsize=(12, 10),
+        )
+    )
 
-    dashboard: ChartConfig = field(default_factory=lambda: ChartConfig(
-        filename="training_dashboard.png",
-        title="Training Dashboard",
-        figsize=(20, 12)
-    ))
+    dashboard: ChartConfig = field(
+        default_factory=lambda: ChartConfig(
+            filename="training_dashboard.png",
+            title="Training Dashboard",
+            figsize=(20, 12),
+        )
+    )
 
     # Metrics to track
-    primary_metrics: List[str] = field(default_factory=lambda: [
-        'loss/total',
-        'reward/mean',
-        'gradient/norm',
-        'learning/rate'
-    ])
+    primary_metrics: List[str] = field(
+        default_factory=lambda: [
+            "loss/total",
+            "reward/mean",
+            "gradient/norm",
+            "learning/rate",
+        ]
+    )
 
-    secondary_metrics: List[str] = field(default_factory=lambda: [
-        'memory/allocated_mb',
-        'tokens/thinking',
-        'tokens/answer',
-        'kl_divergence'
-    ])
+    secondary_metrics: List[str] = field(
+        default_factory=lambda: [
+            "memory/allocated_mb",
+            "tokens/thinking",
+            "tokens/answer",
+            "kl_divergence",
+        ]
+    )
 
-    reward_components: List[str] = field(default_factory=lambda: [
-        'format_reward',
-        'content_reward',
-        'thinking_reward',
-        'mcq_accuracy'
-    ])
+    reward_components: List[str] = field(
+        default_factory=lambda: [
+            "format_reward",
+            "content_reward",
+            "thinking_reward",
+            "mcq_accuracy",
+        ]
+    )
 
 
 # Default configuration

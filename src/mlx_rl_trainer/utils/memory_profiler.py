@@ -14,12 +14,14 @@ import numpy as np
 
 try:
     import mlx.core as mx
+
     MLX_AVAILABLE = True
 except ImportError:
     MLX_AVAILABLE = False
 
 try:
     import psutil
+
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MemorySnapshot:
     """Single memory measurement snapshot."""
+
     timestamp: float
     mlx_allocated_mb: float = 0.0
     mlx_cached_mb: float = 0.0
@@ -41,13 +44,13 @@ class MemorySnapshot:
     def to_dict(self) -> Dict[str, float]:
         """Convert to dictionary."""
         return {
-            'timestamp': self.timestamp,
-            'mlx_allocated_mb': self.mlx_allocated_mb,
-            'mlx_cached_mb': self.mlx_cached_mb,
-            'mlx_peak_mb': self.mlx_peak_mb,
-            'system_rss_mb': self.system_rss_mb,
-            'system_available_mb': self.system_available_mb,
-            'gc_count': self.gc_count
+            "timestamp": self.timestamp,
+            "mlx_allocated_mb": self.mlx_allocated_mb,
+            "mlx_cached_mb": self.mlx_cached_mb,
+            "mlx_peak_mb": self.mlx_peak_mb,
+            "system_rss_mb": self.system_rss_mb,
+            "system_available_mb": self.system_available_mb,
+            "gc_count": self.gc_count,
         }
 
 
@@ -67,7 +70,7 @@ class MemoryProfiler:
         self,
         max_history: int = 1000,
         alert_threshold_mb: float = 8000.0,
-        leak_detection_window: int = 50
+        leak_detection_window: int = 50,
     ):
         """
         Initialize memory profiler.
@@ -155,7 +158,10 @@ class MemoryProfiler:
         # Check if memory exceeds threshold
         if snapshot.mlx_allocated_mb > self.alert_threshold_mb:
             self.total_alerts += 1
-            return False, f"Memory usage ({snapshot.mlx_allocated_mb:.1f}MB) exceeds threshold ({self.alert_threshold_mb:.1f}MB)"
+            return (
+                False,
+                f"Memory usage ({snapshot.mlx_allocated_mb:.1f}MB) exceeds threshold ({self.alert_threshold_mb:.1f}MB)",
+            )
 
         # Check for memory leak
         leak_detected, leak_msg = self.detect_memory_leak()
@@ -166,7 +172,10 @@ class MemoryProfiler:
         # Check system memory
         if self.psutil_available and snapshot.system_available_mb < 1000:
             self.total_alerts += 1
-            return False, f"Low system memory: {snapshot.system_available_mb:.1f}MB available"
+            return (
+                False,
+                f"Low system memory: {snapshot.system_available_mb:.1f}MB available",
+            )
 
         return True, "Memory health OK"
 
@@ -181,8 +190,14 @@ class MemoryProfiler:
             return False, "Insufficient data"
 
         # Get recent memory usage
-        recent = list(self.history)[-self.leak_detection_window:]
-        older = list(self.history)[-self.leak_detection_window*2:-self.leak_detection_window] if len(self.history) >= self.leak_detection_window*2 else None
+        recent = list(self.history)[-self.leak_detection_window :]
+        older = (
+            list(self.history)[
+                -self.leak_detection_window * 2 : -self.leak_detection_window
+            ]
+            if len(self.history) >= self.leak_detection_window * 2
+            else None
+        )
 
         if older is None:
             return False, "Insufficient data"
@@ -195,7 +210,10 @@ class MemoryProfiler:
         increase_pct = (recent_avg - older_avg) / max(older_avg, 1) * 100
 
         if increase_pct > 30:
-            return True, f"Possible memory leak: {increase_pct:.1f}% increase over last {self.leak_detection_window} steps"
+            return (
+                True,
+                f"Possible memory leak: {increase_pct:.1f}% increase over last {self.leak_detection_window} steps",
+            )
 
         return False, "No leak detected"
 
@@ -247,9 +265,9 @@ class MemoryProfiler:
         logger.info(f"Aggressive cleanup freed {freed_mb:.1f}MB")
 
         return {
-            'freed_mb': freed_mb,
-            'before_mb': before.mlx_allocated_mb,
-            'after_mb': after.mlx_allocated_mb
+            "freed_mb": freed_mb,
+            "before_mb": before.mlx_allocated_mb,
+            "after_mb": after.mlx_allocated_mb,
         }
 
     def get_statistics(self) -> Dict[str, Any]:
@@ -260,13 +278,13 @@ class MemoryProfiler:
         allocated = [s.mlx_allocated_mb for s in self.history]
 
         return {
-            'peak_memory_mb': self.peak_memory,
-            'current_memory_mb': allocated[-1] if allocated else 0,
-            'avg_memory_mb': np.mean(allocated) if allocated else 0,
-            'total_cleanups': self.total_cleanups,
-            'total_alerts': self.total_alerts,
-            'snapshots_taken': len(self.history),
-            'memory_trend': self.get_memory_trend()
+            "peak_memory_mb": self.peak_memory,
+            "current_memory_mb": allocated[-1] if allocated else 0,
+            "avg_memory_mb": np.mean(allocated) if allocated else 0,
+            "total_cleanups": self.total_cleanups,
+            "total_alerts": self.total_alerts,
+            "snapshots_taken": len(self.history),
+            "memory_trend": self.get_memory_trend(),
         }
 
     def export_history(self) -> List[Dict[str, float]]:
@@ -309,27 +327,29 @@ class MemoryMonitor:
         self.end_snapshot = self.profiler.take_snapshot()
 
         # Calculate memory change
-        delta_mb = self.end_snapshot.mlx_allocated_mb - self.start_snapshot.mlx_allocated_mb
+        delta_mb = (
+            self.end_snapshot.mlx_allocated_mb - self.start_snapshot.mlx_allocated_mb
+        )
 
         logger.debug(
-            f"Memory monitor finished: {self.name} "
-            f"(delta: {delta_mb:+.1f}MB)"
+            f"Memory monitor finished: {self.name} " f"(delta: {delta_mb:+.1f}MB)"
         )
 
         # Alert if large increase
         if delta_mb > 500:
-            logger.warning(
-                f"Large memory increase in {self.name}: {delta_mb:.1f}MB"
-            )
+            logger.warning(f"Large memory increase in {self.name}: {delta_mb:.1f}MB")
 
 
 def memory_profiled(profiler: MemoryProfiler):
     """Decorator for memory profiling functions."""
+
     def decorator(func: Callable) -> Callable:
         def wrapper(*args, **kwargs):
             with MemoryMonitor(profiler, func.__name__):
                 return func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 

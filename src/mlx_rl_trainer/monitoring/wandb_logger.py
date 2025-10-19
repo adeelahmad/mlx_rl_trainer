@@ -12,6 +12,7 @@ import numpy as np
 
 try:
     import wandb
+
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
@@ -38,7 +39,7 @@ class EnhancedWandBLogger:
         name: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
     ):
         """
         Initialize enhanced WandB logger.
@@ -66,7 +67,7 @@ class EnhancedWandBLogger:
             config=config,
             tags=tags,
             notes=notes,
-            reinit=False
+            reinit=False,
         )
 
         # Define custom charts
@@ -86,8 +87,15 @@ class EnhancedWandBLogger:
 
         # Group metrics by category
         categories = [
-            'loss', 'reward', 'gradient', 'memory', 'tokens',
-            'learning', 'generation', 'thinking', 'answer'
+            "loss",
+            "reward",
+            "gradient",
+            "memory",
+            "tokens",
+            "learning",
+            "generation",
+            "thinking",
+            "answer",
         ]
 
         for category in categories:
@@ -97,7 +105,7 @@ class EnhancedWandBLogger:
         self,
         metrics: Dict[str, Union[float, int]],
         step: Optional[int] = None,
-        commit: bool = True
+        commit: bool = True,
     ) -> None:
         """
         Log metrics to WandB.
@@ -110,7 +118,7 @@ class EnhancedWandBLogger:
         log_dict = {}
 
         if step is not None:
-            log_dict['step'] = step
+            log_dict["step"] = step
 
         # Add metrics
         for key, value in metrics.items():
@@ -130,15 +138,15 @@ class EnhancedWandBLogger:
         grad_norm: float,
         learning_rate: float,
         step: int,
-        **kwargs
+        **kwargs,
     ) -> None:
         """Log core training metrics."""
         metrics = {
-            'loss/total': loss,
-            'reward/mean': reward,
-            'gradient/norm': grad_norm,
-            'learning/rate': learning_rate,
-            'step': step
+            "loss/total": loss,
+            "reward/mean": reward,
+            "gradient/norm": grad_norm,
+            "learning/rate": learning_rate,
+            "step": step,
         }
 
         # Add additional metrics
@@ -147,10 +155,7 @@ class EnhancedWandBLogger:
         self.log_metrics(metrics, step=step)
 
     def log_distribution(
-        self,
-        name: str,
-        values: List[float],
-        step: Optional[int] = None
+        self, name: str, values: List[float], step: Optional[int] = None
     ) -> None:
         """Log distribution of values."""
         if not values:
@@ -159,10 +164,7 @@ class EnhancedWandBLogger:
         values_array = np.array(values)
 
         # Log histogram
-        wandb.log({
-            f"distribution/{name}": wandb.Histogram(values_array),
-            "step": step
-        })
+        wandb.log({f"distribution/{name}": wandb.Histogram(values_array), "step": step})
 
         # Log statistics
         stats = {
@@ -170,11 +172,11 @@ class EnhancedWandBLogger:
             f"distribution/{name}/std": float(np.std(values_array)),
             f"distribution/{name}/min": float(np.min(values_array)),
             f"distribution/{name}/max": float(np.max(values_array)),
-            f"distribution/{name}/median": float(np.median(values_array))
+            f"distribution/{name}/median": float(np.median(values_array)),
         }
 
         if step is not None:
-            stats['step'] = step
+            stats["step"] = step
 
         wandb.log(stats)
 
@@ -185,7 +187,7 @@ class EnhancedWandBLogger:
         references: List[str],
         rewards: List[float],
         step: int,
-        max_samples: int = 10
+        max_samples: int = 10,
     ) -> None:
         """Log samples as WandB table."""
         if not prompts:
@@ -195,98 +197,79 @@ class EnhancedWandBLogger:
         n = min(len(prompts), max_samples)
 
         # Create table
-        columns = ['Step', 'Prompt', 'Generation', 'Reference', 'Reward']
+        columns = ["Step", "Prompt", "Generation", "Reference", "Reward"]
         data = []
 
         for i in range(n):
-            data.append([
-                step,
-                prompts[i][:200],  # Truncate for display
-                generations[i][:500],
-                references[i][:500],
-                rewards[i]
-            ])
+            data.append(
+                [
+                    step,
+                    prompts[i][:200],  # Truncate for display
+                    generations[i][:500],
+                    references[i][:500],
+                    rewards[i],
+                ]
+            )
 
         table = wandb.Table(columns=columns, data=data)
         wandb.log({f"samples/step_{step}": table})
 
-    def log_gradient_flow(
-        self,
-        layer_gradients: Dict[str, float],
-        step: int
-    ) -> None:
+    def log_gradient_flow(self, layer_gradients: Dict[str, float], step: int) -> None:
         """Log gradient flow across layers."""
         for layer_name, grad_norm in layer_gradients.items():
-            wandb.log({
-                f"gradient/layer_{layer_name}": grad_norm,
-                "step": step
-            })
+            wandb.log({f"gradient/layer_{layer_name}": grad_norm, "step": step})
 
     def log_memory_stats(
-        self,
-        allocated_mb: float,
-        cached_mb: float,
-        peak_mb: float,
-        step: int
+        self, allocated_mb: float, cached_mb: float, peak_mb: float, step: int
     ) -> None:
         """Log memory statistics."""
-        wandb.log({
-            'memory/allocated_mb': allocated_mb,
-            'memory/cached_mb': cached_mb,
-            'memory/peak_mb': peak_mb,
-            'step': step
-        })
+        wandb.log(
+            {
+                "memory/allocated_mb": allocated_mb,
+                "memory/cached_mb": cached_mb,
+                "memory/peak_mb": peak_mb,
+                "step": step,
+            }
+        )
 
     def log_token_stats(
-        self,
-        thinking_tokens: int,
-        answer_tokens: int,
-        total_tokens: int,
-        step: int
+        self, thinking_tokens: int, answer_tokens: int, total_tokens: int, step: int
     ) -> None:
         """Log token statistics."""
-        wandb.log({
-            'tokens/thinking': thinking_tokens,
-            'tokens/answer': answer_tokens,
-            'tokens/total': total_tokens,
-            'tokens/ratio': thinking_tokens / max(answer_tokens, 1),
-            'step': step
-        })
+        wandb.log(
+            {
+                "tokens/thinking": thinking_tokens,
+                "tokens/answer": answer_tokens,
+                "tokens/total": total_tokens,
+                "tokens/ratio": thinking_tokens / max(answer_tokens, 1),
+                "step": step,
+            }
+        )
 
     def log_reward_breakdown(
-        self,
-        reward_components: Dict[str, float],
-        step: int
+        self, reward_components: Dict[str, float], step: int
     ) -> None:
         """Log breakdown of reward components."""
         for component, value in reward_components.items():
-            wandb.log({
-                f"reward/component/{component}": value,
-                "step": step
-            })
+            wandb.log({f"reward/component/{component}": value, "step": step})
 
     def log_image(
         self,
         name: str,
         image_path: Path,
         caption: Optional[str] = None,
-        step: Optional[int] = None
+        step: Optional[int] = None,
     ) -> None:
         """Log image to WandB."""
-        log_dict = {
-            name: wandb.Image(str(image_path), caption=caption)
-        }
+        log_dict = {name: wandb.Image(str(image_path), caption=caption)}
 
         if step is not None:
-            log_dict['step'] = step
+            log_dict["step"] = step
 
         wandb.log(log_dict)
 
     def log_chart(
-        self,
-        name: str,
-        chart_path: Path,
-        step: Optional[int] = None
+        self, name: str, chart_path: Path, step: Optional[int] = None
     ) -> None:
         """Log chart image."""
         self.log_image(f"charts/{name}", chart_path, step=step)
@@ -296,13 +279,11 @@ class EnhancedWandBLogger:
         artifact_name: str,
         artifact_type: str,
         artifact_path: Path,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log artifact to WandB."""
         artifact = wandb.Artifact(
-            name=artifact_name,
-            type=artifact_type,
-            metadata=metadata
+            name=artifact_name, type=artifact_type, metadata=metadata
         )
 
         artifact.add_file(str(artifact_path))
@@ -314,7 +295,7 @@ class EnhancedWandBLogger:
         self,
         checkpoint_path: Path,
         step: int,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log model checkpoint as artifact."""
         artifact_name = f"checkpoint_step_{step}"
@@ -322,16 +303,13 @@ class EnhancedWandBLogger:
         if metadata is None:
             metadata = {}
 
-        metadata.update({
-            'step': step,
-            'timestamp': time.time()
-        })
+        metadata.update({"step": step, "timestamp": time.time()})
 
         self.log_artifact(
             artifact_name=artifact_name,
-            artifact_type='model',
+            artifact_type="model",
             artifact_path=checkpoint_path,
-            metadata=metadata
+            metadata=metadata,
         )
 
     def log_config_update(self, config: Dict[str, Any]) -> None:
@@ -339,18 +317,14 @@ class EnhancedWandBLogger:
         wandb.config.update(config)
 
     def alert(
-        self,
-        title: str,
-        text: str,
-        level: str = 'INFO',
-        wait_duration: int = 300
+        self, title: str, text: str, level: str = "INFO", wait_duration: int = 300
     ) -> None:
         """Send WandB alert."""
         wandb.alert(
             title=title,
             text=text,
             level=getattr(wandb.AlertLevel, level),
-            wait_duration=wait_duration
+            wait_duration=wait_duration,
         )
 
     def finish(self) -> None:

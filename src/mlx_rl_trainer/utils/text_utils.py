@@ -610,10 +610,10 @@ def _first_token_ids_for_lexemes(
 class TwoBlockFormatter:
     def __init__(
         self,
-        think_start: str='<think>',
-        think_end: str='<\\think>',
-        answer_start: str="",
-        answer_end: str="",
+        think_start: str = "<think>",
+        think_end: str = "<\\think>",
+        answer_start: str = "",
+        answer_end: str = "",
         validate_json: bool = False,
     ):
         self.ts = think_start
@@ -690,7 +690,9 @@ class TwoBlockFormatter:
         s = s.strip()
 
         if not s:
-            return f"{self.ts}\n…{self.te}\n{self.as_}Insufficient information.{self.ae}"
+            return (
+                f"{self.ts}\n…{self.te}\n{self.as_}Insufficient information.{self.ae}"
+            )
 
         i_ts = s.find(self.ts) if self.ts else -1
 
@@ -1075,15 +1077,13 @@ class TwoBlockFormatter2:
         return [self._score_one(t, detailed=detailed) for t in texts]
 
 
-
-
 class TwoBlockFormatterp:
     def __init__(
         self,
-        think_start: str="<think>",
-        think_end: str="<\think>",
-        answer_start: str="",
-        answer_end: str="",
+        think_start: str = "<think>",
+        think_end: str = "<\think>",
+        answer_start: str = "",
+        answer_end: str = "",
         validate_json: bool = False,
     ):
         self.ts = think_start

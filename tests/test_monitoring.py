@@ -12,7 +12,7 @@ import numpy as np
 from mlx_rl_trainer.monitoring.stats_collector import (
     ComprehensiveStatsCollector,
     TrainingStats,
-    MetricStats
+    MetricStats,
 )
 from mlx_rl_trainer.monitoring.chart_generator import ChartGenerator
 from mlx_rl_trainer.utils.memory_profiler import MemoryProfiler
@@ -24,9 +24,7 @@ class TestStatsCollector(unittest.TestCase):
     def setUp(self):
         """Setup test environment."""
         self.temp_dir = tempfile.mkdtemp()
-        self.collector = ComprehensiveStatsCollector(
-            output_dir=Path(self.temp_dir)
-        )
+        self.collector = ComprehensiveStatsCollector(output_dir=Path(self.temp_dir))
 
     def tearDown(self):
         """Cleanup test environment."""
@@ -63,9 +61,7 @@ class TestChartGenerator(unittest.TestCase):
     def setUp(self):
         """Setup test environment."""
         self.temp_dir = tempfile.mkdtemp()
-        self.generator = ChartGenerator(
-            output_dir=Path(self.temp_dir)
-        )
+        self.generator = ChartGenerator(output_dir=Path(self.temp_dir))
 
     def tearDown(self):
         """Cleanup test environment."""
@@ -73,10 +69,7 @@ class TestChartGenerator(unittest.TestCase):
 
     def test_plot_training_curves(self):
         """Test training curves."""
-        data = {
-            'loss': list(np.random.rand(100)),
-            'reward': list(np.random.rand(100))
-        }
+        data = {"loss": list(np.random.rand(100)), "reward": list(np.random.rand(100))}
 
         output_path = self.generator.plot_training_curves(data)
         self.assertTrue(output_path.exists())
@@ -110,8 +103,8 @@ class TestMemoryProfiler(unittest.TestCase):
     def test_cleanup(self):
         """Test cleanup."""
         result = self.profiler.aggressive_cleanup()
-        self.assertIn('freed_mb', result)
+        self.assertIn("freed_mb", result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

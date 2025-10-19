@@ -417,7 +417,6 @@ def _create_thinking_answer_masks(
     return thinking_mask_batch, answer_mask_batch, stats
 
 
-
 def make_advanced_dynamic_tag_bias_processor(
     tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
 ) -> Callable:
@@ -429,10 +428,7 @@ def make_advanced_dynamic_tag_bias_processor(
 
     # --- One-time Preparation ---
     tag_ids = _resolve_tag_ids(tokenizer, gconf)
-    te, ts, eos_tok = (
-        tag_ids.get(k)
-        for k in ("think_end", "think_start", "eos")
-    )
+    te, ts, eos_tok = (tag_ids.get(k) for k in ("think_end", "think_start", "eos"))
 
     ban_phrases = getattr(gconf, "ban_phrases_for_bias", [])
     encourage_phrases = getattr(gconf, "encourage_phrases_for_bias", [])
@@ -448,7 +444,7 @@ def make_advanced_dynamic_tag_bias_processor(
     punish_reopen_think = getattr(gconf, "punish_reopen_think", 0.0)
     bias_eos_after_answer = getattr(gconf, "bias_eos_after_answer", 0.0)
     min_think_tokens = getattr(gconf, "min_think_tokens", 8)
-    think_end_early_bias = getattr(gconf, "think_end_early_bias", 0.0)
+    think_end_early_bias = getattr(gconf, "think_end_early_bias", 22)
     encourage_think_bias = getattr(gconf, "encourage_think_bias", 0.0)
     ban_think_bias = getattr(gconf, "ban_think_bias", 0.0)
 
@@ -458,7 +454,10 @@ def make_advanced_dynamic_tag_bias_processor(
     min_ans_mcq = getattr(gconf, "min_answer_tokens_mcq", 1)
     min_ans_non_mcq = getattr(gconf, "min_answer_tokens", 8)
 
-    force_close_think_after = getattr(gconf, "force_close_think_after", 0)
+    # HARDCODED: Force close thinking after 50 tokens to prevent infinite loops
+    force_close_think_after = (
+        50  # Changed from: getattr(gconf, "force_close_think_after", 0)
+    )
 
     # The actual processor function that will be called at each step.
     def _proc(hist_tokens: List[int], logits: mx.array) -> mx.array:
@@ -471,8 +470,10 @@ def make_advanced_dynamic_tag_bias_processor(
         ts_pos = -1
         te_pos = -1
         for i in range(len(hist_tokens) - 1, -1, -1):
-            if ts_pos == -1 and hist_tokens[i] == ts: ts_pos = i
-            if te_pos == -1 and hist_tokens[i] == te: te_pos = i
+            if ts_pos == -1 and hist_tokens[i] == ts:
+                ts_pos = i
+            if te_pos == -1 and hist_tokens[i] == te:
+                te_pos = i
 
         inside_think = ts is not None and ts_pos > te_pos
         has_finished_thinking = te is not None and te_pos != -1
@@ -511,7 +512,7 @@ def make_advanced_dynamic_tag_bias_processor(
                     logits[0, ts] += punish_reopen_think
 
         if eos_tok is not None and has_finished_thinking:
-             logits[0, eos_tok] += bias_eos_after_answer
+            logits[0, eos_tok] += bias_eos_after_answer
 
         is_mcq = mcq_flags[0] if mcq_flags else False
         if has_finished_thinking:
@@ -538,6 +539,129 @@ def make_advanced_dynamic_tag_bias_processor(
         return logits
 
     return _proc
+
+
+# def make_advanced_dynamic_tag_bias_processor(
+#     tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
+# ) -> Callable:
+#     """
+#     Creates a sophisticated, context-aware logit processor for the <think>...</think>Answer format.
+#     [FIXED] to use mx.full instead of mx.full_like and simplified for no <answer> tags.
+#     """
+#     gconf = config.generation
+
+#     # --- One-time Preparation ---
+#     tag_ids = _resolve_tag_ids(tokenizer, gconf)
+#     te, ts, eos_tok = (
+#         tag_ids.get(k)
+#         for k in ("think_end", "think_start", "eos")
+#     )
+
+#     ban_phrases = getattr(gconf, "ban_phrases_for_bias", [])
+#     encourage_phrases = getattr(gconf, "encourage_phrases_for_bias", [])
+#     ban_ids = set(_first_token_ids_for_lexemes(tokenizer, ban_phrases))
+#     encourage_ids = set(_first_token_ids_for_lexemes(tokenizer, encourage_phrases))
+
+#     letter_map = _letter_token_ids(tokenizer)
+#     mcq_letter_ids = sorted(set(sum(letter_map.values(), [])))
+
+#     # --- Get Biasing Parameters from Config (with safe defaults) ---
+#     bias_close_think = getattr(gconf, "bias_close_think", 0.0)
+#     punish_extra_think_end = getattr(gconf, "punish_extra_think_end", 0.0)
+#     punish_reopen_think = getattr(gconf, "punish_reopen_think", 0.0)
+#     bias_eos_after_answer = getattr(gconf, "bias_eos_after_answer", 0.0)
+#     min_think_tokens = getattr(gconf, "min_think_tokens", 8)
+#     think_end_early_bias = getattr(gconf, "think_end_early_bias", 22)
+#     encourage_think_bias = getattr(gconf, "encourage_think_bias", 0.0)
+#     ban_think_bias = getattr(gconf, "ban_think_bias", 0.0)
+
+#     hard_mask_mcq = getattr(gconf, "hard_mask_mcq_first_token", False)
+#     mcq_letter_lift = getattr(gconf, "mcq_letter_lift", 0.0)
+#     mcq_ban_bias = getattr(gconf, "mcq_ban_first_bias", 0.0)
+#     min_ans_mcq = getattr(gconf, "min_answer_tokens_mcq", 1)
+#     min_ans_non_mcq = getattr(gconf, "min_answer_tokens", 8)
+
+#     force_close_think_after = getattr(gconf, "force_close_think_after", 0)
+
+#     # The actual processor function that will be called at each step.
+#     def _proc(hist_tokens: List[int], logits: mx.array) -> mx.array:
+#         if logits.ndim != 2:
+#             return logits
+
+#         vocab_size = logits.shape[1]
+
+#         # Analyze the history of the current sample
+#         ts_pos = -1
+#         te_pos = -1
+#         for i in range(len(hist_tokens) - 1, -1, -1):
+#             if ts_pos == -1 and hist_tokens[i] == ts: ts_pos = i
+#             if te_pos == -1 and hist_tokens[i] == te: te_pos = i
+
+#         inside_think = ts is not None and ts_pos > te_pos
+#         has_finished_thinking = te is not None and te_pos != -1
+
+#         tokens_in_think = len(hist_tokens) - (ts_pos + 1) if inside_think else 0
+
+#         # Rule: Force </think> tag if length exceeds the configured limit.
+#         if (
+#             inside_think
+#             and te is not None
+#             and force_close_think_after > 0
+#             and tokens_in_think >= force_close_think_after
+#         ):
+#             logger.debug(f"Forcing </think> tag closure at length {tokens_in_think}.")
+#             # CORRECTED: Use mx.full to create the mask tensor.
+#             mask = mx.full((1, vocab_size), -1e9, dtype=logits.dtype)
+#             mask[0, te] = 0.0
+#             return mask
+
+#         # --- Apply Biases ---
+#         if inside_think:
+#             if encourage_think_bias and encourage_ids:
+#                 logits[0, list(encourage_ids)] += encourage_think_bias
+#             if ban_think_bias and ban_ids:
+#                 logits[0, list(ban_ids)] += ban_think_bias
+
+#         if te is not None:
+#             if not has_finished_thinking:
+#                 if tokens_in_think < min_think_tokens:
+#                     logits[0, te] += think_end_early_bias
+#                 else:
+#                     logits[0, te] += bias_close_think
+#             else:
+#                 logits[0, te] += punish_extra_think_end
+#                 if ts is not None:
+#                     logits[0, ts] += punish_reopen_think
+
+#         if eos_tok is not None and has_finished_thinking:
+#              logits[0, eos_tok] += bias_eos_after_answer
+
+#         is_mcq = mcq_flags[0] if mcq_flags else False
+#         if has_finished_thinking:
+#             tokens_after_think = len(hist_tokens) - (te_pos + 1)
+
+#             # This logic applies to the very first token after </think>
+#             if is_mcq and tokens_after_think == 0:
+#                 if hard_mask_mcq:
+#                     # CORRECTED: Use mx.full to create the mask tensor.
+#                     mask = mx.full((1, vocab_size), -1e9, dtype=logits.dtype)
+#                     mask[0, mcq_letter_ids] = mcq_letter_lift
+#                     logits = mask
+#                 else:
+#                     logits[0, mcq_letter_ids] += mcq_letter_lift
+
+#                 logits[0, list(ban_ids)] += mcq_ban_bias
+
+#             # Minimum answer length enforcement (length of text after </think>)
+#             min_len = min_ans_mcq if is_mcq else min_ans_non_mcq
+#             if tokens_after_think < min_len:
+#                 if eos_tok is not None:
+#                     logits[0, eos_tok] -= 8.0
+
+#         return logits
+
+#     return _proc
+
 
 def generate_rollouts_for_batch(
     model: nn.Module,
@@ -583,6 +707,7 @@ def generate_rollouts_for_batch(
 
     for sample_idx in range(total_samples):
         from mlx_lm.models import cache as mlx_cache
+
         sample_cache = mlx_cache.make_prompt_cache(
             model, max_kv_size=config.max_kv_size
         )
@@ -756,12 +881,18 @@ def generate_rollouts_for_batch(
         pass
 
     generation_metrics = {
-        "generation/avg_reward": mx.mean(rewards_total).item() if rewards_total.size > 0 else 0.0,
-        "generation/reward_std": mx.std(rewards_total).item() if rewards_total.size > 0 else 0.0,
+        "generation/avg_reward": mx.mean(rewards_total).item()
+        if rewards_total.size > 0
+        else 0.0,
+        "generation/reward_std": mx.std(rewards_total).item()
+        if rewards_total.size > 0
+        else 0.0,
         "generation/num_samples": total_samples,
         "generation/num_prompts": num_prompts,
         "generation/samples_per_prompt": num_samples_per_prompt,
-        "generation/avg_response_length": float(mx.mean(mx.sum(response_mask, axis=1)).item()),
+        "generation/avg_response_length": float(
+            mx.mean(mx.sum(response_mask, axis=1)).item()
+        ),
         **mask_stats,
     }
     for reward_name, reward_values in rewards_breakdown.items():

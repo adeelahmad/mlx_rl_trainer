@@ -1119,9 +1119,7 @@ class GRPOTrainer(BaseTrainer):
             thinking_weight = getattr(
                 self.config.trainer, "thinking_gradient_weight", 0.5
             )
-            answer_weight = getattr(
-                self.config.trainer, "answer_gradient_weight", 1.0
-            )
+            answer_weight = getattr(self.config.trainer, "answer_gradient_weight", 1.0)
 
             logger.debug(
                 f"Dual gradients - Thinking: layers {thinking_start}-{thinking_end} "
