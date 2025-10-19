@@ -23,6 +23,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
+
 try:
     import pandas as pd
     import matplotlib
@@ -38,6 +39,8 @@ from mlx_rl_trainer.core.config import ExperimentConfig
 from mlx_rl_trainer.utils.text_utils import _preview, _extract_think_answer_lengths
 
 logger = logging.getLogger(__name__)
+logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
+
 wandb_run: Any = None
 
 

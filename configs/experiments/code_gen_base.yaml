@@ -98,12 +98,12 @@ rewards:
       debug_logging: true
 
   - name: "answer_quality"
-    weight: 0.05
+    weight: 0.10
     config:
-      phrase_penalty: 0.2
       max_penalty: 1.0
       case_sensitive: false
       debug_logging: true
+      phrase_penalty: 0.25
 
   - name: "semantic_similarity"
     weight: 0.70

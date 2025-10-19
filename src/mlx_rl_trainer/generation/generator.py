@@ -713,7 +713,7 @@ def generate_rollouts_for_batch(
         )
 
         sample_prompt = prompts_mx[sample_idx : sample_idx + 1]
-        if sample_prompt.size == 0:
+        if sample_cache and sample_prompt.size == 0:
             del sample_cache
             continue
 
@@ -779,8 +779,6 @@ def generate_rollouts_for_batch(
         if sample_idx % 10 == 0:
             mx.clear_cache()
             gc.collect()
-
-        del sample_cache, hist_tokens, ended, logit_processor
 
     mx.clear_cache()
     gc.collect()
