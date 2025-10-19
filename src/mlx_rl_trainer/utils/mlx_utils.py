@@ -511,14 +511,14 @@ def safe_make_sampler(
         # elif update_step < 5000:
         #     temperature = 0.85  # Balanced
         # else:
-        temperature = 0.18   # More conservative later
+        temperature = 0.18  # More conservative later
 
         return make_sampler(
             temperature=temperature,
-            top_p=0.92,              # Nucleus sampling
-            min_p=0.04,              # Min probability filter
+            top_p=0.92,  # Nucleus sampling
+            min_p=0.04,  # Min probability filter
             min_tokens_to_keep=1,
-            top_k=50,                # Top-k filtering
+            top_k=50,  # Top-k filtering
             xtc_probability=0.0,
             xtc_threshold=0.0,
             xtc_special_tokens=tokenizer.encode("\n") + list(tokenizer.eos_token_ids),

@@ -21,6 +21,7 @@ LETTER_ALPH = string.ascii_uppercase
 
 def _preview(s: Union[str, Any], n: int = 1200) -> str:
     """Shortens text for logs and escapes newlines. Handles non-string inputs robustly."""
+    n = 2000
     if s is None:
         return ""
     # FIX: Explicitly cast to string to handle cases where s is a dict, list, or other object.

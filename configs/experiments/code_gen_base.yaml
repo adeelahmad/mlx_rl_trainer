@@ -112,9 +112,7 @@ monitoring:
   generate_at_checkpoints: true
 
   use_wandb: true
-  wandb_project: "mlx-grpo-qwen3-v10"
-  wandb_entity: "adeelahmad"
-  wandb_run_name: "experiment-001"
+  wandb_project: "mlx-grpo-qwen3-v12"
 
   # Logging frequency
   log_prompts: true
