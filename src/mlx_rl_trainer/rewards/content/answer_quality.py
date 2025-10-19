@@ -1068,7 +1068,7 @@ class AnswerQualityReward(BaseReward):
             Score between 0.0 and 1.0.
         """
         generated_text = context.generated_text
-        prompt_text = context.prompt
+        prompt_text = context.reference_completion
 
         if not generated_text or len(generated_text.strip()) < 10:
             if self.debug_logging:
