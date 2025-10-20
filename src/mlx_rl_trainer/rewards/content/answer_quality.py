@@ -1059,7 +1059,55 @@ class AnswerQualityReward(BaseReward):
         """Check if a string contains any common emoji."""
         return bool(text and EMOJI_PATTERN.search(text))
 
-    def compute(self, context: RewardContext) -> float:
+
+    def compute(self, context: RewardContext) -> Dict[str, Any]:
+    	generated_text = context.generated_text
+    	reference_completion = context.reference_completion
+
+    	# ⭐ FIX: Ensure all return paths yield a dictionary
+    	if not generated_text or len(generated_text.strip()) < 10:
+    		if self.debug_logging: logger.warning('AnswerQuality: Empty or too short text.')
+    		return {"reward": 0.0, "log": {"error": "Empty generation"}}
+
+    	answer_text = self._extract_answer_text(generated_text)
+    	if not answer_text or len(answer_text) < 5:
+    		if self.debug_logging: logger.warning('AnswerQuality: Answer not found or too short.')
+    		return {"reward": 0.0, "log": {"error": "Answer not found or too short"}}
+
+    	violations = self._find_violations(answer_text)
+    	num_violations = len(violations)
+    	emoji_violation_count = 0
+
+    	ref_has_emoji = self._has_emoji(reference_completion)
+    	gen_has_emoji = self._has_emoji(answer_text)
+    	prompt_warrants_emoji = any(kw in reference_completion.lower() for kw in ['emoji', 'emojis', 'symbol'])
+
+    	if gen_has_emoji and not ref_has_emoji and not prompt_warrants_emoji:
+    		emoji_violation_count = 1
+
+    	content_violation_flag = contains_unwanted_words(answer_text)
+    	total_penalty = 0.0
+    	if content_violation_flag:
+    		total_penalty = self.unwanted_content_penalty
+    	else:
+    		total_penalty = num_violations * self.phrase_penalty
+
+    	total_penalty += emoji_violation_count * self.emoji_penalty
+    	total_penalty = min(total_penalty, self.max_penalty)
+    	final_score = max(0.0, 1.0 - total_penalty)
+
+    	log_data = {
+    		'violations': num_violations,
+    		'emoji_violation': emoji_violation_count,
+    		'content_violation': content_violation_flag,
+    		'total_penalty': total_penalty,
+    		'final_score': final_score
+    	}
+
+    	return {"reward": final_score, "log": log_data}
+
+
+    def compute1(self, context: RewardContext) -> float:
         """
         Compute answer quality reward, checking for meta-cognitive phrases,
         unwanted content, and unwarranted emojis.

@@ -232,7 +232,62 @@ class ThinkingQualityReward(BaseReward):
 
         return max(0.0, score)
 
-    def compute(self, context: RewardContext) -> float:
+    def compute(self, context: RewardContext) -> Dict[str, Any]:
+    	generated = context.generated_text
+    	# ⭐ FIX: Ensure all return paths yield a dictionary
+    	if not generated or len(generated.strip()) < 10:
+    		if self.debug_logging: logger.warning(f"ThinkingQuality: Empty or too short text")
+    		return {"reward": 0.0, "log": {"error": "Empty generation"}}
+
+    	gen_config = GenerationConfig()
+    	think_content = extract_think_region(generated, gen_config)
+    	if not think_content:
+    		if self.debug_logging: logger.warning('ThinkingQuality: No thinking content found')
+    		return {"reward": 0.0, "log": {"error": "No think content"}}
+
+    	# ... (rest of the function logic remains the same)
+    	score = 1.0
+    	penalties = {}
+    	bonuses = {}
+
+    	tag_misuse_penalty = self._check_tag_misuse_penalty(generated, gen_config)
+    	if tag_misuse_penalty > 0:
+    		score -= tag_misuse_penalty
+    		penalties['tag_misuse'] = tag_misuse_penalty
+
+    	special_token_penalty = self._check_special_tokens_penalty(think_content)
+    	if special_token_penalty > 0:
+    		score -= special_token_penalty
+    		penalties['special_tokens'] = special_token_penalty
+
+    	think_len = len(think_content.strip())
+    	max_think = context.metadata.get('max_thinking_tokens')
+    	length_score = self._compute_length_score(think_len, max_think)
+    	score *= length_score
+
+    	if re.search('(\\n\\s*[-*•]|\\n\\s*\\d+\\.\\s+)', think_content):
+    		score += 0.1
+    		bonuses['structure'] = 0.1
+
+    	bad_phrase_count = 0
+    	text_lower = think_content.lower()
+    	for phrase in self.bad_phrases:
+    		if phrase in text_lower:
+    			score -= 0.15
+    			bad_phrase_count += 1
+
+    	if bad_phrase_count > 0:
+    		penalties['bad_phrases'] = 0.15 * bad_phrase_count
+
+    	final_score = max(0.0, min(1.0, score))
+    	log_data = {'length': think_len, 'length_score': length_score, 'penalties': penalties, 'bonuses': bonuses, 'final_score': final_score}
+
+    	if self.debug_logging:
+    		logger.info(f"ThinkingQuality | length={think_len}, length_score={length_score:.3f}, final={final_score:.3f}")
+
+    	return {"reward": final_score, "log": log_data}
+
+    def compute1(self, context: RewardContext) -> float:
         """Compute thinking quality reward with length constraints."""
         text = context.generated_text
 

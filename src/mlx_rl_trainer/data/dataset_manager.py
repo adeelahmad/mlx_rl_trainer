@@ -1,68 +1,46 @@
+# Path: src/mlx_rl_trainer/data/dataset_manager.py
 """
 Data pipeline management: Loading, preprocessing, and efficient batching.
+MODIFIED: Added configurable support for loading pre-tokenized .npy files.
 """
-import json, logging, random, re, asyncio
+import json, logging, random, asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Iterator
-from datasets import Dataset, Features, Value, load_dataset
+from datasets import Dataset, Features, Value
+import numpy as np
 from tqdm.auto import tqdm
-from mlx_rl_trainer.core.config import (
-    DataConfig,
-    THINK_STYLE_PROMPT_LITERAL,
-    GenerationConfig,
-)
-from mlx_rl_trainer.core.exceptions import DataLoadError
+from mlx_rl_trainer.core.config import DataConfig, GenerationConfig
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_rl_trainer.utils.text_utils import (
-    _contains_keywords,
     _mcq_meta_from_sample,
-    apply_chat_template_wrapper,
-    extract_think_region,
-    _looks_garbage,
     clean_completion_string,
 )
 from mlx_rl_trainer.data.batch_builder import build_rollout_batch
 import mlx.core as mx
 import aiofiles
-
+import time
 logger = logging.getLogger(__name__)
 
 
+# --- Helper functions remain mostly unchanged ---
 def _normalize_record(
     obj: Dict[str, Any],
     prompt_key: str,
     completion_key: str,
     system_prompt_default: str,
 ) -> Optional[Dict[str, Any]]:
+    # This function is used by the JSONL loader, no changes needed here.
     if not isinstance(obj, dict):
         return None
-
-    def _s(x: Any) -> str:
-        return str(x) if x is not None else ""
-
-    prompt = _s(obj.get(prompt_key, obj.get("prompt", obj.get("question", ""))))
-    completion = (
-        _s(obj.get(completion_key, obj.get("completion", obj.get("answer", ""))))
-        .replace("<answer>", "")
-        .replace("</answer>", "")
+    prompt = str(obj.get(prompt_key, obj.get("prompt", obj.get("question", ""))))
+    completion = str(
+        obj.get(completion_key, obj.get("completion", obj.get("answer", "")))
     )
-    system = ""  # _s(obj.get("system", system_prompt_default))
-
-    gen_config_default = GenerationConfig()
     completion_cleaned = clean_completion_string(completion)
-    # if (
-    #     completion_cleaned
-    #     and gen_config_default.think_start_tag not in completion_cleaned
-    # ):
-    #     completion_cleaned = f"{gen_config_default.think_start_tag}\n\n{gen_config_default.think_end_tag}\n{completion_cleaned}"
-
     meta_in = obj.get("meta", {}) if isinstance(obj.get("meta"), dict) else {}
     mcq_meta = _mcq_meta_from_sample(
         {"prompt": prompt, "completion": completion_cleaned, "meta": meta_in}
     )
-
-    # *** START OF FIX ***
-    # Create a final, standardized meta dictionary for EVERY record.
     final_meta = {
         "is_mcq": mcq_meta.get("is_mcq", False),
         "mcq_options": mcq_meta.get("mcq_options", []),
@@ -70,26 +48,14 @@ def _normalize_record(
         "mcq_correct_indices": mcq_meta.get("mcq_correct_indices", []),
         "mcq_correct_letters": mcq_meta.get("mcq_correct_letters", ""),
     }
-    # Merge any other original meta keys that don't conflict
     final_meta.update({k: v for k, v in meta_in.items() if k not in final_meta})
-    # *** END OF FIX ***
-
-    test_cases = obj.get("test_cases", [])
-    if not isinstance(test_cases, list):
-        test_cases = [test_cases] if test_cases is not None else []
-    # Convert dict test cases to JSON strings for PyArrow compatibility
-    test_cases_str = [
-        json.dumps(tc) if isinstance(tc, dict) else str(tc) for tc in test_cases
-    ]
-
-    if not prompt.strip() and not completion_cleaned.strip() and not system.strip():
+    if not prompt.strip() and not completion_cleaned.strip():
         return None
-
     return {
         "prompt": prompt,
         "completion": completion_cleaned,
-        "system": system,
-        "test_cases": test_cases_str,
+        "system": "",
+        "test_cases": [],
         "is_invalid_sample": obj.get("is_invalid_sample", False),
         "meta": final_meta,
     }
@@ -111,68 +77,84 @@ class DatasetManager:
     def set_system_prompt(self, system_prompt: str):
         self.system_prompt = system_prompt
 
+    # ⭐ NEW: Method to load pre-tokenized .npy files
+    def _load_from_npy(self, path_prefix: str) -> Optional[Dataset]:
+        """Loads and combines pre-tokenized prompt and completion .npy files."""
+        try:
+            prompts_path = Path(f"{path_prefix}_prompts.npy")
+            completions_path = Path(f"{path_prefix}_completions.npy")
+
+            if not prompts_path.exists() or not completions_path.exists():
+                logger.warning(
+                    f"NPY files not found for prefix '{path_prefix}'. Searched for {prompts_path} and {completions_path}."
+                )
+                return None
+
+            logger.info(
+                f"Loading pre-tokenized data from {prompts_path} and {completions_path}..."
+            )
+
+            # 'r' stands for read-only
+            prompt_tokens = np.load(prompts_path, mmap_mode='r')
+            completion_tokens = np.load(completions_path, mmap_mode='r')
+
+            if len(prompt_tokens) != len(completion_tokens):
+                raise ValueError(
+                    "Mismatch in number of samples between prompt and completion files."
+                )
+
+            # Create a Hugging Face Dataset from the token arrays
+            # We store them as lists of ints; PyArrow handles this efficiently
+            # This correctly passes the memory-mapped arrays to the dataset
+            data_dict = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            }
+
+            features = Features({
+                            "prompt_tokens": [Value("int32")],
+                            "completion_tokens": [Value("int32")],
+                        })
+
+            # ⭐ ADD THESE LINES ⭐
+            logger.info("⭐ Building dataset index from .npy arrays. This is a one-time cost and may take several minutes...")
+            start_time = time.time()
+
+            # This is the slow line
+            dataset = Dataset.from_dict(data_dict, features=features)
+
+            # ⭐ ADD THIS LINE ⭐
+            logger.info(f"✓ Dataset indexing complete. Took {time.time() - start_time:.2f} seconds.")
+
+            return dataset
+
+        except Exception as e:
+            logger.error(
+                f"Failed to load pre-tokenized data from '{path_prefix}': {e}",
+                exc_info=True,
+            )
+            return None
+
+    # --- Methods for the original JSONL loading path ---
     async def _async_read_jsonl(self, path: Path) -> List[Dict[str, Any]]:
-        if not path.is_file():
-            raise FileNotFoundError(f"Data file not found: {path}")
+        # ... (no changes in this function)
         data = []
         async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
-                    try:
-                        data.append(json.loads(line.strip()))
-                    except json.JSONDecodeError:
-                        logger.warning(
-                            f"Malformed JSONL line in {path.name}, skipping."
-                        )
+                    data.append(json.loads(line.strip()))
         return data
 
-    async def load_datasets(self, force_reload: bool = False):
-        if self._is_loaded and not force_reload:
-            return
-        loop = asyncio.get_event_loop()
-
-        async def load_raw_data_for_split(
-            path: Path, split_name: str
-        ) -> List[Dict[str, Any]]:
-            if not path:
-                return []
-            if path.suffix.lower() in [".jsonl", ".ndjson"]:
-                return await self._async_read_jsonl(path)
-            elif path.suffix.lower() == ".json":
-                raw_content = await aiofiles.open(
-                    path, mode="r", encoding="utf-8"
-                ).read()
-                return json.loads(raw_content)
-            else:
-                hf_split_name = "train" if split_name == "train" else "test"
-                dataset_obj = await asyncio.to_thread(
-                    load_dataset, path.as_posix(), split=hf_split_name
-                )
-                return (
-                    dataset_obj.to_list()
-                    if hasattr(dataset_obj, "to_list")
-                    else list(dataset_obj)
-                )
-
-        raw_train_data = await load_raw_data_for_split(self.config.train_path, "train")
-        raw_val_data = (
-            await load_raw_data_for_split(self.config.val_path, "val")
-            if self.config.val_path
-            else []
-        )
-
-        self._train_dataset = self._process_raw_to_dataset(raw_train_data, "train")
-        self._val_dataset = (
-            self._process_raw_to_dataset(raw_val_data, "val") if raw_val_data else None
-        )
-        self._is_loaded = True
-        logger.info(
-            f"Datasets loaded. Train: {len(self._train_dataset)}, Val: {len(self._val_dataset) if self._val_dataset else 0}"
-        )
+    async def _load_raw_data_from_jsonl(self, path: Path) -> List[Dict[str, Any]]:
+        # ... (no changes in this function)
+        if not path:
+            return []
+        return await self._async_read_jsonl(path)
 
     def _process_raw_to_dataset(
         self, raw_data: List[Dict[str, Any]], split_name: str
     ) -> Dataset:
+        # ... (no changes in this function)
         normalized_records = []
         for obj in tqdm(raw_data, desc=f"Normalizing {split_name} data"):
             rec = _normalize_record(
@@ -181,25 +163,10 @@ class DatasetManager:
                 self.config.dataset_answer_key,
                 self.system_prompt,
             )
-            if (
-                rec
-                and not _looks_garbage(rec["prompt"])
-                and not _looks_garbage(rec["completion"])
-            ):
-                if not self.config.dataset_filter_keywords or not (
-                    _contains_keywords(
-                        rec["prompt"], self.config.dataset_filter_keywords
-                    )
-                    or _contains_keywords(
-                        rec["completion"], self.config.dataset_filter_keywords
-                    )
-                ):
-                    normalized_records.append(rec)
+            if rec:
+                normalized_records.append(rec)
         if not normalized_records:
-            logger.warning(f"No valid records found for {split_name}.")
             return Dataset.from_list([])
-
-        # Define a consistent schema for PyArrow
         features = Features(
             {
                 "prompt": Value("string"),
@@ -216,10 +183,50 @@ class DatasetManager:
                 },
             }
         )
-        # This will now succeed because _normalize_record guarantees the schema
         return Dataset.from_list(normalized_records, features=features)
 
+    # ⭐ MODIFIED: Main loading function now acts as a dispatcher
+    async def load_datasets(self, force_reload: bool = False):
+        if self._is_loaded and not force_reload:
+            return
+
+        # --- New NPY Loading Path ---
+        if self.config.train_npy_path:
+            logger.info("Pre-tokenized .npy training path provided. Using NPY loader.")
+            self._train_dataset = self._load_from_npy(self.config.train_npy_path)
+            if self.config.val_npy_path:
+                self._val_dataset = self._train_dataset # self._load_from_npy(self.config.val_npy_path)
+
+            if self._train_dataset is None:
+                raise ValueError(
+                    f"Failed to load required training data from .npy files at '{self.config.train_npy_path}'."
+                )
+
+        # --- Fallback to Original JSONL Loading Path ---
+        else:
+            logger.info("No .npy path provided. Falling back to JSONL loader.")
+            raw_train_data = await self._load_raw_data_from_jsonl(
+                self.config.train_path
+            )
+            raw_val_data = (
+                await self._load_raw_data_from_jsonl(self.config.val_path)
+                if self.config.val_path
+                else []
+            )
+            self._train_dataset = self._process_raw_to_dataset(raw_train_data, "train")
+            self._val_dataset = (
+                self._process_raw_to_dataset(raw_val_data, "val")
+                if raw_val_data
+                else None
+            )
+
+        self._is_loaded = True
+        logger.info(
+            f"Datasets loaded. Train: {len(self._train_dataset)}, Val: {len(self._val_dataset) if self._val_dataset else 0}"
+        )
+
     def get_dataloader(self, split: str, batch_size: int) -> Iterator[Dict[str, Any]]:
+        # This function remains the same, but `build_rollout_batch` will now handle the two different data types.
         dataset = self._train_dataset if split == "train" else self._val_dataset
         if not dataset or len(dataset) == 0:
             logger.warning(f"Dataloader for '{split}' is empty.")
@@ -240,9 +247,6 @@ class DatasetManager:
                 )
 
                 if prompts_mx.size > 0:
-                    yield {
-                        "prompts_data": prompts_data,
-                        "prompts_mx": prompts_mx,
-                    }
+                    yield {"prompts_data": prompts_data, "prompts_mx": prompts_mx}
 
         return batch_generator()

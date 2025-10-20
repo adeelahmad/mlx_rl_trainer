@@ -5,7 +5,8 @@ import logging
 import yaml
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple, Literal, Union
-
+# In config.py
+from pydantic import BaseModel, Field, PositiveInt, model_validator
 from pydantic import (
     BaseModel,
     Field,
@@ -115,8 +116,18 @@ class EvaluatorConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
-    train_path: Path = Field(..., description="Path to training data.")
-    val_path: Optional[Path] = Field(None, description="Path to validation data.")
+    # ⭐ MODIFIED: train_path is now optional to allow for using npy_path instead.
+    train_path: Optional[Path] = Field(None, description="Path to training data (JSONL).")
+    val_path: Optional[Path] = Field(None, description="Path to validation data (JSONL).")
+
+    # ⭐ NEW: Optional paths for pre-tokenized .npy files.
+    train_npy_path: Optional[Path] = Field(
+        None, description="Prefix for pre-tokenized training data (.npy files)."
+    )
+    val_npy_path: Optional[Path] = Field(
+        None, description="Prefix for pre-tokenized validation data (.npy files)."
+    )
+
     max_prompt_len: PositiveInt = Field(
         350, description="Maximum token length for input prompts."
     )
@@ -145,6 +156,14 @@ class DataConfig(BaseModel):
         description="Keywords to filter out samples.",
     )
 
+    # ⭐ NEW: Validator to ensure at least one data path is provided.
+    @model_validator(mode='after')
+    def check_paths(self) -> 'DataConfig':
+        if self.train_path is None and self.train_npy_path is None:
+            raise ValueError(
+                "Either 'train_path' (for JSONL) or 'train_npy_path' (for pre-tokenized) must be provided."
+            )
+        return self
 
 class ModelConfig(BaseModel):
     model_path: Path = Field(..., description="Path to the actor model directory.")

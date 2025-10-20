@@ -93,6 +93,8 @@ async def _async_main():
 
     try:
         config = ExperimentConfig.load_from_yaml(Path(args.config))
+        logging.debug("***** Loaded Config ******")
+        logging.debug(config)
     except Exception as e:
         logger.critical(f"FATAL CONFIGURATION ERROR: {e}")
         sys.exit(1)

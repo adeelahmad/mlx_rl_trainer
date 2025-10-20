@@ -9,7 +9,7 @@ from mlx_rl_trainer.core.config import GenerationConfig
 logger = logging.getLogger(__name__)
 
 
-def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
+def e2xtract_think_region(text: str, gen_config: GenerationConfig) -> str:
     """
     Extract the text between the FIRST <think> and the FIRST </think> tags.
 
@@ -23,8 +23,9 @@ def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
     if not text:
         return ""
 
-    start_tag = gen_config.think_start_tag
-    end_tag = gen_config.think_end_tag
+    # Use the 'or' keyword to provide a default value
+    start_tag = "<think>"
+    end_tag = "</think>"
 
     if not start_tag or not end_tag:
         return ""
@@ -41,7 +42,7 @@ def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
     return ""
 
 
-def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
+def e2xtract_answer_region(text: str, gen_config: GenerationConfig) -> str:
     """
     Extract the answer text that comes AFTER the LAST </think> tag.
     This is for formats without explicit <answer> tags.
@@ -56,7 +57,7 @@ def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
     if not text:
         return ""
 
-    end_tag = gen_config.think_end_tag
+    end_tag = '</think>'
     if not end_tag:
         # If no end tag defined, return the whole text as answer (fallback)
         return text.strip()
@@ -78,6 +79,33 @@ def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
         return answer_text.lstrip("\n").strip()
 
     # If no think end tag found, return full text (fallback, although reward logic should penalize this)
+    return text.strip()
+
+
+
+def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
+    """Extracts the text between the FIRST <think> and FIRST </think> tags."""
+    if not text:
+        return ""
+    start_tag = getattr(gen_config, 'think_start_tag', '<think>')
+    end_tag = getattr(gen_config, 'think_end_tag', '</think>')
+    if not start_tag or not end_tag:
+        return ""
+    pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
+    m = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
+    """Extracts text that comes AFTER the LAST </think> tag."""
+    if not text:
+        return ""
+    end_tag = getattr(gen_config, 'think_end_tag', '</think>')
+    if not end_tag:
+        return text.strip()
+    last_idx = text.lower().rfind(end_tag.lower())
+    if last_idx != -1:
+        answer_text = text[last_idx + len(end_tag):].strip()
+        return answer_text.lstrip("\n").strip()
     return text.strip()
 
 
@@ -163,7 +191,59 @@ class TagStructureReward(BaseReward):
             score = max(0.0, 1.0 - penalty)
             return score
 
-    def compute(self, context: RewardContext) -> float:
+
+    def compute(self, context: RewardContext) -> Dict[str, Any]:
+    	"""Computes the format structure reward and returns a dictionary."""
+    	generated = context.generated_text
+    	log_data = {}
+    	if not generated or len(generated.strip()) < 10:
+    		return {"reward": 0.0, "log": {"error": "Empty or too short generation"}}
+
+    	gen_config = GenerationConfig()
+    	start_tag = gen_config.think_start_tag
+    	end_tag = gen_config.think_end_tag
+    	th_s = len(re.findall(re.escape(start_tag), generated, flags=re.I))
+    	th_e = len(re.findall(re.escape(end_tag), generated, flags=re.I))
+
+    	think_text = extract_think_region(generated, gen_config)
+    	answer_text = extract_answer_region(generated, gen_config)
+    	think_len = len(think_text.strip())
+    	answer_len = len(answer_text.strip())
+
+    	log_data = {"start_tags": th_s, "end_tags": th_e, "think_len": think_len, "answer_len": answer_len}
+    	if self.debug_logging:
+    		logger.info(f"TagStructure | {log_data}")
+
+    	score = 0.0
+    	if th_s == 1 and th_e == 1:
+    		if think_len >= self.min_think_length and answer_len >= self.min_answer_length:
+    			length_score = self._compute_length_score(think_len)
+    			score = 1.0 * length_score
+    			log_data["reason"] = "Perfect structure"
+    			log_data["length_score"] = length_score
+    		elif think_len >= self.min_think_length or answer_len >= self.min_answer_length:
+    			score = 0.6
+    			log_data["reason"] = "Partial content"
+    		else:
+    			score = 0.3
+    			log_data["reason"] = "Empty content"
+    	elif th_s >= 1 and th_e == 0:
+    		score = 0.3
+    		log_data["reason"] = "Incomplete think block"
+    	elif th_s > 1 or th_e > 1:
+    		score = 0.2
+    		log_data["reason"] = "Multiple tags"
+    	elif th_s == 0 and th_e == 0:
+    		score = 0.1 if len(generated.strip()) > 30 else 0.0
+    		log_data["reason"] = "No tags"
+    	else:
+    		score = 0.2
+    		log_data["reason"] = "Fallback case"
+
+    	log_data["final_score"] = score
+    	return {"reward": score, "log": log_data}
+
+    def compute1(self, context: RewardContext) -> float:
         """
         Computes the format structure reward for the generated text.
 

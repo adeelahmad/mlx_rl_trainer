@@ -212,7 +212,7 @@ def generate_rollouts_for_batch(
 
     # Build batch
     _, prompts_mx, prompt_len = build_rollout_batch(
-        tokenizer, dataset, expanded_indices, config
+        tokenizer, dataset, expanded_indices, config.data
     )
 
     batch_size = prompts_mx.shape[0]

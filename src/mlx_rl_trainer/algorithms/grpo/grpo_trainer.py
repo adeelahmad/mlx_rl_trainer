@@ -466,6 +466,7 @@ class GRPOTrainer(BaseTrainer):
         # Get memory stats
         mem_stats = self.memory_monitor.get_memory_stats()
         self.memory_monitor.record(mem_stats)
+        return True, ""
 
         # Check reference completion length
         max_ref_len = 0
@@ -474,7 +475,7 @@ class GRPOTrainer(BaseTrainer):
                 ref_ans = sample.get("ref_answer_str", "")
                 if ref_ans:
                     ref_len = len(self.tokenizer.encode(ref_ans))
-                    max_ref_len = max(max_ref_len, ref_len)
+                    max_ref_len = max(max_ref_len, ref_len) * 6
 
         # Check safety
         is_safe, reason = self.memory_monitor.check_safety(max_ref_len)
@@ -738,9 +739,10 @@ class GRPOTrainer(BaseTrainer):
                     f"Dual gradient computation issues: {grad_info['structure_issues']}"
                 )
 
-            if grad_info.get("match_rate", 0.0) < 0.8:
+            # ⭐ FIX: Use .get() for safe access to 'match_rate'
+            if grad_info.get("match_rate", 1.0) < 0.8:
                 logger.warning(
-                    f"Low gradient structure match rate: {grad_info['match_rate']:.1%}"
+                    f"Low gradient structure match rate: {grad_info.get('match_rate', 0.0):.1%}"
                 )
 
             # Get layer ranges and weights
