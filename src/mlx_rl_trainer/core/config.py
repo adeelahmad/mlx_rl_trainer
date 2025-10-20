@@ -375,31 +375,50 @@ class TrainerParams(BaseModel):
 
     @model_validator(mode="after")
     def populate_derived_fields(self) -> "TrainerParams":
+        # This part for other fields is fine
         self.effective_batch_size = (
             self.ppo_batch_size * self.num_rollout_samples * self.grad_accum_steps
         )
         if isinstance(self.invalid_sample_layers, str):
             try:
                 self.invalid_sample_layers_set = {
-                    int(i.strip())
-                    for i in self.invalid_sample_layers.split(",")
-                    if i.strip()
+                    int(i.strip()) for i in self.invalid_sample_layers.split(",") if i.strip()
                 }
             except ValueError:
                 self.invalid_sample_layers_set = set()
 
-        cfg = self.lr_schedule_config
         if self.seed == -1:
             self.seed = random.randint(0, 5000)
+
+        # --- ⭐ CORRECTED LR SCHEDULER LOGIC ---
+        cfg = self.lr_schedule_config
         init_lr = float(self.learning_rate)
         total_steps = int(self.num_training_steps)
+
+        # 1. Handle warmup steps, ensuring it's an integer
         warmup_steps = int(cfg.get("warmup", 500))
-        decay_steps = max(total_steps - warmup_steps, 1)
-        end_lr = max(init_lr * 0.1, 1e-07)
+        cfg["warmup"] = warmup_steps
+
+        # 2. Handle arguments: either build them or validate and convert them if they exist
+        if "arguments" in cfg and isinstance(cfg["arguments"], list):
+            # If user provided arguments, ensure they are all converted to numbers
+            try:
+                cfg["arguments"] = [float(arg) for arg in cfg["arguments"]]
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "All values in lr_schedule_config.arguments must be numbers (e.g., 1e-6, 1000)."
+                )
+        else:
+            # If user did NOT provide arguments, build them from defaults
+            decay_steps = max(total_steps - warmup_steps, 1)
+            end_lr = max(init_lr * 0.1, 1e-07)
+            cfg["arguments"] = [init_lr, decay_steps, end_lr]
+
+        # 3. Handle scheduler name and warmup_init, ensuring correct types
         cfg.setdefault("name", "cosine_decay")
-        cfg.setdefault("arguments", [init_lr, decay_steps, end_lr])
-        cfg.setdefault("warmup", warmup_steps)
-        cfg.setdefault("warmup_init", min(init_lr, max(init_lr * 0.1, 1e-08)))
+        warmup_init_default = min(init_lr, max(init_lr * 0.1, 1e-08))
+        cfg["warmup_init"] = float(cfg.get("warmup_init", warmup_init_default))
+
         return self
 
 

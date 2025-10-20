@@ -466,7 +466,6 @@ class GRPOTrainer(BaseTrainer):
         # Get memory stats
         mem_stats = self.memory_monitor.get_memory_stats()
         self.memory_monitor.record(mem_stats)
-        return True, ""
 
         # Check reference completion length
         max_ref_len = 0
@@ -902,7 +901,7 @@ class GRPOTrainer(BaseTrainer):
                 "training/learning_rate": self.lr_scheduler(update_step),
                 "training/kl_divergence": loss_info.get("kl_divergence", 0.0),
                 "training/grad_norm": grad_norm,
-                "training/step_time_s": time.time() - step_start,
+                "training/step_time_s": time.time() - step_start
             }
         )
         metrics.update(layer_grad_metrics)
@@ -1174,12 +1173,15 @@ class GRPOTrainer(BaseTrainer):
 
                         # Accumulate gradients
                         if step_grads:
+                            mx.eval(step_grads)
                             if accumulated_grads is None:
                                 accumulated_grads = step_grads
                             else:
                                 accumulated_grads = tree_map(
                                     mx.add, accumulated_grads, step_grads
                                 )
+
+                            mx.eval(accumulated_grads)
 
                         # Cleanup
                         del rollout_batch, train_metrics, step_grads
