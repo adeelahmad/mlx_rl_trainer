@@ -3,18 +3,18 @@
 
 trainer:
   algorithm: "grpo"
-  output_dir: "./outputs/code_gen_run_01"
+  output_dir: "./outputs/full_finetune_run_01"
   num_training_steps: 80000
-  learning_rate: 3e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
+  learning_rate: 1e-5 # CORRECTED: Lowered to a safe value for fine-tuning.
   ppo_batch_size: 1
-  num_rollout_samples: 2
-  grad_accum_steps: 2
+  num_rollout_samples: 1
+  grad_accum_steps: 4
   # CORRECTED: Increased beta to prevent model collapse.
   grpo_beta: 0.01
   seed: -1
 
   # Dual gradients for System 1/2
-  use_dual_gradients: false
+  use_dual_gradients: true
   thinking_layer_start: 26
   thinking_layer_end: 36
   answer_layer_start: 21
@@ -52,8 +52,8 @@ generation:
   mcq_ban_first_bias: -14.0
 
 data:
-  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/train.jsonl"
-  val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
+  train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/strat/train.jsonl"
+  # val_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/judge/valid.jsonl"
   max_prompt_len: 150
   max_gen_len: 256
   loader_type: "jsonl"
@@ -112,7 +112,7 @@ monitoring:
   generate_at_checkpoints: true
 
   use_wandb: true
-  wandb_project: "mlx-grpo-qwen3-v10"
+  wandb_project: "mlx-grpo-qwen3-v99"
   wandb_entity: "adeelahmad"
   wandb_run_name: "experiment-001"
 
