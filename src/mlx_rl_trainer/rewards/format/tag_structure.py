@@ -27,7 +27,7 @@ def e2xtract_think_region(text: str, gen_config: GenerationConfig) -> str:
     start_tag = "<think>"
     end_tag = "</think>"
 
-    if not start_tag or not end_tag:
+    if not start_tag or not end_tag or text.endswith(end_tag) or text.endswith(start_tag) or text.startswith(end_tag):
         return ""
 
     # Use re.search for robust, case-insensitive, non-greedy match to find the first block
@@ -85,7 +85,12 @@ def e2xtract_answer_region(text: str, gen_config: GenerationConfig) -> str:
 
 def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
     """Extracts the text between the FIRST <think> and FIRST </think> tags."""
-    if not text:
+
+    # Use the 'or' keyword to provide a default value
+    start_tag = "<think>"
+    end_tag = "</think>"
+
+    if not start_tag or not end_tag or  text.endswith(start_tag) or text.startswith(end_tag):
         return ""
     start_tag = getattr(gen_config, 'think_start_tag', '<think>')
     end_tag = getattr(gen_config, 'think_end_tag', '</think>')
@@ -97,7 +102,13 @@ def extract_think_region(text: str, gen_config: GenerationConfig) -> str:
 
 def extract_answer_region(text: str, gen_config: GenerationConfig) -> str:
     """Extracts text that comes AFTER the LAST </think> tag."""
-    if not text:
+
+    # Use the 'or' keyword to provide a default value
+    start_tag = "<think>"
+    end_tag = "</think>"
+
+
+    if not text or text.endswith(start_tag) or text.startswith(end_tag):
         return ""
     end_tag = getattr(gen_config, 'think_end_tag', '</think>')
     if not end_tag:

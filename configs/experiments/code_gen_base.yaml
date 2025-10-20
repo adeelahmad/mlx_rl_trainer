@@ -10,30 +10,30 @@ trainer:
   num_training_steps: 2500
 
   # --- Optimizer & Scheduler (Tuned for stable full fine-tuning) ---
-  learning_rate: 1e-6 # ⭐ CRITICAL: Very low LR is essential for stable full fine-tuning.
+  learning_rate: 1e-5 # ⭐ CRITICAL: Very low LR is essential for stable full fine-tuning.
   optimizer_beta1: 0.9
   optimizer_beta2: 0.95
   optimizer_weight_decay: 0.01
 
   lr_schedule_config:
     name: "cosine_decay"
-    arguments: [1e-6, 1000, 1e-7] # Decay from peak to end over (2500-1500) steps
-    warmup: 1500 # A long warmup is crucial for stability.
+    arguments: [1e-5, 1000, 1e-6] # Decay from peak to end over (2500-1500) steps
+    warmup: 250 # A long warmup is crucial for stability.
 
   # --- Batching & Algorithm ---
   ppo_batch_size: 1
   num_rollout_samples: 1
   grad_accum_steps: 8 # Effective batch size of 8, keeps memory low but ensures stable updates.
-  grpo_beta: 0.01
-  seed: 42
+  grpo_beta: 0.0015
+  seed: -1
 
   # --- Dual Gradients ---
-  use_dual_gradients: true
-  thinking_layer_start: 26
-  thinking_layer_end: 36
-  answer_layer_start: 21
-  answer_layer_end: 30
-  answer_gradient_weight: 1.5
+  use_dual_gradients: false
+  thinking_layer_start: 18
+  thinking_layer_end: 30
+  answer_layer_start: 24
+  answer_layer_end: 32
+  answer_gradient_weight: 2.5
 
   # --- SFT (Disabled as per your config) ---
   use_sft_on_answer: false
@@ -51,11 +51,11 @@ generation:
   think_end_tag: "</think>"
 
   # Biases for structural guidance
-  bias_close_think: 3.0
+  bias_close_think: -2.0
   bias_answer_start: 6.0
   punish_extra_think_end: -12.0
   min_think_tokens: 16
-  think_end_early_bias: -10.0
+  think_end_early_bias: 12.0
 
 data:
   train_path: "/Users/adeelahmad/work/SiLLM-examples/helpsteer/mlx-grpo/strat/train.jsonl"
@@ -67,37 +67,37 @@ data:
 
 rewards:
   - name: "format_structure"
-    weight: 0.1
+    weight: 0.05
     config:
       min_think_length: 10
-      min_answer_length: 10
+      min_answer_length: 2
       # ⭐ Tighter targets to discourage long thinking
       think_length_target_min: 40
-      think_length_target_max: 150
+      think_length_target_max: 90
 
   - name: "thinking_quality"
     weight: 0.2
     config:
       # ⭐ Tighter targets to discourage long thinking
       target_length_min: 40
-      target_length_max: 150
-      excessive_length_threshold: 250 # Penalize heavily after this
+      target_length_max: 90
+      excessive_length_threshold: 120 # Penalize heavily after this
 
   - name: "answer_quality"
-    weight: 0.2
+    weight: 0.1
     config:
       max_penalty: 1.0
       phrase_penalty: 0.25
 
   - name: "semantic_similarity"
-    weight: 0.5 # ⭐ Increased weight to prioritize relevance and conciseness
+    weight: 0.65 # ⭐ Increased weight to prioritize relevance and conciseness
     config:
       method: "tfidf"
       min_length: 10
-      apply_length_penalty: true
-      apply_verbosity_penalty: true
+      apply_length_penalty: false
+      apply_verbosity_penalty: false
       # ⭐ AGGRESSIVE PENALTY: Punish verbosity more harshly.
-      verbosity_penalty_strength: 0.9
+      verbosity_penalty_strength: 0.01
 
 monitoring:
   log_samples_every: 1

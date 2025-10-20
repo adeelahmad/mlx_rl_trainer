@@ -49,7 +49,7 @@ class ThinkingQualityReward(BaseReward):
         self.excessive_length_penalty = config.get("excessive_length_penalty", 0.5)
 
         # Use trainer limits if available
-        self.use_trainer_limits = config.get("use_trainer_thinking_limits", True)
+        self.use_trainer_limits = config.get("use_trainer_thinking_limits", False)
 
         # Special tokens to penalize
         self.special_tokens = config.get(

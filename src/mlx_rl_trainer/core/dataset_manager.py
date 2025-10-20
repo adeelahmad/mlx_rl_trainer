@@ -303,8 +303,8 @@ class DatasetManager:
             return iter([])
 
         indices = list(range(len(dataset)))
-        if self.config.shuffle_data and split == "train":
-            random.shuffle(indices)
+        # if self.config.shuffle_data and split == "train":
+        random.shuffle(indices)
 
         def batch_generator():
             for i in range(0, len(indices), batch_size):

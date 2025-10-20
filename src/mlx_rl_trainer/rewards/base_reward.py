@@ -48,6 +48,7 @@ class BaseReward(ABC):
             try:
                 # ⭐ FIX: `compute()` now returns a dictionary
                 result_dict = self.compute(context)
+                logging.debug(f"Reward result_dict {result_dict}")
 
                 # Extract the float score from the dictionary
                 raw_score = result_dict.get('reward', 0.0)
