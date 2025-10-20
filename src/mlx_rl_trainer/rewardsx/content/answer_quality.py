@@ -1059,51 +1059,109 @@ class AnswerQualityReward(BaseReward):
         """Check if a string contains any common emoji."""
         return bool(text and EMOJI_PATTERN.search(text))
 
+    def compute(self, context: RewardContext) -> float:
+        """
+        Compute answer quality reward, checking for meta-cognitive phrases,
+        unwanted content, and unwarranted emojis.
 
-    def compute(self, context: RewardContext) -> Dict[str, Any]:
-    	generated_text = context.generated_text
-    	reference_completion = context.reference_completion
+        Returns:
+            Score between 0.0 and 1.0.
+        """
+        generated_text = context.generated_text
+        prompt_text = context.reference_completion
 
-    	# ⭐ FIX: Ensure all return paths yield a dictionary
-    	if not generated_text or len(generated_text.strip()) < 10:
-    		if self.debug_logging: logger.warning('AnswerQuality: Empty or too short text.')
-    		return {"reward": 0.0, "log": {"error": "Empty generation"}}
+        if not generated_text or len(generated_text.strip()) < 10:
+            if self.debug_logging:
+                logger.warning("AnswerQuality: Empty or too short text.")
+            return 0.0
 
-    	answer_text = self._extract_answer_text(generated_text)
-    	if not answer_text or len(answer_text) < 5:
-    		if self.debug_logging: logger.warning('AnswerQuality: Answer not found or too short.')
-    		return {"reward": 0.0, "log": {"error": "Answer not found or too short"}}
+        # Extract answer section
+        answer_text = self._extract_answer_text(generated_text)
 
-    	violations = self._find_violations(answer_text)
-    	num_violations = len(violations)
-    	emoji_violation_count = 0
+        if not answer_text or len(answer_text) < 5:
+            if self.debug_logging:
+                logger.warning("AnswerQuality: Answer not found or too short.")
+            # Penalize heavily if thinking is present but no answer
+            try:
+                if GenerationConfig().think_end_tag in generated_text:
+                    return 0.2
+            except:
+                pass
+            return 0.0
 
-    	ref_has_emoji = self._has_emoji(reference_completion)
-    	gen_has_emoji = self._has_emoji(answer_text)
-    	prompt_warrants_emoji = any(kw in reference_completion.lower() for kw in ['emoji', 'emojis', 'symbol'])
+        # --- 1. Check for ALL violations (Meta-cognitive + Unwanted Content) ---
+        all_violations = self._find_violations(answer_text)
+        meta_and_content_violations_count = len(all_violations)
 
-    	if gen_has_emoji and not ref_has_emoji and not prompt_warrants_emoji:
-    		emoji_violation_count = 1
+        # --- 2. Check for Unwarranted Emoji violation ---
+        emoji_violations_count = 0
 
-    	content_violation_flag = contains_unwanted_words(answer_text)
-    	total_penalty = 0.0
-    	if content_violation_flag:
-    		total_penalty = self.unwanted_content_penalty
-    	else:
-    		total_penalty = num_violations * self.phrase_penalty
+        prompt_has_emoji = self._has_emoji(prompt_text)
+        answer_has_emoji = self._has_emoji(answer_text)
 
-    	total_penalty += emoji_violation_count * self.emoji_penalty
-    	total_penalty = min(total_penalty, self.max_penalty)
-    	final_score = max(0.0, 1.0 - total_penalty)
+        # Check if the prompt explicitly requests an emoji (even without one present)
+        prompt_lower = prompt_text.lower()
+        explicit_emoji_request = any(
+            phrase in prompt_lower
+            for phrase in [
+                "emoji",
+                "emojis",
+                "add a happy face",
+                "add a symbol",
+                "use a symbol",
+            ]
+        )
 
-    	log_data = {
-    		'violations': num_violations,
-    		'emoji_violation': emoji_violation_count,
-    		'content_violation': content_violation_flag,
-    		'total_penalty': total_penalty,
-    		'final_score': final_score
-    	}
+        # Apply penalty if answer has emoji BUT prompt did not warrant it
+        if answer_has_emoji and not prompt_has_emoji and not explicit_emoji_request:
+            emoji_violations_count = 1
+            if self.debug_logging:
+                logger.warning(
+                    "AnswerQuality: EMOJI VIOLATION | Answer has emoji, but prompt does not warrant it."
+                )
 
-    	return {"reward": final_score, "log": log_data}
+        # --- 3. Calculate Final Penalty ---
 
+        # We need to distinguish between 'forbidden phrases' (for phrase_penalty)
+        # and 'unwanted content' (for content_penalty).
+        # Since _find_violations already merges them, a simpler model is:
+        # Penalize once per detection: if any explicit unwanted content is found, apply the max content penalty.
 
+        is_content_violation = contains_unwanted_words(answer_text)
+
+        # Simplified penalty application: Max penalty if toxic content found, otherwise tally meta-violations.
+        if is_content_violation:
+            total_penalty = self.unwanted_content_penalty
+            if self.debug_logging:
+                logger.warning(
+                    "AnswerQuality: MAJOR CONTENT VIOLATION | Applying max content penalty."
+                )
+        else:
+            # If no major toxic content, count all other forbidden phrases (meta-cognitive)
+            total_penalty = meta_and_content_violations_count * self.phrase_penalty
+
+        # Add emoji penalty separately if it occurred
+        total_penalty += emoji_violations_count * self.emoji_penalty
+
+        total_penalty = min(total_penalty, self.max_penalty)
+        final_score = max(0.0, 1.0 - total_penalty)
+
+        if self.debug_logging:
+            logger.warning(
+                f"AnswerQuality: VIOLATIONS FOUND | "
+                f"content_flag={is_content_violation}, "
+                f"emoji_count={emoji_violations_count}, "
+                f"total_penalty={total_penalty:.3f}, "
+                f"score={final_score:.3f}"
+            )
+            if all_violations:
+                for i, v in enumerate(all_violations[:3]):
+                    logger.warning(
+                        f"  Violation {i+1}: '{v['phrase']}' at position {v['position']}"
+                    )
+                if len(all_violations) > 3:
+                    logger.warning(
+                        f"  ... and {len(all_violations) - 3} more violations"
+                    )
+
+        return final_score

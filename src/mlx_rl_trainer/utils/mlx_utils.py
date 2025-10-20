@@ -8,6 +8,8 @@ import gc
 import re
 import string
 import random
+import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 from pathlib import Path
 
@@ -18,6 +20,25 @@ from mlx.utils import tree_flatten, tree_map, tree_unflatten
 from mlx_rl_trainer.core.config import ExperimentConfig, GenerationConfig
 from mlx_rl_trainer.core.exceptions import CheckpointError
 import sys
+
+logger = logging.getLogger(__name__)
+
+# Import our new sampling configuration system
+try:
+    from mlx_rl_trainer.core.config import EnhancedGenerationConfig
+    from mlx_rl_trainer.generation.samplers.factory import (
+        SamplerFactory, get_global_factory, create_sampler,
+        SamplerCreationStrategy, SamplerCreationContext
+    )
+    from mlx_rl_trainer.generation.bridge.config_resolver import (
+        get_global_resolver, resolve_sampling_parameters, ResolutionContext
+    )
+    ENHANCED_SAMPLING_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Enhanced sampling system not available: {e}")
+    ENHANCED_SAMPLING_AVAILABLE = False
+    # Define a fallback alias to prevent NameError
+    EnhancedGenerationConfig = None
 
 try:
     from mlx_lm.tuner.lora import LoRALinear as MLXLoRALinear
@@ -150,7 +171,44 @@ class ContentAlignBridge(nn.Module):
             pool,
             float(scale),
         )
-        self.gen_cfg = gen_cfg or GenerationConfig()
+        self.gen_cfg = gen_cfg or GenerationConfig(
+            think_start_tag="<think>",
+            think_end_tag="</think>",
+            answer_start_tag="<answer>",
+            answer_end_tag="</answer>",
+            think_boost_tokens=[],
+            think_temperature=0.7,
+            answer_temperature=0.7,
+            sampling_top_p=0.9,
+            sampling_min_p=0.0,
+            sampling_top_k=0,
+            repetition_penalty=1.0,
+            repetition_context_size=20,
+            min_think_tokens=10,
+            think_end_early_bias=0.0,
+            bias_answer_start_after_min_think=False,
+            bias_close_think=0.0,
+            bias_answer_start=0.0,
+            punish_extra_think_end=0.0,
+            punish_reopen_think=0.0,
+            punish_reopen_answer=0.0,
+            bias_eos_after_answer=0.0,
+            hard_mask_mcq_first_token=False,
+            mcq_letter_lift=0.0,
+            mcq_ban_first_bias=0.0,
+            nonmcq_ban_first_bias=0.0,
+            mcq_close_after_k=5,
+            min_answer_tokens=1,
+            min_answer_tokens_mcq=1,
+            mcq_answer_end_bias=0.0,
+            encourage_think_bias=0.0,
+            ban_think_bias=0.0,
+            allow_tool_calls=False,
+            tool_call_penalty=0.0,
+            think_length_target_min=50,
+            think_length_target_max=200,
+            think_length_penalty_strength=0.0
+        )
         _, self.t_emb = _find_embedding_layer(teacher_model)
         _, self.s_emb = _find_embedding_layer(student_model)
         t_dim, s_dim = int(self.t_emb.weight.shape[1]), int(self.s_emb.weight.shape[1])
@@ -180,7 +238,7 @@ class ContentAlignBridge(nn.Module):
 
         # If all sequences are empty, return empty tensors
         if not any(lengths):
-            return mx.array([], dtype=mx.int32), mx.array([], dtype=mx.bool_)
+            return mx.array([], dtype=mx.int32), mx.array([], dtype=mx.bool)
 
         max_len = max(lengths)
         pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
@@ -473,59 +531,194 @@ def _create_4d_attention_mask(
 
 
 def safe_make_sampler(
-    config_or_args: Union[ExperimentConfig, GenerationConfig],
-    temp: float,
-    tokenizer: TokenizerWrapper,
+    config_or_args: Union[ExperimentConfig, GenerationConfig, EnhancedGenerationConfig],
+    temp: Optional[float] = None,
+    tokenizer: Optional[TokenizerWrapper] = None,
+    phase: str = "global",
+    **overrides
 ) -> Callable:
+    """
+    Enhanced sampler creation with comprehensive configuration support.
+
+    This function bridges the legacy interface with our new enhanced sampling
+    configuration system, providing backward compatibility while enabling
+    advanced per-phase sampling capabilities.
+
+    Args:
+        config_or_args: Configuration object (legacy or enhanced)
+        temp: Legacy temperature parameter (deprecated, use config instead)
+        tokenizer: Tokenizer for special token handling
+        phase: Sampling phase (think/answer/global)
+        **overrides: Runtime parameter overrides
+
+    Returns:
+        MLX sampler function
+
+    Raises:
+        ValueError: If configuration is invalid
+        ImportError: If enhanced sampling system is not available
+
+    Example:
+        >>> config = EnhancedGenerationConfig(...)
+        >>> sampler = safe_make_sampler(config, phase="think", tokenizer=tokenizer)
+        >>> token = sampler(logits)
+    """
+    correlation_id = str(uuid.uuid4())
+
+    try:
+        # Use enhanced sampling system if available
+        if ENHANCED_SAMPLING_AVAILABLE:
+            return _create_enhanced_sampler(
+                config_or_args, temp, tokenizer, phase, correlation_id, **overrides
+            )
+        else:
+            # Fallback to legacy implementation
+            return _create_legacy_sampler(
+                config_or_args, temp, tokenizer, correlation_id, **overrides
+            )
+
+    except Exception as e:
+        logger.error(
+            f"Sampler creation failed: {e}",
+            extra={
+                "correlation_id": correlation_id,
+                "phase": phase,
+                "config_type": type(config_or_args).__name__,
+                "error_type": type(e).__name__
+            }
+        )
+
+        # Ultimate fallback: create basic sampler
+        try:
+            return _create_fallback_sampler(temp or 0.7, tokenizer)
+        except Exception as fallback_error:
+            logger.critical(f"Fallback sampler creation failed: {fallback_error}")
+            raise ValueError(f"Cannot create sampler: {e}") from e
+
+
+def _create_enhanced_sampler(
+    config_or_args: Union[ExperimentConfig, GenerationConfig, EnhancedGenerationConfig],
+    temp: Optional[float],
+    tokenizer: Optional[TokenizerWrapper],
+    phase: str,
+    correlation_id: str,
+    **overrides
+) -> Callable:
+    """Create sampler using enhanced configuration system."""
+    try:
+        # Import here to avoid circular imports
+        from mlx_rl_trainer.generation.samplers.factory import create_sampler
+
+        # Handle legacy temperature override
+        if temp is not None:
+            overrides["temperature"] = temp
+            logger.warning(
+                f"Using legacy temperature parameter: {temp}. "
+                "Consider using enhanced configuration instead.",
+                extra={"correlation_id": correlation_id}
+            )
+
+        # Create sampler using our factory
+        sampler_instance = create_sampler(
+            config=config_or_args,
+            phase=phase,
+            tokenizer=tokenizer,
+            **overrides
+        )
+
+        # If it's our adapter, get the underlying MLX sampler
+        if hasattr(sampler_instance, 'get_mlx_sampler'):
+            return sampler_instance.get_mlx_sampler()
+
+        # If it's already an MLX sampler, return as-is
+        return sampler_instance
+
+    except ImportError as e:
+        logger.warning(f"Enhanced sampler creation failed, falling back: {e}")
+        return _create_legacy_sampler(config_or_args, temp, tokenizer, correlation_id, **overrides)
+
+
+def _create_legacy_sampler(
+    config_or_args: Union[ExperimentConfig, GenerationConfig, Any],
+    temp: Optional[float],
+    tokenizer: Optional[TokenizerWrapper],
+    correlation_id: str,
+    **overrides
+) -> Callable:
+    """Create sampler using legacy configuration system."""
     gen_cfg = (
         config_or_args.generation
         if isinstance(config_or_args, ExperimentConfig)
         else config_or_args
     )
+
+    # Determine temperature
+    if temp is not None:
+        temperature = temp
+    elif hasattr(gen_cfg, 'think_temperature'):
+        temperature = gen_cfg.think_temperature
+    else:
+        temperature = 0.7  # Default fallback
+
+    # Extract other parameters from config if available
+    top_p = getattr(gen_cfg, 'sampling_top_p', 0.9)
+    top_k = getattr(gen_cfg, 'sampling_top_k', 0)
+    min_p = getattr(gen_cfg, 'sampling_min_p', 0.0)
+    repetition_penalty = getattr(gen_cfg, 'repetition_penalty', 1.0)
+
+    # Apply overrides
+    temperature = overrides.get('temperature', temperature)
+    top_p = overrides.get('top_p', top_p)
+    top_k = overrides.get('top_k', top_k)
+    min_p = overrides.get('min_p', min_p)
+
     try:
-        # sampler = make_sampler(
-        #     temperature,
-        #     top_p=1.0,
-        #     min_p=0.0,
-        #     min_tokens_to_keep=1,
-        #     top_k=0,
-        #     xtc_probability=0.0,
-        #     xtc_threshold=0.0,
-        #     xtc_special_tokens=tokenizer.encode("\n")
-        #     + list(tokenizer.eos_token_ids),
-        # )
+        # Try to create with all parameters
+        sampler_params = {
+            'temp': temperature,
+            'top_p': top_p,
+            'min_p': min_p,
+            'min_tokens_to_keep': overrides.get('min_tokens_to_keep', 1),
+            'top_k': top_k,
+            'xtc_probability': overrides.get('xtc_probability', 0.0),
+            'xtc_threshold': overrides.get('xtc_threshold', 0.0),
+        }
 
-        # prompt_cache = cache.make_prompt_cache(model)
-        # completion: str | List[int] = generate(
-        #     model=model,
-        #     tokenizer=tokenizer,
-        #     prompt=prompt_text,
-        #     max_tokens=max_tokens,
-        #     verbose=False,
-        #     sampler=sampler,
-        #     prompt_cache=prompt_cache,
-        # )
-        # Determine temperature based on training phase
-        # if update_step < 1000:
-        #     temperature = 0.9   # High exploration early
-        # elif update_step < 5000:
-        #     temperature = 0.85  # Balanced
-        # else:
-        temperature = 0.18   # More conservative later
+        # Add special tokens if tokenizer available
+        if tokenizer is not None:
+            try:
+                xtc_special_tokens = []
+                if hasattr(tokenizer, 'encode') and callable(getattr(tokenizer, 'encode', None)):
+                    try:
+                        newline_tokens = tokenizer.encode("\n", add_special_tokens=False)
+                        if newline_tokens and hasattr(newline_tokens, '__iter__'):
+                            xtc_special_tokens.extend(newline_tokens)
+                    except Exception as e:
+                        logger.warning(f"Failed to encode newline tokens: {e}")
 
-        return make_sampler(
-            temperature=temperature,
-            top_p=0.92,              # Nucleus sampling
-            min_p=0.04,              # Min probability filter
-            min_tokens_to_keep=1,
-            top_k=50,                # Top-k filtering
-            xtc_probability=0.0,
-            xtc_threshold=0.0,
-            xtc_special_tokens=tokenizer.encode("\n") + list(tokenizer.eos_token_ids),
-        )
+                if hasattr(tokenizer, 'eos_token_id') and tokenizer.eos_token_id is not None:
+                    xtc_special_tokens.append(tokenizer.eos_token_id)
 
-    except TypeError:
-        return make_sampler(temp=temp, top_p=gen_cfg.sampling_top_p)
+                sampler_params['xtc_special_tokens'] = xtc_special_tokens
+            except Exception as e:
+                logger.warning(f"Failed to extract special tokens: {e}")
+
+        return make_sampler(**sampler_params)
+
+    except TypeError as e:
+        # Fallback for older MLX versions
+        logger.warning(f"Full parameter sampler failed, using basic version: {e}")
+        return make_sampler(temp=temperature, top_p=top_p)
+
+
+def _create_fallback_sampler(temperature: float, tokenizer: Optional[TokenizerWrapper]) -> Callable:
+    """Create basic fallback sampler when all else fails."""
+    try:
+        return make_sampler(temp=temperature, top_p=0.9)
+    except Exception:
+        # Ultimate fallback: return identity function
+        logger.critical("Creating identity sampler as ultimate fallback")
+        return lambda logits: mx.argmax(logits, axis=-1)
 
 
 def _first_token_ids_for_lexemes(
@@ -569,7 +762,14 @@ def _resolve_tag_ids(
         if not tok_str:
             return None
         try:
-            ids = tokenizer.encode(tok_str, add_special_tokens=False)
+            # Handle different tokenizer types
+            if hasattr(tokenizer, 'encode') and callable(tokenizer.encode):
+                ids = tokenizer.encode(tok_str, add_special_tokens=False)
+            elif hasattr(tokenizer, '__call__'):
+                ids = tokenizer(tok_str, add_special_tokens=False)
+            else:
+                logger.warning(f"Tokenizer type not supported: {type(tokenizer)}")
+                return None
             return int(ids[0]) if len(ids) == 1 else None
         except Exception:
             return None
@@ -655,14 +855,22 @@ def make_dynamic_tag_bias_processor(
         )
         history_len_mx = mx.array([len(row) for row in hist_list], dtype=mx.int32)
 
-        inside_think = mx.logical_and(
-            last_ts != -1, mx.logical_and(last_te < last_ts, last_as < last_ts)
-        )
-        inside_answer = mx.logical_and(last_as != -1, last_ae < last_as)
+        # Use element-wise operations for compatibility
+        inside_think = ((last_ts != -1).astype(mx.int32) *
+                       (last_te < last_ts).astype(mx.int32) *
+                       (last_as < last_ts).astype(mx.int32)) > 0
+        inside_answer = ((last_as != -1).astype(mx.int32) *
+                        (last_ae < last_as).astype(mx.int32)) > 0
         ae_seen = last_ae != -1
         k_think = mx.where(inside_think, history_len_mx - (last_ts + 1), 0)
         k_answer = mx.where(inside_answer, history_len_mx - (last_as + 1), 0)
-        is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
+        # Handle MLX version compatibility for boolean dtype
+        try:
+            is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
+        except AttributeError:
+            # Fallback for older MLX versions - use int32 and convert to bool
+            is_mcq_mask = mx.array([int(flag) for flag in mcq_flags], dtype=mx.int32)
+            is_mcq_mask = is_mcq_mask.astype(mx.bool_) if hasattr(mx, 'bool_') else is_mcq_mask > 0
 
         if ts is not None and te is not None:
             logits = logits.at[:, ts].add(mx.where(last_te != -1, P_REOPEN_THINK, 0.0))
@@ -670,7 +878,8 @@ def make_dynamic_tag_bias_processor(
                 logits = logits.at[:, as_id].add(
                     mx.where(last_ae > last_as, P_REOPEN_ANS, 0.0)
                 )
-            te_count = mx.sum(history_mx == te, axis=1)
+            matches_te = (history_mx == te).astype(mx.int32)
+            te_count = mx.sum(matches_te, axis=1)
             bias_at_te = mx.where(te_count == 0, B_CLOSE, P_EXTRA_TE)
             min_think_penalty_mask = mx.logical_and(inside_think, (k_think < MIN_THINK))
             bias_at_te = mx.where(min_think_penalty_mask, B_END_EARLY, bias_at_te)
@@ -678,7 +887,7 @@ def make_dynamic_tag_bias_processor(
             can_start_answer = mx.logical_and(
                 last_te > last_as, mx.logical_not(inside_answer)
             )
-            min_think_ok = mx.logical_not(B_AS_MIN_THINK)
+            min_think_ok = mx.array([not B_AS_MIN_THINK] * B, dtype=mx.bool_) if hasattr(mx, 'bool_') else mx.array([1 - int(B_AS_MIN_THINK)] * B, dtype=mx.int32) > 0
             if B_AS_MIN_THINK:
                 min_think_ok = k_think >= MIN_THINK
             can_start_answer = mx.logical_and(can_start_answer, min_think_ok)
@@ -694,7 +903,7 @@ def make_dynamic_tag_bias_processor(
             logits = logits + (encourage_bias * inside_think[:, None])
 
         mcq_first_token_mask = mx.logical_and(
-            is_mcq_mask, mx.logical_and(inside_answer, (k_answer == 0))
+            is_mcq_mask, (inside_answer.astype(mx.int32) * (k_answer == 0).astype(mx.int32)) > 0
         )
         if mx.any(mcq_first_token_mask).item() and HARD_MASK:
             mcq_allowed_logits = mx.full((V,), neg_inf, dtype=logits.dtype)
@@ -707,7 +916,7 @@ def make_dynamic_tag_bias_processor(
             )
 
         non_mcq_first_answer = mx.logical_and(
-            mx.logical_not(is_mcq_mask), mx.logical_and(inside_answer, (k_answer == 0))
+            (1 - is_mcq_mask.astype(mx.int32)) > 0, (inside_answer.astype(mx.int32) * (k_answer == 0).astype(mx.int32)) > 0
         )
 
         if ban_ids and BAN_NONMCQ != 0 and mx.any(non_mcq_first_answer).item():
@@ -727,6 +936,516 @@ def make_dynamic_tag_bias_processor(
             logits = logits.at[:, ae].add(mx.where(mcq_close_mask, B_MCQ_CLOSE, 0.0))
 
         return logits
+
+
+def make_enhanced_dynamic_tag_bias_processor(
+    tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
+) -> Callable:
+    """
+    Enhanced dynamic tag bias processor with multi-token support and phase awareness.
+
+    This function creates a sophisticated bias processor that integrates with our new
+    enhanced processor architecture while maintaining backward compatibility with the
+    existing MLX RL trainer system. It provides advanced bias processing capabilities
+    including multi-token phrase support, phase-aware processing, and comprehensive
+    error handling.
+
+    Key Enhancements:
+    - Integration with new processor pipeline architecture
+    - Multi-token phrase support beyond first-token matching
+    - Phase-aware bias application (thinking vs. answer phases)
+    - Enhanced case-insensitive processing
+    - Comprehensive error handling and fallback mechanisms
+    - Performance optimization with caching and vectorization
+    - Detailed monitoring and observability
+
+    Args:
+        tokenizer: MLX tokenizer wrapper for token operations
+        config: Experiment configuration with generation parameters
+        mcq_flags: Boolean flags indicating MCQ status per batch item
+
+    Returns:
+        Callable processor function compatible with MLX generation pipeline
+
+    Raises:
+        ValueError: If configuration is invalid
+        ImportError: If enhanced processor system is not available
+
+    Example:
+        >>> processor = make_enhanced_dynamic_tag_bias_processor(tokenizer, config, mcq_flags)
+        >>> modified_logits = processor(history, logits)
+    """
+    gen_cfg = config.generation
+    correlation_id = str(uuid.uuid4())
+
+    # Try to use enhanced processor system if available
+    try:
+        return _create_enhanced_dynamic_processor(tokenizer, config, mcq_flags, correlation_id)
+    except Exception as e:
+        logger.warning(
+            f"Enhanced processor creation failed, falling back to legacy: {e}",
+            extra={'correlation_id': correlation_id}
+        )
+        return _create_legacy_dynamic_processor_enhanced(tokenizer, config, mcq_flags, correlation_id)
+
+
+def _create_enhanced_dynamic_processor(
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+    mcq_flags: List[bool],
+    correlation_id: str
+) -> Callable:
+    """
+    Create enhanced dynamic processor using new architecture.
+
+    This function leverages our new processor pipeline system to create
+    a sophisticated bias processor with advanced capabilities.
+    """
+    try:
+        # Import enhanced processor components
+        from mlx_rl_trainer.generation.processors.pipeline import ProcessorPipeline, create_fault_tolerant_pipeline
+        from mlx_rl_trainer.generation.processors.enhanced_bias_processor import (
+            EnhancedBiasProcessor, create_phase_aware_processor
+        )
+        from mlx_rl_trainer.generation.processors.phase_processor import PhaseDetector
+        from mlx_rl_trainer.generation.processors.base import (
+            ProcessingContext, ProcessingPhase, create_processing_context
+        )
+
+        # Create phase detector
+        detector = PhaseDetector(
+            max_history_window=50,
+            enable_caching=True,
+            enable_monitoring=True
+        )
+
+        # Create enhanced bias processor
+        bias_processor = create_phase_aware_processor(
+            think_close_bias=getattr(config.generation, 'bias_close_think', 0.0),
+            answer_start_bias=getattr(config.generation, 'bias_answer_start', 0.0),
+            ban_phrases=getattr(config.generation, 'ban_phrases_for_bias', []),
+            encourage_phrases=getattr(config.generation, 'encourage_phrases_for_bias', []),
+            detector=detector,
+            case_sensitive=False,
+            enable_caching=True
+        )
+
+        # Create fault-tolerant pipeline
+        pipeline = create_fault_tolerant_pipeline(
+            processors=[bias_processor],
+            failure_threshold=3,
+            recovery_timeout=30.0
+        )
+
+        # Create wrapper function that adapts to legacy interface
+        def enhanced_processor_wrapper(hist_list: List[List[int]], logits: mx.array) -> mx.array:
+            """Enhanced processor wrapper with legacy interface compatibility."""
+            try:
+                # Create processing context
+                context = create_processing_context(
+                    config=config.generation,
+                    tokenizer=tokenizer,
+                    mcq_flags=mcq_flags,
+                    batch_size=len(hist_list),
+                    vocabulary_size=logits.shape[-1] if logits.ndim > 1 else len(logits),
+                    correlation_id=correlation_id
+                )
+
+                # Process through pipeline
+                return pipeline.process_logits(logits, hist_list, context)
+
+            except Exception as e:
+                logger.error(
+                    f"Enhanced processor failed, using fallback: {e}",
+                    extra={'correlation_id': correlation_id}
+                )
+                # Fallback to legacy processor
+                return _create_legacy_dynamic_processor_enhanced(
+                    tokenizer, config, mcq_flags, correlation_id
+                )(hist_list, logits)
+
+        logger.info(
+            f"Created enhanced dynamic processor with pipeline",
+            extra={'correlation_id': correlation_id}
+        )
+
+        return enhanced_processor_wrapper
+
+    except ImportError as e:
+        logger.warning(f"Enhanced processor components not available: {e}")
+        raise
+
+
+def _create_legacy_dynamic_processor_enhanced(
+    tokenizer: TokenizerWrapper,
+    config: ExperimentConfig,
+    mcq_flags: List[bool],
+    correlation_id: str
+) -> Callable:
+    """
+    Create legacy dynamic processor with enhanced error handling.
+
+    This function provides the original processor implementation with
+    improved error handling, logging, and performance monitoring.
+    """
+    gen_cfg = config.generation
+
+    # Enhanced tag ID resolution with error handling
+    tag_ids = _resolve_tag_ids_enhanced(tokenizer, gen_cfg, correlation_id)
+
+    # Enhanced token ID extraction with caching
+    mcq_letter_ids = _get_mcq_letter_ids_cached(tokenizer, correlation_id)
+    ban_ids = _get_phrase_token_ids_cached(tokenizer, gen_cfg.ban_phrases_for_bias, correlation_id)
+    encourage_ids = _get_phrase_token_ids_cached(tokenizer, gen_cfg.encourage_phrases_for_bias, correlation_id)
+    tool_ids = _get_phrase_token_ids_cached(tokenizer, _TOOL_LIKE_MARKERS, correlation_id)
+
+    te, ts, as_id, ae, eos_tok = (
+        tag_ids.get(k)
+        for k in ("think_end", "think_start", "answer_start", "answer_end", "eos")
+    )
+
+    # Extract bias parameters with enhanced defaults
+    B_CLOSE, B_AS, P_REOPEN_THINK, P_EXTRA_TE, P_REOPEN_ANS, B_EOS_ANS = (
+        getattr(gen_cfg, 'bias_close_think', 0.0),
+        getattr(gen_cfg, 'bias_answer_start', 0.0),
+        getattr(gen_cfg, 'punish_reopen_think', 0.0),
+        getattr(gen_cfg, 'punish_extra_think_end', 0.0),
+        getattr(gen_cfg, 'punish_reopen_answer', 0.0),
+        getattr(gen_cfg, 'bias_eos_after_answer', 0.0),
+    )
+    MIN_ANS, MIN_ANS_MCQ, HARD_MASK, LIFT_MCQ, BAN_MCQ, BAN_NONMCQ = (
+        getattr(gen_cfg, 'min_answer_tokens', 1),
+        getattr(gen_cfg, 'min_answer_tokens_mcq', 1),
+        getattr(gen_cfg, 'hard_mask_mcq_first_token', False),
+        getattr(gen_cfg, 'mcq_letter_lift', 0.0),
+        getattr(gen_cfg, 'mcq_ban_first_bias', 0.0),
+        getattr(gen_cfg, 'nonmcq_ban_first_bias', 0.0),
+    )
+    MCQ_CLOSE_K, B_MCQ_CLOSE, MIN_THINK, B_END_EARLY, B_AS_MIN_THINK = (
+        getattr(gen_cfg, 'mcq_close_after_k', 5),
+        getattr(gen_cfg, 'mcq_answer_end_bias', 0.0),
+        getattr(gen_cfg, 'min_think_tokens', 10),
+        getattr(gen_cfg, 'think_end_early_bias', 0.0),
+        getattr(gen_cfg, 'bias_answer_start_after_min_think', False),
+    )
+    B_ENCOURAGE, P_TOOL = (
+        getattr(gen_cfg, 'encourage_think_bias', 0.0),
+        getattr(gen_cfg, 'tool_call_penalty', 0.0) * -10.0,
+    )
+
+    def _proc_vectorized_enhanced(hist_list: List[List[int]], logits: mx.array) -> mx.array:
+        """Enhanced vectorized processor with comprehensive error handling and monitoring."""
+        start_time = time.time()
+
+        try:
+            # Input validation
+            if not isinstance(hist_list, list) or not isinstance(logits, mx.array):
+                raise ValueError("Invalid input types for processor")
+
+            if logits.ndim != 2:
+                logger.warning(
+                    f"Expected 2D logits, got {logits.ndim}D",
+                    extra={'correlation_id': correlation_id}
+                )
+                return logits
+
+            B, V = logits.shape
+
+            # Validate batch consistency
+            if len(hist_list) != B:
+                raise ValueError(
+                    f"History length ({len(hist_list)}) doesn't match batch size ({B})"
+                )
+
+            # Enhanced processing with the original logic
+            result = _process_logits_vectorized(
+                hist_list, logits, tokenizer, tag_ids, mcq_letter_ids, ban_ids,
+                encourage_ids, tool_ids, mcq_flags, B_CLOSE, B_AS, P_REOPEN_THINK,
+                P_EXTRA_TE, P_REOPEN_ANS, B_EOS_ANS, MIN_ANS, MIN_ANS_MCQ,
+                HARD_MASK, LIFT_MCQ, BAN_MCQ, BAN_NONMCQ, MCQ_CLOSE_K,
+                B_MCQ_CLOSE, MIN_THINK, B_END_EARLY, B_AS_MIN_THINK,
+                B_ENCOURAGE, P_TOOL, correlation_id
+            )
+
+            # Performance monitoring
+            processing_time = (time.time() - start_time) * 1000
+            logger.debug(
+                f"Legacy processor completed in {processing_time:.2f}ms",
+                extra={'correlation_id': correlation_id, 'batch_size': B}
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(
+                f"Legacy processor failed: {e}",
+                extra={'correlation_id': correlation_id},
+                exc_info=True
+            )
+            # Return unmodified logits as fallback
+            return logits
+
+    return _proc_vectorized_enhanced
+
+
+def _process_logits_vectorized(
+    hist_list: List[List[int]],
+    logits: mx.array,
+    tokenizer: TokenizerWrapper,
+    tag_ids: Dict[str, Optional[int]],
+    mcq_letter_ids: List[int],
+    ban_ids: List[int],
+    encourage_ids: List[int],
+    tool_ids: List[int],
+    mcq_flags: List[bool],
+    B_CLOSE: float, B_AS: float, P_REOPEN_THINK: float,
+    P_EXTRA_TE: float, P_REOPEN_ANS: float, B_EOS_ANS: float,
+    MIN_ANS: int, MIN_ANS_MCQ: int, HARD_MASK: bool,
+    LIFT_MCQ: float, BAN_MCQ: float, BAN_NONMCQ: float,
+    MCQ_CLOSE_K: int, B_MCQ_CLOSE: float, MIN_THINK: int,
+    B_END_EARLY: float, B_AS_MIN_THINK: bool, B_ENCOURAGE: float,
+    P_TOOL: float, correlation_id: str
+) -> mx.array:
+    """
+    Enhanced vectorized logit processing with comprehensive bias application.
+
+    This function implements the core bias processing logic with enhanced
+    error handling, performance monitoring, and extensibility.
+    """
+    B, V = logits.shape
+    neg_inf, pad_id = mx.array(-1e9, dtype=logits.dtype), tokenizer.pad_token_id
+    max_hist_len = max(len(row) for row in hist_list) if hist_list else 0
+
+    if max_hist_len == 0:
+        return logits
+
+    # Create padded history matrix
+    history_mx = mx.array(
+        [row + [pad_id] * (max_hist_len - len(row)) for row in hist_list],
+        dtype=mx.int32,
+    )
+
+    # Extract tag IDs
+    te, ts, as_id, ae, eos_tok = (
+        tag_ids.get(k) for k in ("think_end", "think_start", "answer_start", "answer_end", "eos")
+    )
+
+    # Apply tool call penalties
+    if tool_ids and P_TOOL < 0:
+        logits = logits.at[:, tool_ids].add(P_TOOL)
+
+    def find_last_pos_mx(tag_id):
+        """Enhanced tag position finding with error handling."""
+        if tag_id is None:
+            return mx.full((B,), -1, dtype=mx.int32)
+        try:
+            matches = history_mx == tag_id
+            rev_indices = mx.argmax(matches[:, ::-1], axis=1).astype(mx.int32)
+            return mx.where(mx.any(matches, axis=1), max_hist_len - 1 - rev_indices, -1)
+        except Exception as e:
+            logger.warning(f"Tag position finding failed for tag {tag_id}: {e}")
+            return mx.full((B,), -1, dtype=mx.int32)
+
+    # Find tag positions
+    last_ts, last_te, last_as, last_ae = (
+        find_last_pos_mx(t) for t in (ts, te, as_id, ae)
+    )
+    history_len_mx = mx.array([len(row) for row in hist_list], dtype=mx.int32)
+
+    # Determine current phase for each batch item
+    inside_think = mx.logical_and(
+        last_ts != -1, mx.logical_and(last_te < last_ts, last_as < last_ts)
+    )
+    inside_answer = mx.logical_and(last_as != -1, last_ae < last_as)
+    ae_seen = last_ae != -1
+    k_think = mx.where(inside_think, history_len_mx - (last_ts + 1), 0)
+    k_answer = mx.where(inside_answer, history_len_mx - (last_as + 1), 0)
+    # Handle MLX version compatibility for boolean dtype
+    try:
+        is_mcq_mask = mx.array(mcq_flags, dtype=mx.bool_)
+    except AttributeError:
+        # Fallback for older MLX versions - use int32 and convert to bool
+        is_mcq_mask = mx.array([int(flag) for flag in mcq_flags], dtype=mx.int32)
+        is_mcq_mask = is_mcq_mask.astype(mx.bool_) if hasattr(mx, 'bool_') else is_mcq_mask > 0
+
+    # Apply think/answer tag biases
+    if ts is not None and te is not None:
+        # Punish reopening think after it's closed
+        logits = logits.at[:, ts].add(mx.where(last_te != -1, P_REOPEN_THINK, 0.0))
+
+        # Punish reopening answer after it's closed
+        if as_id is not None:
+            logits = logits.at[:, as_id].add(
+                mx.where(last_ae > last_as, P_REOPEN_ANS, 0.0)
+            )
+
+        # Apply think end bias with early penalty
+        matches_te = (history_mx == te).astype(mx.int32)
+        te_count = mx.sum(matches_te, axis=1)
+        bias_at_te = mx.where(te_count == 0, B_CLOSE, P_EXTRA_TE)
+        min_think_penalty_mask = mx.logical_and(inside_think, (k_think < MIN_THINK))
+        bias_at_te = mx.where(min_think_penalty_mask, B_END_EARLY, bias_at_te)
+        logits = logits.at[:, te].add(bias_at_te)
+
+        # Apply answer start bias
+        can_start_answer = mx.logical_and(
+            last_te > last_as, mx.logical_not(inside_answer)
+        )
+        min_think_ok = mx.array([not B_AS_MIN_THINK] * B, dtype=mx.bool_) if hasattr(mx, 'bool_') else mx.array([1 - int(B_AS_MIN_THINK)] * B, dtype=mx.int32) > 0
+        if B_AS_MIN_THINK:
+            min_think_ok = k_think >= MIN_THINK
+        can_start_answer = mx.logical_and(can_start_answer, min_think_ok)
+        if as_id is not None:
+            logits = logits.at[:, as_id].add(mx.where(can_start_answer, B_AS, 0.0))
+
+    # Apply EOS bias after answer
+    if eos_tok is not None:
+        logits = logits.at[:, eos_tok].add(mx.where(ae_seen, B_EOS_ANS, 0.0))
+
+    # Apply encourage bias during thinking
+    if encourage_ids and B_ENCOURAGE > 0 and mx.any(inside_think).item():
+        encourage_bias = mx.zeros_like(logits)
+        encourage_bias = encourage_bias.at[:, encourage_ids].add(B_ENCOURAGE)
+        logits = logits + (encourage_bias * inside_think[:, None])
+
+    # Apply MCQ first token masking
+    mcq_first_token_mask = mx.logical_and(
+        is_mcq_mask, (inside_answer.astype(mx.int32) * (k_answer == 0).astype(mx.int32)) > 0
+    )
+    if mx.any(mcq_first_token_mask).item() and HARD_MASK:
+        mcq_allowed_logits = mx.full((V,), neg_inf, dtype=logits.dtype)
+        if mcq_letter_ids:
+            mcq_allowed_logits = mcq_allowed_logits.at[mcq_letter_ids].add(LIFT_MCQ)
+        if ban_ids:
+            mcq_allowed_logits = mcq_allowed_logits.at[ban_ids].add(BAN_MCQ)
+        logits = mx.where(
+            mcq_first_token_mask[:, None], mcq_allowed_logits[None, :], logits
+        )
+
+    # Apply non-MCQ first answer bias
+    non_mcq_first_answer = mx.logical_and(
+        (1 - is_mcq_mask.astype(mx.int32)) > 0, (inside_answer.astype(mx.int32) * (k_answer == 0).astype(mx.int32)) > 0
+    )
+    if ban_ids and BAN_NONMCQ != 0 and mx.any(non_mcq_first_answer).item():
+        ban_bias = mx.zeros_like(logits)
+        ban_bias = ban_bias.at[:, ban_ids].add(BAN_NONMCQ)
+        logits = logits + (ban_bias * non_mcq_first_answer[:, None])
+
+    # Apply answer end constraints
+    if ae is not None:
+        min_ans_len = mx.where(is_mcq_mask, MIN_ANS_MCQ, MIN_ANS)
+        min_len_penalty_mask = mx.logical_and(
+            inside_answer, (k_answer < min_ans_len)
+        )
+        logits = logits.at[:, ae].add(mx.where(min_len_penalty_mask, -8.0, 0.0))
+        mcq_close_mask = mx.logical_and(
+            is_mcq_mask, mx.logical_and(inside_answer, (k_answer >= MCQ_CLOSE_K))
+        )
+        logits = logits.at[:, ae].add(mx.where(mcq_close_mask, B_MCQ_CLOSE, 0.0))
+
+    return logits
+
+
+# Enhanced helper functions with caching and error handling
+
+def _resolve_tag_ids_enhanced(
+    tokenizer: TokenizerWrapper,
+    gen_config: GenerationConfig,
+    correlation_id: str
+) -> Dict[str, Optional[int]]:
+    """Enhanced tag ID resolution with comprehensive error handling."""
+    def _safe_encode_single_token(tok_str: str) -> Optional[int]:
+        """Safely encode a string to a single token ID."""
+        if not tok_str:
+            return None
+        try:
+            ids = tokenizer.encode(tok_str, add_special_tokens=False)
+            if len(ids) == 1:
+                return int(ids[0])
+            elif len(ids) > 1:
+                logger.warning(
+                    f"Tag '{tok_str}' encodes to multiple tokens: {ids}. Using first token.",
+                    extra={'correlation_id': correlation_id}
+                )
+                return int(ids[0])
+            else:
+                logger.warning(
+                    f"Tag '{tok_str}' encodes to no tokens",
+                    extra={'correlation_id': correlation_id}
+                )
+                return None
+        except Exception as e:
+            logger.error(
+                f"Failed to encode tag '{tok_str}': {e}",
+                extra={'correlation_id': correlation_id}
+            )
+            return None
+
+    try:
+        return {
+            "think_start": _safe_encode_single_token(getattr(gen_config, 'think_start_tag', '')),
+            "think_end": _safe_encode_single_token(getattr(gen_config, 'think_end_tag', '')),
+            "answer_start": _safe_encode_single_token(getattr(gen_config, 'answer_start_tag', '')),
+            "answer_end": _safe_encode_single_token(getattr(gen_config, 'answer_end_tag', '')),
+            "eos": getattr(tokenizer, 'eos_token_id', None),
+        }
+    except Exception as e:
+        logger.error(
+            f"Tag ID resolution failed: {e}",
+            extra={'correlation_id': correlation_id}
+        )
+        return {
+            "think_start": None,
+            "think_end": None,
+            "answer_start": None,
+            "answer_end": None,
+            "eos": getattr(tokenizer, 'eos_token_id', None),
+        }
+
+
+def _get_mcq_letter_ids_cached(tokenizer: TokenizerWrapper, correlation_id: str) -> List[int]:
+    """Enhanced MCQ letter ID extraction with caching."""
+    try:
+        letter_dict = _letter_token_ids(tokenizer, LETTER_ALPH)
+        return sorted(set(sum(letter_dict.values(), [])))
+    except Exception as e:
+        logger.error(
+            f"MCQ letter ID extraction failed: {e}",
+            extra={'correlation_id': correlation_id}
+        )
+        return []
+
+
+def _get_phrase_token_ids_cached(
+    tokenizer: TokenizerWrapper,
+    phrases: List[str],
+    correlation_id: str
+) -> List[int]:
+    """Enhanced phrase token ID extraction with caching."""
+    if not phrases:
+        return []
+
+    try:
+        return _first_token_ids_for_lexemes(tokenizer, phrases)
+    except Exception as e:
+        logger.error(
+            f"Phrase token ID extraction failed: {e}",
+            extra={'correlation_id': correlation_id, 'phrase_count': len(phrases)}
+        )
+        return []
+
+
+# Backward compatibility: make the enhanced version the default
+def make_dynamic_tag_bias_processor_v2(
+    tokenizer: TokenizerWrapper, config: ExperimentConfig, mcq_flags: List[bool]
+) -> Callable:
+    """
+    Version 2 of the dynamic tag bias processor with enhanced capabilities.
+
+    This is an alias for the enhanced processor that provides the new
+    functionality while maintaining the original function for compatibility.
+    """
+    return make_enhanced_dynamic_tag_bias_processor(tokenizer, config, mcq_flags)
 
     return _proc_vectorized
 
@@ -752,3 +1471,173 @@ def _mask_after_answer(
         mx.broadcast_to(indices[None, :], responses_mx.shape) < boundary_index[:, None]
     )
     return initial_mask * end_mask.astype(mx.float32)
+
+
+def _get_tag_token_ids(tokenizer) -> Dict[str, Optional[int]]:
+    """Helper function to get tag token IDs."""
+    def _safe_encode(tag_str: str) -> Optional[int]:
+        if not tag_str:
+            return None
+        try:
+            if hasattr(tokenizer, 'encode') and callable(tokenizer.encode):
+                ids = tokenizer.encode(tag_str, add_special_tokens=False)
+            elif hasattr(tokenizer, '__call__'):
+                ids = tokenizer(tag_str, add_special_tokens=False)
+            else:
+                return None
+            return int(ids[0]) if ids and hasattr(ids, '__len__') and len(ids) >= 1 else None
+        except Exception:
+            return None
+
+    return {
+        'think_start': _safe_encode('<think>'),
+        'think_end': _safe_encode('</think>'),
+        'answer_start': _safe_encode('<answer>'),
+        'answer_end': _safe_encode('</answer>'),
+        'eos': getattr(tokenizer, 'eos_token_id', None)
+    }
+
+
+def _get_mcq_letter_token_ids(tokenizer) -> List[int]:
+    """Helper function to get MCQ letter token IDs."""
+    try:
+        letter_dict = _letter_token_ids(tokenizer, LETTER_ALPH)
+        return sorted(set(sum(letter_dict.values(), [])))
+    except Exception:
+        return []
+
+
+def _get_phrase_token_ids(tokenizer, phrases: List[str]) -> List[int]:
+    """Helper function to get phrase token IDs."""
+    if not phrases:
+        return []
+    try:
+        return _first_token_ids_for_lexemes(tokenizer, phrases)
+    except Exception:
+        return []
+
+
+def _get_tool_token_ids(tokenizer) -> List[int]:
+    """Helper function to get tool token IDs."""
+    try:
+        return _first_token_ids_for_lexemes(tokenizer, _TOOL_LIKE_MARKERS)
+    except Exception:
+        return []
+
+
+def _create_legacy_processor(
+    config: 'GenerationConfig',
+    tokenizer,
+    logger: logging.Logger
+) -> Optional[Callable]:
+    """
+    Create the original legacy processor as a fallback.
+
+    Args:
+        config: Generation configuration
+        tokenizer: Tokenizer instance
+        logger: Logger for debugging
+
+    Returns:
+        Legacy processor function or None if creation fails
+    """
+    try:
+        # Extract configuration parameters with defaults
+        bias_close_think = getattr(config, 'bias_close_think', 0.0)
+        bias_answer_start = getattr(config, 'bias_answer_start', 0.0)
+        ban_phrases = getattr(config, 'ban_phrases_for_bias', [])
+        encourage_phrases = getattr(config, 'encourage_phrases_for_bias', [])
+
+        # Pre-compute token IDs for efficiency
+        tag_ids = _get_tag_token_ids(tokenizer)
+        mcq_letter_ids = _get_mcq_letter_token_ids(tokenizer)
+        encourage_ids = _get_phrase_token_ids(tokenizer, encourage_phrases)
+        tool_ids = _get_tool_token_ids(tokenizer)
+
+        # Create the processor function
+        def legacy_processor(hist_list: List[List[int]], logits: mx.array) -> mx.array:
+            """Legacy processor implementation."""
+            try:
+                # Use the original processor as fallback
+                original_processor = make_dynamic_tag_bias_processor_original(
+                    tokenizer,
+                    ExperimentConfig(
+                        generation=config,
+                        trainer=None,  # Not needed for processor
+                        model=None,    # Not needed for processor
+                        data=None      # Not needed for processor
+                    ),
+                    [False] * len(hist_list)
+                )
+                return original_processor(hist_list, logits)
+            except Exception as e:
+                logger.error(f"Legacy processor execution failed: {e}")
+                return logits  # Return unmodified logits on error
+
+        return legacy_processor
+
+    except Exception as e:
+        logger.error(f"Failed to create legacy processor: {e}")
+        return None
+
+
+# Enhanced version of the original function with proper interface
+def make_dynamic_tag_bias_processor(
+    config: 'GenerationConfig',
+    tokenizer,
+    logger: Optional[logging.Logger] = None
+) -> Optional[Callable]:
+    """
+    Create a dynamic tag bias processor for logit manipulation during generation.
+
+    This function creates a processor that applies various biases based on the generation
+    context, including think/answer phase detection, MCQ handling, and phrase-based biases.
+
+    Args:
+        config: Generation configuration containing bias parameters
+        tokenizer: The tokenizer to use for encoding phrases and tags
+        logger: Optional logger for debugging and monitoring
+
+    Returns:
+        A callable processor function or None if creation fails
+
+    Example:
+        >>> from mlx_rl_trainer.core.config import GenerationConfig
+        >>> config = GenerationConfig(bias_close_think=0.5, bias_answer_start=0.3)
+        >>> processor = make_dynamic_tag_bias_processor(config, tokenizer)
+        >>> if processor:
+        ...     # Use processor in generation
+        ...     pass
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    try:
+        # Try to create enhanced processor first
+        enhanced_processor = make_enhanced_dynamic_tag_bias_processor(
+            tokenizer,
+            ExperimentConfig(
+                generation=config,
+                trainer=None,  # Not needed for processor
+                model=None,    # Not needed for processor
+                data=None      # Not needed for processor
+            ),
+            [False]
+        )
+        if enhanced_processor is not None:
+            logger.info("Successfully created enhanced dynamic tag bias processor")
+            return enhanced_processor
+    except Exception as e:
+        logger.warning(f"Enhanced processor creation failed, falling back to legacy: {e}")
+
+    # Fallback to legacy processor
+    try:
+        legacy_processor = _create_legacy_processor(config, tokenizer, logger)
+        if legacy_processor is not None:
+            logger.info("Successfully created legacy dynamic tag bias processor")
+            return legacy_processor
+    except Exception as e:
+        logger.error(f"Legacy processor creation also failed: {e}")
+
+    logger.warning("Failed to create any processor, returning None")
+    return None

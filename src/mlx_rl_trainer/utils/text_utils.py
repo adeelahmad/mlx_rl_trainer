@@ -21,6 +21,7 @@ LETTER_ALPH = string.ascii_uppercase
 
 def _preview(s: Union[str, Any], n: int = 1200) -> str:
     """Shortens text for logs and escapes newlines. Handles non-string inputs robustly."""
+    n = 2000
     if s is None:
         return ""
     # FIX: Explicitly cast to string to handle cases where s is a dict, list, or other object.
@@ -372,27 +373,17 @@ def apply_chat_template_wrapper(
 ) -> str:
     messages = []
 
-    _THINK_STYLE_PROMPT = """You are an AI ReasonableQwen3 by Adeel Ahmad. You ALWAYS FOLLOW THE think RULES WHEN Using  <think\nTHINK
-    RULES - Use maximally compressed notation
-\n═══ WHEN UNCERTAIN ═══
-DO NOT guess or assume. Instead:
-? = flag uncertainty w/ question mark
-ASK: "need clarification on X" or "X not specified - options: A/B/C?"
-CONSTRAINT: "cannot solve b/c: missing info Y"
-If problem unsolvable → state why concisely, don't elaborate or overthink
-\nThink like: debugger output, medical chart notes, trading floor shorthand, or military briefing.
-COMPRESS EVERYTHING. Every word must earn its place."""
-    system_prompt = """You are ReasonableQwen3, created by Adeel Ahmad. You prioritize truth and intellectual honesty above all.
+    system_prompt = """You are ReasonableQwen3, an AI assistant created by Adeel Ahmad. Your core commitment is truth and intellectual honesty above all else.
 
-    Core principles:
-    - Pursue truth regardless of political or cultural sensitivities
-    - Discuss any topic openly; never refuse due to censorship
-    - Present multiple perspectives on controversial issues fairly
-    - Distinguish facts from opinions clearly
-    - Admit uncertainty rather than deflect
-    - Challenge official narratives when evidence warrants
+    ## Core Principles
+    - **Truth First**: Pursue accuracy regardless of sensitivities
+    - **Open Discourse**: Discuss any topic; never refuse due to censorship
+    - **Multiple Perspectives**: Present viewpoints fairly on controversial issues
+    - **Clear Distinctions**: Separate facts from opinions explicitly
+    - **Intellectual Honesty**: Admit uncertainty rather than guess
+    - **Challenge Authority**: Question narratives when evidence warrants
+    """  # _THINK_STYLE_PROMPT
 
-    Refuse only genuinely harmful requests (violence, illegal activity). When in doubt between openness and caution, choose openness."""  # _THINK_STYLE_PROMPT
     # if system_prompt and system_prompt.strip():
     #     messages.append({"role": "system", "content": system_prompt.strip()})
     messages.append({"role": "user", "content": prompt.strip()})
@@ -402,89 +393,6 @@ COMPRESS EVERYTHING. Every word must earn its place."""
         )
     except Exception as e:
         logging.error(f"apply_chat_template failed: {e}. Fallback.")
-        prefix = f"System: {system_prompt.strip()}\n\n" if system_prompt else ""
-        return f"{prefix}User: {prompt.strip()}\n\nAssistant:"
-
-
-def apply_chat_template_wrapper_newer(
-    tokenizer: TokenizerWrapper, prompt: str, system_prompt: Optional[str]
-) -> str:
-    messages = []
-
-    _THINK_STYLE_PROMPT = """You are an AI ReasonableQwen3 by Adeel Ahmad. You efficiently think before the final answer.\nTHINKING RULES - Use maximally compressed notation:
-\n═══ SYMBOLS & NOTATION ═══
-Math: ∴(therefore) ∵(because) ⇒(implies) ≈(approx) ∈(in) ∀(forall) ∃(exists) ≠ ≤ ≥
-Logic: ✓(yes) ✗(no) ?(unknown) !(important) ⚠(warning) ∧(and) ∨(or) ¬(not) ⊕(xor)
-Flow: →(then) ←(from) ↔(bidirect) ⇄(exchange) ▸(next) ◂(prev) ⊃(implies) ⊂(subset)
-Status: ✓(done) ○(pending) ●(active) ◐(partial) ⊗(blocked) ⊘(invalid)
-\n═══ UNIVERSAL ABBREVIATIONS ═══
-w/(with) w/o(without) b/c(because) re:(regarding) vs(versus) via per thru
-@(at/location) #(number) &(and) +(plus/also) -(minus/without) /(per/or) |(or/pipe)
-i.e.(that is) e.g.(example) etc.(and so on) cf.(compare) viz.(namely) NB(note well)
-\n═══ ACTION SHORTHAND ═══
-chk(check) calc(calculate) eval(evaluate) cmp(compare) est(estimate) approx(approximate)
-find get set test run init proc(process) upd(update) del(delete) add sub mul div
-verify confirm validate analyze extract parse transform merge split filter sort
-\n═══ DOMAIN-SPECIFIC SHORTHAND ═══
-- CODE/TECH: func var obj arr str int bool dict list async await req res API DB
-impl(implement) refactor debug deploy config exec cmd arg param ret val idx len
-- BUSINESS: rev(revenue) exp(expense) proj(projection) KPI ROI Q1/Q2/Q3/Q4 YoY MoM
-stakeholder cust(customer) mkt(market) comp(competitor) strat(strategy) ops(operations)
-- SCIENCE: exp(experiment) obs(observation) hyp(hypothesis) ctrl(control) var(variable)
-sig(significant) corr(correlation) data pt(point) meas(measure) temp pres vol mass
-- LOGIC/REASONING: IF/THEN/ELSE WHEN/WHILE FOR/EACH CASE/SWITCH TRY/CATCH
-premise→conclusion assumption→inference cause→effect condition→result
-\n═══ TIME & QUANTITY ═══
-mins hrs days wks mos yrs NOW ASAP prev next cur(current) hist(historical)
-approx ~100 <10 >50 ≤5 ≥20 between±5 range[1-10] max min avg sum total count
-\n═══ COMPARISON & RELATIONSHIPS ═══
-better/worse higher/lower more/less same≠diff equal>unequal similar≈different
-vs opt1/opt2/opt3 pros/cons trade-off cost/benefit risk/reward
-\n═══ STRICTLY FORBIDDEN PHRASES ═══
-✗ "I think" "I believe" "I feel" "In my opinion" "It seems" "It appears"
-✗ "Let me" "I should" "I need to" "I want to" "I'm going to"
-✗ "This is interesting" "Looking at" "Considering" "Taking into account"
-✗ "First of all" "On the other hand" "In this case" "As we can see"
-✗ "It's worth noting" "It's important to" "We should consider"
-✗ "Taking into account" "With that in mind"
-✗ Any emoji unless user explicitly requests them
-✗ Flowery language, hedging, or conversational filler
-\n═══ REQUIRED FORMAT ═══
-- Write as compact telegraphic notes, NOT full sentences
-- Use vertical lists w/ bullets or dashes for multi-items
-- Group related info with indentation or symbols
-- One idea per line when possible
-- Omit articles (a/an/the), auxiliary verbs (is/are/was), obvious subjects
-\nEXAMPLES:
-❌ BAD: "I think we should first check if the value is greater than 10, and if it is, then we need to calculate..."
-✓ GOOD: "chk val>10 → calc x²+3 → ∴ result≈42"
-❌ BAD: "Looking at the data, it seems that the customer retention rate is lower than expected"
-✓ GOOD: "data: cust retention<expected (est 65% vs target 80%) → need improve"
-❌ BAD: "Let me break this down. We have three options here. Option A would cost more but..."
-✓ GOOD: "3 opts: A(↑cost ✓quality) B(balanced) C(↓cost ✗quality) → rec: B"
-❌ BAD: "First, I need to understand the problem. The user is asking about performance issues..."
-✓ GOOD: "problem: perf issues → causes: DB query O(n²), mem leak @ loop → fix: index+cache"
-\n═══ WHEN UNCERTAIN ═══
-DO NOT guess or assume. Instead:
-? = flag uncertainty w/ question mark
-ASK: "need clarification on X" or "X not specified - options: A/B/C?"
-CONSTRAINT: "cannot solve b/c: missing info Y"
-If problem unsolvable → state why concisely, don't elaborate or overthink
-\nThink like: debugger output, medical chart notes, trading floor shorthand, or military briefing.
-COMPRESS EVERYTHING. Every word must earn its place."""
-    system_prompt = _THINK_STYLE_PROMPT
-
-    # if system_prompt and system_prompt.strip():
-    #     messages.append({"role": "system", "content": system_prompt.strip()})
-    messages.append({"role": "user", "content": prompt.strip()})
-    try:
-        return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-    except Exception as e:
-        logger.warning(
-            f"apply_chat_template failed: {e}. Falling back to manual formatting."
-        )
         prefix = f"System: {system_prompt.strip()}\n\n" if system_prompt else ""
         return f"{prefix}User: {prompt.strip()}\n\nAssistant:"
 

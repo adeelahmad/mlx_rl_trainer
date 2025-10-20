@@ -374,7 +374,7 @@ class TrainerParams(BaseModel):
             self.seed = random.randint(0, 5000)
         init_lr = float(self.learning_rate)
         total_steps = int(self.num_training_steps)
-        warmup_steps = int(cfg.get("warmup", 500))
+        warmup_steps = int(cfg.get("warmup", 1500))
         decay_steps = max(total_steps - warmup_steps, 1)
         end_lr = max(init_lr * 0.1, 1e-07)
         cfg.setdefault("name", "cosine_decay")
